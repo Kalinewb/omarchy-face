@@ -57,7 +57,8 @@ Item {
       if (face.sudo) where.push("sudo")
       if (face.polkit) where.push("polkit")
       var count = (face.models === null || face.models === undefined) ? "?" : face.models
-      rows.push({ name: "Face unlock", value: where.join(" + ") + " · " + count + " models", tone: "good" })
+      var noun = (count === 1) ? " model" : " models"
+      rows.push({ name: "Face unlock", value: where.join(" + ") + " · " + count + noun, tone: "good" })
     } else {
       rows.push({ name: "Face unlock", value: "not configured", tone: "unknown" })
     }

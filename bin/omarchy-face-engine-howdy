@@ -62,6 +62,20 @@ require_installed() {
   installed || die "howdy is not installed (run omarchy-setup-security-face)"
 }
 
+# howdy's CLI refuses to run unless SUDO_USER is set: that is how it decides
+# "was this run through sudo". Under pkexec there is no SUDO_USER -- there is
+# PKEXEC_UID -- so it refuses even while running as root, with the spectacularly
+# unhelpful "Please run this command as root". Any caller that is not literally
+# sudo hits this, which is every GUI path.
+#
+# We are root by then and the target account is explicit via -U, so supplying it
+# changes nothing about who is affected; it only satisfies the check.
+run_howdy() {
+  local user=$1
+  shift
+  as_root env SUDO_USER="$user" howdy -U "$user" "$@"
+}
+
 # Root for the model store, and nothing else. Called as root under PAM, and
 # with sudo from the CLI. Falls back to SUDO_ASKPASS when there is no terminal
 # for sudo to prompt on, so enrollment is drivable from something that is not a
@@ -297,26 +311,26 @@ cmd_enroll() {
   # it. That prompt is a plain read from stdin, so a caller with no terminal --
   # a setup panel, a script -- can still name a model by piping it in.
   if [[ -n $label ]]; then
-    printf '%s\n' "$label" | as_root howdy -U "$user" add
+    printf '%s\n' "$label" | run_howdy "$user" add
   elif [[ -t 0 ]]; then
-    as_root howdy -U "$user" add
+    run_howdy "$user" add
   else
     # No terminal and no label: take howdy's default rather than hang on a
     # prompt nobody can answer.
-    as_root howdy -U "$user" add -y
+    run_howdy "$user" add -y
   fi
 }
 
 cmd_list() {
   local user=${1:?list needs a user}
   require_installed
-  as_root howdy -U "$user" list
+  run_howdy "$user" list
 }
 
 cmd_remove() {
   local user=${1:?remove needs a user} id=${2:?remove needs a model id}
   require_installed
-  as_root howdy -U "$user" remove "$id"
+  run_howdy "$user" remove "$id"
 }
 
 cmd_clear() {
@@ -327,7 +341,7 @@ cmd_clear() {
   # no terminal. Uninstallers do not have one, so without this the removal of
   # somebody's biometric templates fails and reports success.
   [[ -t 0 ]] || flags+=(-y)
-  as_root howdy -U "$user" clear "${flags[@]}"
+  run_howdy "$user" clear "${flags[@]}"
 }
 
 # Prints a count, or nothing at all when the answer is unknowable without root.
