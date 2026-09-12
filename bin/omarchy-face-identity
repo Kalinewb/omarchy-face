@@ -55,6 +55,17 @@ valid_identity() {
   [[ $1 =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]]
 }
 
+# Reject anything that is not a verb we implement before escalating. pkexec
+# starting a root process to discover it was asked for nonsense is a small
+# waste and a needlessly wide door.
+case ${1:-} in
+  verify | list) ;;
+  *)
+    echo "usage: omarchy-face-identity <verify|list> [identity]" >&2
+    exit 2
+    ;;
+esac
+
 # The models are root-owned mode 600, so this cannot do its job as the calling
 # user -- it could not even stat the file to see whether an identity exists.
 # Re-exec through pkexec, whose policy for this path grants active sessions
@@ -103,7 +114,7 @@ case $action in
     for f in "$HOWDY_MODELS/$PREFIX"*.dat; do
       name=${f##*/}
       name=${name%.dat}
-      printf '%s\n' "${name#$PREFIX}"
+      printf '%s\n' "${name#"$PREFIX"}"
     done
     ;;
 

@@ -123,11 +123,11 @@ cmd_status() {
   echo "${DIM}Enrollment${RESET}"
   # Prefer the summary the admin helper publishes: it is world-readable, so a
   # plain user gets a real number instead of "unknown".
-  if [[ -r /run/omarchy-face/models.json ]]; then
+  if [[ -r /var/lib/omarchy-face/models.json ]]; then
     models=$(python3 -c '
 import json
 try:
-    print(len(json.load(open("/run/omarchy-face/models.json")).get("models", [])))
+    print(len(json.load(open("/var/lib/omarchy-face/models.json")).get("models", [])))
 except Exception:
     print("unknown")
 ' 2>/dev/null) || models=unknown

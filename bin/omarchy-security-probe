@@ -23,11 +23,11 @@ face_polkit=$(grep -q omarchy-face-verify /etc/pam.d/polkit-1 2>/dev/null; json_
 
 # Published by omarchy-face-admin after every change; labels and times only.
 face_models=null
-if [[ -r /run/omarchy-face/models.json ]]; then
+if [[ -r /var/lib/omarchy-face/models.json ]]; then
   face_models=$(python3 -c '
 import json, sys
 try:
-    print(len(json.load(open("/run/omarchy-face/models.json")).get("models", [])))
+    print(len(json.load(open("/var/lib/omarchy-face/models.json")).get("models", [])))
 except Exception:
     print("null")
 ' 2>/dev/null || echo null)

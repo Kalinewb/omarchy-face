@@ -14,7 +14,6 @@ RED=$'\e[31m'
 DIM=$'\e[2m'
 RESET=$'\e[0m'
 
-BIN_DIR=/usr/local/bin
 MENU_FILE=$HOME/.config/omarchy/extensions/omarchy-menu.jsonc
 PLUGIN_DIR=$HOME/.config/omarchy/plugins/graveklar.face
 SHELL_CONFIG=$HOME/.config/omarchy/shell.json
@@ -84,9 +83,9 @@ set -e
 rm -f /usr/local/bin/omarchy-hw-ir-camera       /usr/local/bin/omarchy-face       /usr/local/bin/omarchy-face-gate       /usr/local/bin/omarchy-face-verify       /usr/local/bin/omarchy-face-notify       /usr/local/bin/omarchy-face-engine-howdy       /usr/local/bin/omarchy-face-admin       /usr/local/bin/omarchy-face-identity       /usr/local/bin/omarchy-security-probe       /usr/local/bin/omarchy-setup-security-face       /usr/local/bin/omarchy-remove-security-face
 rm -f /usr/share/polkit-1/actions/no.graveklar.face.policy
 rm -f /usr/lib/security/howdy/models/identity-*.dat 2>/dev/null || true
-rm -rf /run/omarchy-face /etc/omarchy-face
+rm -rf /run/omarchy-face /var/lib/omarchy-face /etc/omarchy-face
 ROOT
-echo "  helpers, polkit policy, identities, runtime and config state"
+echo "  helpers, polkit policy, identities, runtime and persistent state"
 
 rm -f "${XDG_RUNTIME_DIR:-/run/user/$UID}/omarchy-face-setup-open"
 

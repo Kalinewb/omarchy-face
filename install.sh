@@ -7,6 +7,7 @@
 set -e
 
 GREEN=$'\e[32m'
+RED=$'\e[31m'
 DIM=$'\e[2m'
 RESET=$'\e[0m'
 
@@ -126,7 +127,7 @@ if [[ -d $PLUGIN_SRC ]] && command -v omarchy-shell >/dev/null 2>&1; then
   omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
 
   enabled=false
-  for attempt in 1 2 3; do
+  for _ in 1 2 3; do
     if omarchy plugin enable graveklar.face >/dev/null 2>&1; then
       enabled=true
       break

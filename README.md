@@ -186,8 +186,15 @@ Every authentication publishes its state to `/run/omarchy-face/state.json`
 
 `state` is one of `start`, `matched`, `failed`, `skipped`. `detail` is free text
 — an engine exit code, a gate reason — and is never parsed for control flow.
-This exists for the shell overlay in the roadmap below; nothing reads it yet, and
-publishing costs one file write per authentication.
+The indicator animates against this; publishing costs one file write per
+authentication.
+
+The enrolled-model summary is separate and lives at
+`/var/lib/omarchy-face/models.json`, not in `/run`. It is state about the
+machine rather than about this boot: kept on tmpfs it vanished on reboot and
+every UI reading it reported "nothing enrolled" while the models sat on disk,
+which reads as face unlock having broken itself overnight. It carries labels
+and timestamps only — never encodings.
 
 ## The panel
 
@@ -208,6 +215,8 @@ it could not be determined is the one mistake this must not make.
 The camera is not opened for the overview. The webcam light has no business
 coming on for someone reading a status page.
 
+Open it from **Setup > Security > Manage Face ID**.
+
 **Face models** is the guided enrolment flow: a mirrored live preview from the
 RGB camera with an oval framing guide, a label for the model being recorded, a
 three-second countdown, and then a verdict. The verdict is measured, not
@@ -215,6 +224,22 @@ assumed — enrolment is followed immediately by a verification, and the match
 certainty is compared against the configured threshold. A model that only just
 scrapes under is reported as weak and worth redoing, because one that clears by
 a hair works at this desk, in this light, once.
+
+Recording a label **replaces** any model already carrying it. A label names a
+state — bare, everyday glasses, reading glasses — so recording it again means
+"this is what that state looks like now", not "here is a second opinion".
+Without that the list only grows, every retry of a bad capture leaves the bad
+one behind, and matching slows down: howdy compares against every model on
+every frame, and warns past three. Individual models can also be removed from
+the same screen.
+
+Authorisation happens **before** the countdown, not after. The other way round
+tells the user to hold still, then shows them a password box, and opens the
+camera once they have looked away to type it.
+
+On a machine where nothing is set up yet, the button runs the full first-time
+setup in a terminal instead: that step builds a package, and a progress bar
+that cannot be scrolled is worse than no window.
 
 Enrolment goes through `omarchy-face-admin` under the polkit action
 `no.graveklar.face.admin` (`auth_self_keep`, so recording three models for

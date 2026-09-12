@@ -147,6 +147,28 @@ Item {
     else window.visible = false
   }
 
+  // True when there is nothing to enrol INTO yet: no engine installed, or the
+  // PAM stacks were never wired. Enrolling in that state produces a model that
+  // authenticates nothing, after a failure whose message is about cameras.
+  readonly property bool needsSetup: {
+    var face = root.posture && root.posture.face
+    if (!face) return false
+    return !face.installed || !(face.sudo || face.polkit)
+  }
+
+  // Cold start belongs in a terminal: it builds a package, and a progress bar
+  // that cannot be scrolled or read is worse than no window at all.
+  function runFirstTimeSetup() {
+    setupProc.running = true
+    root.requestClose()
+  }
+
+  Process {
+    id: setupProc
+    command: ["omarchy-launch-floating-terminal-with-presentation",
+              "omarchy-setup-security-face"]
+  }
+
   function enterFaceFlow() {
     phase = "framing"
     message = ""
@@ -242,7 +264,7 @@ Item {
   // just to render a list of labels; only changing something should.
   FileView {
     id: modelsFile
-    path: "/run/omarchy-face/models.json"
+    path: "/var/lib/omarchy-face/models.json"
     watchChanges: true
     printErrors: false
     onFileChanged: reload()
@@ -649,8 +671,9 @@ Item {
               : Qt.rgba(Color.polkit.text.r, Color.polkit.text.g, Color.polkit.text.b, 0.09)
             Text {
               anchors.centerIn: parent
-              text: (root.posture && root.posture.face && root.posture.face.models > 0)
-                ? "Manage face models" : "Set up face unlock"
+              text: root.needsSetup ? "Set up face unlock"
+                  : (root.posture && root.posture.face && root.posture.face.models > 0)
+                    ? "Manage face models" : "Record your face"
               color: (root.posture && root.posture.face && root.posture.face.hardware)
                 ? Color.polkit.background : Color.polkit.text
               font.family: Style.font.family
@@ -659,7 +682,7 @@ Item {
             MouseArea {
               anchors.fill: parent
               enabled: root.posture && root.posture.face && root.posture.face.hardware
-              onClicked: root.enterFaceFlow()
+              onClicked: root.needsSetup ? root.runFirstTimeSetup() : root.enterFaceFlow()
             }
           }
 

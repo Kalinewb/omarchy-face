@@ -18,7 +18,11 @@ unset IFS BASH_ENV ENV CDPATH
 umask 077
 
 CONFIG_FILE=/etc/omarchy-face/config
-STATE_DIR=/run/omarchy-face
+# The enrolled-model summary is state about the machine, not about this boot,
+# so it does not belong in /run. Kept there it vanished on reboot and every UI
+# that reads it reported "nothing enrolled" while the models sat on disk --
+# which looks exactly like face unlock having broken itself overnight.
+SUMMARY_DIR=/var/lib/omarchy-face
 
 die_json() {
   printf '{"ok":false,"error":"%s"}\n' "${1//\"/}"
@@ -118,10 +122,10 @@ ENGINE=$(engine_cmd)
 publish_summary() {
   local summary
   summary=$("$ENGINE" list-json "$user" 2>/dev/null) || return 0
-  mkdir -p "$STATE_DIR" 2>/dev/null
-  chmod 0755 "$STATE_DIR" 2>/dev/null
-  printf '%s\n' "$summary" >"$STATE_DIR/models.json" 2>/dev/null
-  chmod 0644 "$STATE_DIR/models.json" 2>/dev/null
+  mkdir -p "$SUMMARY_DIR" 2>/dev/null
+  chmod 0755 "$SUMMARY_DIR" 2>/dev/null
+  printf '%s\n' "$summary" >"$SUMMARY_DIR/models.json" 2>/dev/null
+  chmod 0644 "$SUMMARY_DIR/models.json" 2>/dev/null
 }
 
 trap publish_summary EXIT

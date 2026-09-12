@@ -30,8 +30,6 @@ HOWDY_COMPARE=$HOWDY_DIR/compare.py
 
 # Both AUR spellings ship identical payloads; howdy-bin repacks the upstream
 # .deb, howdy builds the same tree from the git tag.
-AUR_PACKAGES=(python-dlib howdy)
-
 # Everything the two AUR builds link against, from the official repos. Pulled
 # up front in one privileged call so makepkg never needs root of its own --
 # makepkg shells out to a bare `sudo`, which cannot prompt where there is no

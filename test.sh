@@ -128,6 +128,40 @@ for field in face fingerprint fido2 sshd faillock idle sudo; do
 done
 printf '  %s✓%s %-46s %sall seven sections present%s\n' "$GREEN" "$RESET" "probe fields" "$DIM" "$RESET"
 
+section "State that must survive a reboot"
+# /run is tmpfs. A summary kept there vanishes overnight and every UI reading it
+# reports "nothing enrolled" while the models sit on disk -- which reads as face
+# unlock having broken itself.
+if grep -rq "/run/omarchy-face/models.json" /usr/local/bin/omarchy-face* 2>/dev/null; then
+  printf '  %s✗%s %-46s %smodel summary kept on tmpfs%s\n' "$RED" "$RESET" "summary is persistent" "$RED" "$RESET"
+  ((fail++))
+else
+  printf '  %s✓%s %-46s %snot under /run%s\n' "$GREEN" "$RESET" "summary is persistent" "$DIM" "$RESET"
+  ((pass++))
+fi
+
+section "Authorisation surface"
+for action in no.graveklar.face.admin no.graveklar.face.verify; do
+  if pkaction --action-id "$action" >/dev/null 2>&1; then
+    printf '  %s✓%s %-46s %sregistered%s\n' "$GREEN" "$RESET" "$action" "$DIM" "$RESET"
+    ((pass++))
+  else
+    printf '  %s✗%s %-46s %smissing%s\n' "$RED" "$RESET" "$action" "$RED" "$RESET"
+    ((fail++))
+  fi
+done
+# The no-prompt verifier must never grow the ability to change anything.
+# Captured first, then matched: this file runs under `set -o pipefail`, so
+# `cmd | grep -q` reports cmd's exit status even when grep matched happily.
+identity_out=$(omarchy-face-identity enroll evil 2>&1 || true)
+if grep -qi usage <<<"$identity_out"; then
+  printf '  %s✓%s %-46s %sverify/list only%s\n' "$GREEN" "$RESET" "identity helper cannot enrol" "$DIM" "$RESET"
+  ((pass++))
+else
+  printf '  %s✗%s %-46s %saccepted an unexpected verb%s\n' "$RED" "$RESET" "identity helper cannot enrol" "$RED" "$RESET"
+  ((fail++))
+fi
+
 section "Lint — bash traps that fail silently"
 bad=0
 for script in /usr/local/bin/omarchy-face* /usr/local/bin/omarchy-hw-ir-camera; do
@@ -156,7 +190,13 @@ fi
 
 section "Engine"
 omarchy-face-engine-howdy describe | sed "s/^/  ${DIM}/;s/\$/${RESET}/"
-models=$(omarchy-face-engine-howdy count-models "$USER" 2>/dev/null || echo unknown)
+# The published summary, same as every other reader: asking the engine directly
+# needs root, and this suite must not raise a password prompt.
+if [[ -r /var/lib/omarchy-face/models.json ]]; then
+  models=$(python3 -c 'import json; print(len(json.load(open("/var/lib/omarchy-face/models.json"))["models"]))' 2>/dev/null || echo unknown)
+else
+  models="none recorded"
+fi
 printf '  %-48s %s\n' "enrolled models for $USER" "$models"
 
 if $LIVE; then
