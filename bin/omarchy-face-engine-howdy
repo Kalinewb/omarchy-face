@@ -390,11 +390,27 @@ except Exception:
 ' "$file"
 }
 
+# howdy's timeout is a single global in config.ini, so a caller that wants to
+# wait less cannot say so. Bounding the process from outside gives a per-call
+# ceiling without the engine needing to support one -- and works for any future
+# engine too, since it makes no assumption beyond "this is a process".
+#
+# OMARCHY_FACE_TIMEOUT is a ceiling, never an extension: the engine's own
+# timeout still applies and is usually shorter.
+bounded() {
+  local limit=${OMARCHY_FACE_TIMEOUT:-}
+  if [[ $limit =~ ^[0-9]+$ && $limit -gt 0 ]]; then
+    timeout --signal=TERM --kill-after=2 "$limit" "$@"
+  else
+    "$@"
+  fi
+}
+
 # The authentication path. Silent, and its exit code is the answer.
 cmd_verify() {
   local user=${1:?verify needs a user}
   installed || return 1
-  exec /usr/bin/python3 "$HOWDY_COMPARE" "$user" >/dev/null 2>&1
+  bounded /usr/bin/python3 "$HOWDY_COMPARE" "$user" >/dev/null 2>&1
 }
 
 cmd_verify_verbose() {
@@ -432,7 +448,12 @@ cmd_threshold() {
 cmd_verify_report() {
   local user=${1:?verify-report needs a user}
   require_installed
-  as_root /usr/bin/python3 "$HOWDY_COMPARE" "$user" 2>&1
+  as_root env OMARCHY_FACE_TIMEOUT="${OMARCHY_FACE_TIMEOUT:-}" \
+    bash -c 'limit=${OMARCHY_FACE_TIMEOUT:-}
+      if [[ $limit =~ ^[0-9]+$ && $limit -gt 0 ]]; then
+        exec timeout --signal=TERM --kill-after=2 "$limit" /usr/bin/python3 "$1" "$2"
+      fi
+      exec /usr/bin/python3 "$1" "$2"' _ "$HOWDY_COMPARE" "$user" 2>&1
 }
 
 cmd_list_json() {

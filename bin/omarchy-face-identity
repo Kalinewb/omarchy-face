@@ -98,6 +98,12 @@ case $action in
       [[ -n $node ]] && fuser -s "$node" 2>/dev/null && exit 3
     fi
 
+    # Bounded tighter than PAM's own attempt. Something checks this before
+    # falling back to asking the owner, and the owner should not wait out a
+    # full camera timeout for a face that is not theirs. Overridable, because
+    # a slow sensor is a real thing.
+    export OMARCHY_FACE_TIMEOUT="${OMARCHY_FACE_TIMEOUT:-4}"
+
     omarchy-face-notify start "identity:$identity" 2>/dev/null || true
     if "$(engine_cmd)" verify "$PREFIX$identity" >/dev/null 2>&1; then
       omarchy-face-notify matched "identity:$identity" 2>/dev/null || true

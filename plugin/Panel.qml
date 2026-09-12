@@ -69,12 +69,16 @@ Item {
       name: "Fingerprint",
       value: !fp.hardware ? "no reader" : (fp.configured ? "enrolled" : "reader present, not enrolled"),
       tone: !fp.hardware ? "unknown" : (fp.configured ? "good" : "unknown"),
+      // Omarchy already owns fingerprint setup. Re-implementing it here would
+      // be a second thing to keep correct about somebody's authentication.
+      run: fp.hardware && !fp.configured ? "omarchy-setup-security-fingerprint" : "",
     })
 
     rows.push({
       name: "Security key",
       value: (p.fido2 && p.fido2.installed) ? "pam-u2f installed" : "not set up",
       tone: (p.fido2 && p.fido2.installed) ? "good" : "unknown",
+      run: (p.fido2 && p.fido2.installed) ? "" : "omarchy-setup-security-fido2",
     })
 
     var ssh = p.sshd || {}
@@ -82,6 +86,7 @@ Item {
       name: "Remote login",
       value: ssh.enabled ? (ssh.running ? "sshd enabled and running" : "sshd enabled") : "sshd off",
       tone: ssh.enabled ? "bad" : "good",
+      run: ssh.enabled ? "omarchy-remove-security-sshd" : "omarchy-setup-security-sshd",
     })
 
     var fails = (p.faillock && p.faillock.failures) ? p.faillock.failures : 0
@@ -89,6 +94,10 @@ Item {
       name: "Failed logins",
       value: fails === 0 ? "none recorded" : (fails + " recent"),
       tone: fails === 0 ? "good" : "bad",
+      // No terminal for this one: it is a single privileged call, not a setup
+      // flow, and it is the row most likely to be clicked in a hurry by
+      // somebody whose password has just stopped working.
+      privileged: fails > 0 ? "reset-faillock" : "",
     })
 
     var idle = p.idle || {}
@@ -96,12 +105,14 @@ Item {
       name: "Lock when idle",
       value: idle.lock ? root.humanDuration(idle.lock) : "never",
       tone: idle.lock ? "good" : "bad",
+      cycle: true,
     })
 
     rows.push({
       name: "Passwordless sudo",
       value: (p.sudo && p.sudo.passwordless) ? "enabled" : "off",
       tone: (p.sudo && p.sudo.passwordless) ? "bad" : "good",
+      run: "omarchy-sudo-passwordless",
     })
 
     return rows
@@ -158,6 +169,58 @@ Item {
 
   // Cold start belongs in a terminal: it builds a package, and a progress bar
   // that cannot be scrolled or read is worse than no window at all.
+  // Idle lock is a user-level setting in shell.json, so it needs no privilege
+  // at all -- and a row that cycles through sensible values is far likelier to
+  // get used than one that sends you to a text editor.
+  readonly property var idleChoices: [60, 300, 600, 1800]
+
+  function cycleIdleLock() {
+    var current = (root.posture && root.posture.idle && root.posture.idle.lock) || 0
+    var next = root.idleChoices[0]
+    for (var i = 0; i < root.idleChoices.length; i++) {
+      if (root.idleChoices[i] > current) {
+        next = root.idleChoices[i]
+        break
+      }
+    }
+    idleProc.command = ["omarchy-face-set-idle-lock", String(next)]
+    idleProc.running = true
+  }
+
+  Process {
+    id: idleProc
+    onExited: probeProc.running = true
+  }
+
+  function runPrivileged(action) {
+    privilegedProc.command = ["pkexec", "/usr/local/bin/omarchy-face-admin",
+                              action, root.userName]
+    privilegedProc.running = true
+  }
+
+  Process {
+    id: privilegedProc
+    onExited: probeProc.running = true
+  }
+
+  // Setup flows go to a terminal on purpose: they install packages, ask
+  // questions and print things worth reading. A modal with a spinner over the
+  // top of that would be hiding the useful part.
+  function runInTerminal(command) {
+    terminalProc.command = ["omarchy-launch-floating-terminal-with-presentation", command]
+    terminalProc.running = true
+    root.requestClose()
+  }
+
+  Process { id: terminalProc }
+
+  function activateRow(entry) {
+    if (!entry) return
+    if (entry.cycle) { root.cycleIdleLock(); return }
+    if (entry.privileged) { root.runPrivileged(entry.privileged); return }
+    if (entry.run) root.runInTerminal(entry.run)
+  }
+
   function runFirstTimeSetup() {
     setupProc.running = true
     root.requestClose()
@@ -432,8 +495,27 @@ Item {
             Item {
               id: row
               property var entry: modelData
+              readonly property bool actionable: !!(entry.run || entry.privileged || entry.cycle)
               width: parent ? parent.width : 0
               height: 34
+
+              Rectangle {
+                anchors.fill: parent
+                anchors.leftMargin: -8
+                anchors.rightMargin: -8
+                radius: 8
+                visible: row.actionable && rowArea.containsMouse
+                color: Qt.rgba(Color.polkit.text.r, Color.polkit.text.g, Color.polkit.text.b, 0.07)
+              }
+
+              MouseArea {
+                id: rowArea
+                anchors.fill: parent
+                hoverEnabled: true
+                enabled: row.actionable
+                cursorShape: row.actionable ? Qt.PointingHandCursor : Qt.ArrowCursor
+                onClicked: root.activateRow(row.entry)
+              }
 
               Rectangle {
                 id: dot
@@ -459,7 +541,11 @@ Item {
               Text {
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
-                text: row.entry.value
+                text: row.actionable && rowArea.containsMouse
+                  ? (row.entry.cycle ? "click to change"
+                     : row.entry.privileged ? "click to reset"
+                     : "click to configure")
+                  : row.entry.value
                 color: Qt.rgba(Color.polkit.text.r, Color.polkit.text.g, Color.polkit.text.b, 0.65)
                 font.family: Style.font.family
                 font.pixelSize: Style.font.bodySmall

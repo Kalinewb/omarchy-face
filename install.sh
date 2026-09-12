@@ -19,6 +19,7 @@ HELPERS=(
   omarchy-face-admin
   omarchy-face-identity
   omarchy-security-probe
+  omarchy-face-set-idle-lock
   omarchy-hw-ir-camera
   omarchy-face
   omarchy-face-gate

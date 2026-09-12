@@ -191,6 +191,17 @@ for model in sorted(models, key=lambda m: m.get("id", 0), reverse=True):
     "$ENGINE" list-json "$user" 2>/dev/null || die_json "could not read models"
     ;;
 
+  reset-faillock)
+    # A tripped faillock is what "my password suddenly stopped working" is,
+    # and clearing it is exactly as sensitive as any other change here, so it
+    # sits behind the same prompt.
+    if command -v faillock >/dev/null 2>&1 && faillock --user "$user" --reset >/dev/null 2>&1; then
+      printf '{"ok":true}\n'
+    else
+      printf '{"ok":false,"error":"could not reset the failure count"}\n'
+    fi
+    ;;
+
   forget)
     # `label` carries the model id here. Deleting a face model is as much the
     # owner's decision as adding one, so it sits behind the same prompt rather
