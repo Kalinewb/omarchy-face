@@ -41,16 +41,34 @@ die() {
   exit 1
 }
 
+SHELL_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json"
+
+# Enabled, not merely present. A disabled clone is not the lock screen anyone
+# is looking at -- it is a plugin sitting on disk -- and adopting or patching it
+# achieves nothing except editing somebody else's files for no reason. A
+# replacement that has been switched off should leave us free to make our own.
+clone_enabled() {
+  local id=$1
+  [[ -f $SHELL_CONFIG ]] || return 1
+  jq -e --arg id "$id" '
+    (.plugins // []) | any(
+      . as $entry |
+      ($entry | type == "string" and $entry == $id)
+      or ($entry | type == "object" and $entry.id == $id)
+    )
+  ' "$SHELL_CONFIG" >/dev/null 2>&1
+}
+
 find_clone() {
   local manifest id
   for manifest in "$PLUGINS_DIR"/*/manifest.json; do
     [[ -f $manifest ]] || continue
     id=$(jq -r --arg s "$SOURCE_ID" \
       'select(.omarchy.clonedFrom == $s) | .id' "$manifest" 2>/dev/null) || continue
-    [[ -n $id ]] && {
-      printf '%s\n' "$id"
-      return 0
-    }
+    [[ -n $id ]] || continue
+    clone_enabled "$id" || continue
+    printf '%s\n' "$id"
+    return 0
   done
   return 1
 }
@@ -69,7 +87,7 @@ if CLONE_ID=$(find_clone); then
   echo "Using the existing clone ${CLONE_ID}."
 else
   echo "Cloning ${SOURCE_ID}..."
-  omarchy plugin clone "$SOURCE_ID" >/dev/null
+  omarchy plugin clone "$SOURCE_ID" >/dev/null 2>&1 || true
   CLONE_ID=$(find_clone) || die "the clone did not appear in $PLUGINS_DIR"
   echo "  created ${CLONE_ID}"
 fi
