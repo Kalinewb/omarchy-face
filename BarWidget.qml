@@ -37,7 +37,10 @@ BarWidget {
 
   Process {
     id: probe
-    command: ["omarchy-security-probe"]
+    // See Panel.qml: a Process whose command is missing never exits, so the
+    // widget would sit in its initial state rather than reporting one.
+    command: ["bash", "-c",
+              "command -v omarchy-security-probe >/dev/null 2>&1 && exec omarchy-security-probe; exit 127"]
     stdout: StdioCollector { id: probeOut; waitForEnd: true }
     onExited: {
       try {

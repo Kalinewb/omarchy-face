@@ -385,7 +385,12 @@ Item {
 
   Process {
     id: probeProc
-    command: ["omarchy-security-probe"]
+    // Through a shell, so there is always a process and always an exit code.
+    // A Process whose command does not exist never fires onExited at all --
+    // which left the panel saying "Reading state..." forever, with a button
+    // offering to record a face there was nothing to record it with.
+    command: ["bash", "-c",
+              "command -v omarchy-security-probe >/dev/null 2>&1 && exec omarchy-security-probe; exit 127"]
     stdout: StdioCollector { id: probeOut; waitForEnd: true }
     onExited: function(code) {
       root.posture = root.parseJson(probeOut.text, null)
@@ -738,7 +743,10 @@ Item {
             height: 38
             radius: 10
             visible: root.phase === "overview"
-            color: (root.posture && root.posture.face && root.posture.face.hardware)
+            // Must look pressable when it is. Greyed-out styling on a working
+            // button reads as "this is disabled, something else is wrong".
+            color: (root.helpersMissing
+                    || (root.posture && root.posture.face && root.posture.face.hardware))
               ? Color.polkit.accent
               : Qt.rgba(Color.polkit.text.r, Color.polkit.text.g, Color.polkit.text.b, 0.09)
             Text {
@@ -747,7 +755,8 @@ Item {
                   : root.needsSetup ? "Set up face unlock"
                   : (root.posture && root.posture.face && root.posture.face.models > 0)
                     ? "Manage face models" : "Record your face"
-              color: (root.posture && root.posture.face && root.posture.face.hardware)
+              color: (root.helpersMissing
+                      || (root.posture && root.posture.face && root.posture.face.hardware))
                 ? Color.polkit.background : Color.polkit.text
               font.family: Style.font.family
               font.pixelSize: Style.font.bodySmall
