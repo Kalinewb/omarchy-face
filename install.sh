@@ -190,5 +190,22 @@ if command -v omarchy-shell >/dev/null 2>&1; then
 fi
 
 echo
-echo -e "${GREEN}Installed.${RESET} Next:"
-echo "  ${DIM}omarchy-setup-security-face${RESET}   install an engine, enroll, and wire up PAM"
+if grep -q omarchy-face-verify /etc/pam.d/sudo 2>/dev/null; then
+  echo -e "${GREEN}Installed.${RESET} Face authentication is already configured."
+  echo "  ${DIM}Setup > Security > Manage Face ID${RESET}   record, replace or remove models"
+elif [[ -t 0 ]]; then
+  # The remaining step is the one that matters and the one people miss, so ask
+  # rather than print it and hope. Only where there is a terminal to ask in, and
+  # only when it has not already been done: this script is also how upgrades are
+  # applied, and re-running setup on every upgrade would be its own surprise.
+  echo -e "${GREEN}Installed.${RESET}"
+  echo
+  read -rp "Set up face authentication now? [Y/n] " answer
+  if [[ ${answer,,} != n* ]]; then
+    exec omarchy-setup-security-face
+  fi
+  echo "  ${DIM}Later: omarchy-setup-security-face, or Setup > Security > Face ID${RESET}"
+else
+  echo -e "${GREEN}Installed.${RESET} Next:"
+  echo "  ${DIM}omarchy-setup-security-face${RESET}   install an engine, enroll, and wire up PAM"
+fi

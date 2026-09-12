@@ -47,8 +47,9 @@ Item {
     if (!p) {
       if (!root.helpersMissing) return [{ name: "Reading state...", value: "", tone: "unknown" }]
       return [
-        { name: "Not installed yet", value: "run install.sh", tone: "bad" },
-        { name: "", value: "~/.config/omarchy/plugins/graveklar.face/install.sh", tone: "unknown" },
+        { name: "Not installed yet", value: "", tone: "bad" },
+        { name: "Adding a plugin copies files. It cannot", value: "", tone: "unknown" },
+        { name: "install a daemon or edit PAM.", value: "", tone: "unknown" },
       ]
     }
 
@@ -230,6 +231,15 @@ Item {
   function runFirstTimeSetup() {
     setupProc.running = true
     root.requestClose()
+  }
+
+  // `omarchy plugin add` leaves the plugin here without its privileged half,
+  // and the remedy was a path nobody wants to type. The panel is already on
+  // screen at that point, so it can run its own installer. The id is fixed, so
+  // the path is knowable without asking the host where it was loaded from.
+  function runInstaller() {
+    root.runInTerminal(Quickshell.env("HOME")
+      + "/.config/omarchy/plugins/graveklar.face/install.sh")
   }
 
   Process {
@@ -733,7 +743,7 @@ Item {
               : Qt.rgba(Color.polkit.text.r, Color.polkit.text.g, Color.polkit.text.b, 0.09)
             Text {
               anchors.centerIn: parent
-              text: root.helpersMissing ? "Run install.sh first"
+              text: root.helpersMissing ? "Install"
                   : root.needsSetup ? "Set up face unlock"
                   : (root.posture && root.posture.face && root.posture.face.models > 0)
                     ? "Manage face models" : "Record your face"
@@ -744,9 +754,11 @@ Item {
             }
             MouseArea {
               anchors.fill: parent
-              enabled: !root.helpersMissing
-                && root.posture && root.posture.face && root.posture.face.hardware
-              onClicked: root.needsSetup ? root.runFirstTimeSetup() : root.enterFaceFlow()
+              enabled: root.helpersMissing
+                || (root.posture && root.posture.face && root.posture.face.hardware)
+              onClicked: root.helpersMissing ? root.runInstaller()
+                       : root.needsSetup ? root.runFirstTimeSetup()
+                       : root.enterFaceFlow()
             }
           }
 

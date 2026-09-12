@@ -30,22 +30,23 @@ the tool for that.
 
 ```bash
 omarchy plugin add https://github.com/Kalinewb/omarchy-face --enable
-~/.config/omarchy/plugins/graveklar.face/install.sh
-omarchy-setup-security-face      # or: Setup > Security > Face ID
 ```
 
-The second line is not optional and cannot be folded into the first. `omarchy
-plugin add` clones a repository into your plugin directory — it installs
-nothing into `/usr/local/bin`, registers no polkit action and starts no
-service, all of which this needs to do anything at all. Until it runs, the
-panel opens and tells you so rather than pretending.
+Then open **Setup → Security → Manage Face ID** and press **Install**. The rest
+happens in a terminal it opens for you: the helpers go in, the daemon is
+registered, and it offers to walk you through enrolment.
 
-Or from a checkout, which is the same thing in a different order:
+The second step cannot be folded into the first, and the panel says so rather
+than pretending: `omarchy plugin add` clones a repository into your plugin
+directory. It installs nothing into `/usr/local/bin`, registers no polkit
+action and starts no service — all of which this needs before it can do
+anything at all. Adding a plugin copies files; it cannot edit PAM.
+
+From a checkout instead, which is the same steps in a different order:
 
 ```bash
 git clone https://github.com/Kalinewb/omarchy-face
 cd omarchy-face && ./install.sh
-omarchy-setup-security-face
 ```
 
 Setup installs the engine, pins the camera, walks you through enrollment,
