@@ -205,6 +205,13 @@ Item {
     enrollProc.running = true
   }
 
+  function forgetModel(id, label) {
+    root.message = "Removing \"" + label + "\"..."
+    forgetProc.command = ["pkexec", "/usr/local/bin/omarchy-face-admin",
+                          "forget", root.userName, String(id)]
+    forgetProc.running = true
+  }
+
   function runCheck() {
     phase = "checking"
     message = "Checking that it recognises you..."
@@ -263,6 +270,24 @@ Item {
           : "Enrolment did not complete."
       }
     }
+  }
+
+  Process {
+    id: forgetProc
+    stdout: StdioCollector { id: forgetOut; waitForEnd: true }
+    onExited: {
+      var parsed = root.parseJson(forgetOut.text, null)
+      root.message = (parsed && parsed.ok) ? "Removed." : "Could not remove that model."
+      // howdy renumbers what follows a removed model, so the list is re-read
+      // rather than patched: every id after the removed one has moved.
+      refreshProc.running = true
+    }
+  }
+
+  Process {
+    id: refreshProc
+    command: ["pkexec", "/usr/local/bin/omarchy-face-admin", "list", Quickshell.env("USER")]
+    onExited: modelsFile.reload()
   }
 
   Process {
@@ -542,16 +567,72 @@ Item {
               + (root.weak ? " — not much room." : " — comfortable.")
         }
 
-        Text {
+        // Enrolled models, each removable. A face model is a way into the
+        // account, so seeing them and taking one away belongs on the same
+        // screen that adds them -- otherwise the only honest instruction is
+        // "edit some JSON as root", which nobody does, and the list grows
+        // forever.
+        Column {
           width: parent.width
-          wrapMode: Text.WordWrap
-          color: Qt.rgba(Color.polkit.text.r, Color.polkit.text.g, Color.polkit.text.b, 0.6)
-          font.family: Style.font.family
-          font.pixelSize: Style.font.bodySmall
+          spacing: 4
           visible: root.phase !== "overview"
-          text: root.models.length > 0
-            ? "Enrolled: " + root.models.map(function(m) { return m.label }).join(", ")
-            : "Nothing enrolled yet."
+
+          Text {
+            visible: root.models.length === 0
+            text: "Nothing enrolled yet."
+            color: Qt.rgba(Color.polkit.text.r, Color.polkit.text.g, Color.polkit.text.b, 0.6)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          Repeater {
+            model: root.models
+
+            Item {
+              id: modelRow
+              property var entry: modelData
+              width: parent ? parent.width : 0
+              height: 26
+
+              Text {
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                text: modelRow.entry.label
+                color: Qt.rgba(Color.polkit.text.r, Color.polkit.text.g, Color.polkit.text.b, 0.75)
+                font.family: Style.font.family
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              Rectangle {
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                width: 24
+                height: 20
+                radius: 6
+                color: forgetArea.containsMouse
+                  ? Qt.rgba(Color.polkit.textError.r, Color.polkit.textError.g, Color.polkit.textError.b, 0.18)
+                  : "transparent"
+
+                Text {
+                  anchors.centerIn: parent
+                  text: "\u2715"
+                  color: forgetArea.containsMouse
+                    ? Color.polkit.textError
+                    : Qt.rgba(Color.polkit.text.r, Color.polkit.text.g, Color.polkit.text.b, 0.45)
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                }
+
+                MouseArea {
+                  id: forgetArea
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  enabled: root.phase !== "capturing" && root.phase !== "checking"
+                  onClicked: root.forgetModel(modelRow.entry.id, modelRow.entry.label)
+                }
+              }
+            }
+          }
         }
 
         Row {

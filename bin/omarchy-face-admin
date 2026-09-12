@@ -187,6 +187,18 @@ for model in sorted(models, key=lambda m: m.get("id", 0), reverse=True):
     "$ENGINE" list-json "$user" 2>/dev/null || die_json "could not read models"
     ;;
 
+  forget)
+    # `label` carries the model id here. Deleting a face model is as much the
+    # owner's decision as adding one, so it sits behind the same prompt rather
+    # than the no-auth verifier.
+    [[ $label =~ ^[0-9]+$ ]] || die_json "invalid model id"
+    if "$ENGINE" remove "$user" "$label" >/dev/null 2>&1; then
+      printf '{"ok":true,"removed":%s}\n' "$label"
+    else
+      printf '{"ok":false,"error":"could not remove model %s"}\n' "$label"
+    fi
+    ;;
+
   *)
     die_json "unknown action"
     ;;
