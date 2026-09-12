@@ -1,0 +1,230 @@
+#!/bin/bash
+
+# omarchy:summary=Add face unlock to the lock screen by cloning Omarchy's lock plugin
+# omarchy:requires-sudo=true
+
+# Omarchy's lock screen hardcodes exactly two PAM flows, password and
+# fingerprint, and a third-party plugin cannot add a third. The supported way
+# to change a first-party plugin is to clone it: the registry routes the lock
+# to an enabled clone that declares clonedFrom, and the original stays loadable
+# so it can be put back.
+#
+# So this clones the lock, inserts a face flow, and points it at its own PAM
+# service. That is a fork of the one piece of software standing between a
+# closed laptop and its contents, so:
+#
+#   * the password flow is never touched -- only a third flow is added
+#   * the patch refuses to apply unless it recognises what it is patching
+#   * if the shell reports the clone failed to load, it is disabled again
+#     automatically and Omarchy's own lock screen comes back
+#
+# Undo at any time with: omarchy-remove-security-face-lock
+
+set -euo pipefail
+
+GREEN=$'\e[32m'
+RED=$'\e[31m'
+YELLOW=$'\e[33m'
+DIM=$'\e[2m'
+RESET=$'\e[0m'
+
+PLUGINS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins"
+SOURCE_ID=omarchy.lock
+PAM_FILE=/etc/pam.d/omarchy-lock-face
+HELPER_DIR=/usr/local/bin
+
+SUDO=(sudo)
+[[ ! -t 0 && -n ${SUDO_ASKPASS:-} ]] && SUDO=(sudo -A)
+
+die() {
+  echo -e "${RED}$*${RESET}" >&2
+  exit 1
+}
+
+find_clone() {
+  local manifest id
+  for manifest in "$PLUGINS_DIR"/*/manifest.json; do
+    [[ -f $manifest ]] || continue
+    id=$(jq -r --arg s "$SOURCE_ID" \
+      'select(.omarchy.clonedFrom == $s) | .id' "$manifest" 2>/dev/null) || continue
+    [[ -n $id ]] && {
+      printf '%s\n' "$id"
+      return 0
+    }
+  done
+  return 1
+}
+
+echo -e "${GREEN}Adding face unlock to the lock screen.\n${RESET}"
+
+command -v jq >/dev/null || die "jq is required"
+[[ -x $HELPER_DIR/omarchy-face-verify ]] || die "omarchy-face is not installed; run install.sh first"
+omarchy-hw-ir-camera >/dev/null || die "No infrared camera detected."
+
+[[ -r /var/lib/omarchy-face/models.json ]] && grep -q '"label"' /var/lib/omarchy-face/models.json ||
+  die "No face is enrolled yet. Run the setup or Manage Face ID first."
+
+# --- clone --------------------------------------------------------------
+if CLONE_ID=$(find_clone); then
+  echo "Using the existing clone ${CLONE_ID}."
+else
+  echo "Cloning ${SOURCE_ID}..."
+  omarchy plugin clone "$SOURCE_ID" >/dev/null
+  CLONE_ID=$(find_clone) || die "the clone did not appear in $PLUGINS_DIR"
+  echo "  created ${CLONE_ID}"
+fi
+
+SERVICE="$PLUGINS_DIR/$CLONE_ID/Service.qml"
+[[ -f $SERVICE ]] || die "no Service.qml in the clone"
+
+if grep -q 'omarchy-lock-face' "$SERVICE"; then
+  echo "The clone already has the face flow."
+else
+  # Two anchors, both checked before anything is written. If Omarchy's lock
+  # screen has been rewritten upstream, this refuses rather than guessing --
+  # a half-applied patch to a lock screen is the worst possible outcome.
+  grep -q 'function handleFingerprintFinished' "$SERVICE" ||
+    die "this lock screen does not look like the one this patch was written for (no handleFingerprintFinished)"
+  grep -q 'root.startFingerprint()' "$SERVICE" ||
+    die "this lock screen does not look like the one this patch was written for (no startFingerprint call site)"
+
+  echo "Adding the face flow to the clone..."
+  python3 - "$SERVICE" <<'PY'
+import re, sys
+
+path = sys.argv[1]
+source = open(path).read()
+
+block = '''
+  // ---- face unlock, added by omarchy-face --------------------------------
+  // A third flow beside password and fingerprint. It never replaces the
+  // password: that PamContext is untouched, and this one simply finishes the
+  // unlock early when it succeeds.
+  property bool faceConfigured: false
+  property bool faceAuthenticating: false
+  property int faceAttempts: 0
+
+  // The camera is not free to run. Retrying forever would keep the infrared
+  // emitter firing at an empty chair all night, so it gives up after a few
+  // tries and leaves the password field where it always was.
+  readonly property int faceMaxAttempts: 4
+
+  function refreshFaceStatus() {
+    if (!faceCheckProc.running) faceCheckProc.running = true
+  }
+
+  function startFace() {
+    if (!lockRequested || !sessionLock.secure || !faceConfigured) return
+    if (facePam.active || faceAuthenticating) return
+    if (faceAttempts >= faceMaxAttempts) return
+
+    faceAttempts += 1
+    faceAuthenticating = true
+    if (!facePam.start()) faceAuthenticating = false
+  }
+
+  function handleFaceFinished(result) {
+    faceAuthenticating = false
+    if (!lockRequested) return
+    if (result === PamResult.Success) finishUnlock()
+    else if (faceConfigured && faceAttempts < faceMaxAttempts) faceRetryTimer.restart()
+  }
+
+  Process {
+    id: faceCheckProc
+    command: ["bash", "-c", "if [[ -f /etc/pam.d/omarchy-lock-face ]] && grep -q '\\"label\\"' /var/lib/omarchy-face/models.json 2>/dev/null; then echo yes; else echo no; fi"]
+    stdout: StdioCollector { id: faceCheckStdout; waitForEnd: true }
+    onExited: {
+      root.faceConfigured = String(faceCheckStdout.text || "").trim() === "yes"
+      if (root.lockRequested && root.faceConfigured) root.startFace()
+      else if (!root.faceConfigured && facePam.active) facePam.abort()
+    }
+  }
+
+  PamContext {
+    id: facePam
+    config: "omarchy-lock-face"
+    user: root.userName
+
+    onCompleted: function(result) { root.handleFaceFinished(result) }
+    onError: function(error) {
+      root.faceAuthenticating = false
+      if (root.lockRequested && root.faceConfigured
+          && root.faceAttempts < root.faceMaxAttempts) faceRetryTimer.restart()
+    }
+  }
+
+  Timer {
+    id: faceRetryTimer
+    interval: 1500
+    repeat: false
+    onTriggered: root.startFace()
+  }
+  // ---- end face unlock ---------------------------------------------------
+'''
+
+# Insert after handleFingerprintFinished's closing brace.
+marker = "function handleFingerprintFinished"
+start = source.index(marker)
+depth, i = 0, source.index("{", start)
+opened = False
+while i < len(source):
+    if source[i] == "{":
+        depth += 1
+        opened = True
+    elif source[i] == "}":
+        depth -= 1
+        if opened and depth == 0:
+            break
+    i += 1
+insert_at = source.index("\n", i) + 1
+source = source[:insert_at] + block + source[insert_at:]
+
+# Start the face flow wherever the fingerprint flow starts on becoming secure,
+# and reset the attempt counter there: a new lock deserves a fresh budget.
+source = source.replace(
+    "        root.startFingerprint()\n",
+    "        root.startFingerprint()\n        root.faceAttempts = 0\n        root.refreshFaceStatus()\n",
+    1,
+)
+
+open(path, "w").write(source)
+print("  patched Service.qml")
+PY
+fi
+
+# --- PAM service --------------------------------------------------------
+echo "Creating $PAM_FILE..."
+"${SUDO[@]}" tee "$PAM_FILE" >/dev/null <<EOF
+#%PAM-1.0
+# Face only. The lock screen's password flow is a separate PAM service and is
+# not affected by anything here; if this denies, the password field still works.
+auth       [success=1 default=ignore]  pam_exec.so seteuid quiet $HELPER_DIR/omarchy-face-gate
+auth       sufficient                  pam_exec.so seteuid quiet $HELPER_DIR/omarchy-face-verify
+auth       required                    pam_deny.so
+account    include                     system-local-login
+EOF
+
+# --- load, and undo it if the shell disagrees ---------------------------
+echo "Restarting the shell..."
+omarchy restart shell >/dev/null 2>&1 || true
+sleep 4
+
+if journalctl --user -b --since "-30 s" 2>/dev/null |
+  grep -qiE "$CLONE_ID.*(failed|error)|Service\.qml.*(SyntaxError|Expected)"; then
+  echo -e "${RED}\nThe patched lock screen did not load. Putting Omarchy's back.${RESET}" >&2
+  omarchy plugin disable "$CLONE_ID" >/dev/null 2>&1 || true
+  "${SUDO[@]}" rm -f "$PAM_FILE"
+  omarchy restart shell >/dev/null 2>&1 || true
+  die "reverted; nothing was left half-applied"
+fi
+
+echo
+echo -e "${GREEN}Face unlock is available on the lock screen.${RESET}"
+echo
+echo "${YELLOW}Test it now, before you need it:${RESET} Super + Ctrl + L"
+echo "${DIM}Your password still unlocks, and is still what you fall back to.${RESET}"
+echo "${DIM}It tries the camera a few times, then stops and waits for the password,${RESET}"
+echo "${DIM}rather than running the infrared emitter at an empty chair all night.${RESET}"
+echo
+echo "${DIM}Undo with: omarchy-remove-security-face-lock${RESET}"

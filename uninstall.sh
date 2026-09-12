@@ -80,8 +80,11 @@ fi
 # kind of thing nobody expects and nobody thinks to check.
 "${SUDO[@]}" bash -s <<'ROOT'
 set -e
-rm -f /usr/local/bin/omarchy-hw-ir-camera       /usr/local/bin/omarchy-face       /usr/local/bin/omarchy-face-gate       /usr/local/bin/omarchy-face-verify       /usr/local/bin/omarchy-face-notify       /usr/local/bin/omarchy-face-engine-howdy       /usr/local/bin/omarchy-face-admin       /usr/local/bin/omarchy-face-identity       /usr/local/bin/omarchy-security-probe       /usr/local/bin/omarchy-setup-security-face       /usr/local/bin/omarchy-remove-security-face
+rm -f /usr/local/bin/omarchy-hw-ir-camera       /usr/local/bin/omarchy-face       /usr/local/bin/omarchy-face-gate       /usr/local/bin/omarchy-face-verify       /usr/local/bin/omarchy-face-notify       /usr/local/bin/omarchy-face-engine-howdy       /usr/local/bin/omarchy-face-admin       /usr/local/bin/omarchy-face-identity       /usr/local/bin/omarchy-security-probe       /usr/local/bin/omarchy-setup-security-face       /usr/local/bin/omarchy-remove-security-face \
+      /usr/local/bin/omarchy-setup-security-face-lock \
+      /usr/local/bin/omarchy-remove-security-face-lock
 rm -f /usr/share/polkit-1/actions/no.graveklar.face.policy
+rm -f /etc/pam.d/omarchy-lock-face
 rm -f /usr/lib/security/howdy/models/identity-*.dat 2>/dev/null || true
 rm -rf /run/omarchy-face /var/lib/omarchy-face /etc/omarchy-face
 ROOT
