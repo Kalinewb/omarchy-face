@@ -65,7 +65,7 @@ uses with `omarchy-hw-laptop-closed`. The gate skips when:
 
 - face is disabled (`/etc/omarchy-face/disabled`)
 - the account is root
-- the session is remote (`PAM_RHOST`, `SSH_CONNECTION`)
+- the caller belongs to a remote login session (see below)
 - the lid is closed — otherwise every `sudo` in clamshell mode waits out the engine's timeout
 - there is no IR camera, no engine, or nothing enrolled
 - another process is holding the sensor, e.g. a video call
@@ -147,6 +147,49 @@ The match threshold (`certainty`) is left at howdy's stock value. Loosening it i
 the one knob that trades security directly for convenience, and it should be a
 decision you make rather than a default you inherit.
 
+### What "remote" can and cannot mean here
+
+An earlier version of this checked `SSH_CONNECTION` and `SSH_TTY`. Those checks
+never once fired. `pam_exec` builds its child's environment from PAM's own list
+and does not pass the caller's environ — so the variables were simply not
+there — and `PAM_RHOST` is only set for sudo when the `pam_rhost` sudoers flag
+is on, which is off by default. The guard was documented, believed, and absent.
+
+What replaced it asks logind: the caller's session is resolved through
+`/proc/<pid>/cgroup` to a `session-N.scope`, and `/run/systemd/sessions/N` says
+whether it is `REMOTE=1`. Its limit, stated because the last version quietly had
+none: a process already running as you can leave the session scope with
+`systemd-run --user` and defeat it. It stops `ssh host sudo`. It does not stop a
+determined process that is already inside your account.
+
+### Face is a passive factor, and that cuts both ways
+
+A fingerprint needs a deliberate touch. A password cannot be typed by software.
+A face is *given off* continuously by someone sitting at their own machine — so
+any process running as you can call `pkexec`, and your face will answer before
+you have finished reading the dialog. That is a real difference from the other
+two factors, not a footnote to them.
+
+It does not create the privilege escalation — a process running as you could
+already wrap `sudo` in your shell profile, or edit the polkit agent, which is
+Quickshell config in your home directory. What it changes is that the attack
+stops needing patience. It goes from "wait for them to type a password" to
+"ask, now, silently".
+
+Three things follow, and all three are in the code:
+
+- **Scope toggles.** `sudo`, `polkit` and `lock` can each be set `false` in
+  `/etc/omarchy-face/config`. The lock screen is the one place where intent is
+  implicit — somebody is standing in front of a locked machine — so keeping
+  face there and refusing it for `sudo` is a coherent position, not a
+  half-measure.
+- **Attribution.** The indicator publishes which PAM service asked and the name
+  of the requesting process. A prompt that only says "look at the camera" is an
+  instruction to comply; one that names the requester lets you notice a request
+  you did not make.
+- **An audit line.** Every enrolment and removal goes to the journal with the
+  uid that asked (`journalctl -t omarchy-face`).
+
 ## Security
 
 **What this is.** A convenience factor that stops a shoulder-surfer and saves
@@ -162,6 +205,11 @@ It will not stop someone with an IR-capable photograph of you.
 
 Concretely:
 
+- Enrolment is authorised with polkit `auth_self` and deliberately **not**
+  `auth_self_keep`. A kept authorisation lasts about five minutes and is scoped
+  to the session, so during it any process running as you could enrol its own
+  face for sudo and the lock screen. Enrolment batches its work into a single
+  privileged call so the cost of that is one prompt, not three.
 - The PAM helpers must be root-owned and writable by nobody else. `pam_exec`
   runs them as root, so a group-writable helper is a local root exploit. Setup
   checks this and refuses to wire anything up if it fails.
@@ -261,6 +309,11 @@ omarchy-face-identity list                 # names only
 omarchy-face-identity verify partner       # exit 0 if that face is present
 ```
 
+Verification goes to `omarchy-faced` over its socket. The helper holds no
+privilege of its own: there is no setuid bit and no `pkexec`, so nothing starts
+a root process with an argv a caller chose, and rate limiting, session policy
+and camera serialisation live in one place rather than two.
+
 Enrolling one goes through `omarchy-face-admin enroll-identity`, behind the
 owner's polkit prompt — deciding *who else* may open something is the machine
 owner's call, and the other person cannot authorise as them. Verification, by
@@ -275,10 +328,18 @@ called `alice` can never shadow the model store PAM authenticates the real
 account against.
 
 **Understand what the no-prompt verifier grants**: any process running as you
-can ask whether a given enrolled face is in front of the camera, and turn the IR
-emitter on asking. It returns a boolean and nothing else. That is acceptable for
-gating things that are not security boundaries — a profile switch, a UI state —
-and it must never become the basis for one.
+can ask whether a given enrolled face is in front of the camera. It returns a
+boolean and nothing else.
+
+That is narrower than it first looks. logind puts an ACL on the camera for the
+seat's user, so any process running as you can already open the IR sensor, run
+a detector and build its own template of whoever sits down. The verifier adds
+exactly one thing on top of that: the *enrolled* template of someone who is not
+you. The rate limit therefore protects the emitter and PAM's claim on the
+sensor; it is not what protects the secret, because there was no secret there.
+
+It is acceptable for gating things that are not security boundaries — a profile
+switch, a UI state — and it must never become the basis for one.
 
 ## The indicator
 

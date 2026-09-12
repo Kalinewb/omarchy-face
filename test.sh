@@ -52,7 +52,11 @@ check "rejects unknown arguments" 2 omarchy-hw-ir-camera --nonsense
 section "Gate — exit 0 means face is SKIPPED, 1 means attempt it"
 check "no PAM_USER -> skip" 0 env -u PAM_USER omarchy-face-gate --explain
 check "root -> skip" 0 env PAM_USER=root omarchy-face-gate --explain
-check "ssh session -> skip" 0 env PAM_USER=$USER SSH_CONNECTION="10.0.0.1 1 10.0.0.2 22" omarchy-face-gate --explain
+# There is deliberately no "SSH_CONNECTION makes it skip" case here. A test
+# like that passed for weeks against a gate that read the variable, while real
+# PAM never set it -- so the suite was confirming a guard that could not fire.
+# The replacement guard reads logind, and the lint section below is what keeps
+# the env version from coming back.
 check "remote PAM_RHOST -> skip" 0 env PAM_USER=$USER PAM_RHOST=elsewhere omarchy-face-gate --explain
 
 section "Verify — exit 0 authenticates, everything else must not"
@@ -141,8 +145,10 @@ else
 fi
 
 section "Authorisation surface"
-for action in no.graveklar.face.admin no.graveklar.face.verify; do
-  if pkaction --action-id "$action" >/dev/null 2>&1; then
+# Only one action now. Verification moved into the daemon, which removed a
+# root process started with an argv the caller chose.
+for action in no.graveklar.face.admin; do
+    if pkaction --action-id "$action" >/dev/null 2>&1; then
     printf '  %s✓%s %-46s %sregistered%s\n' "$GREEN" "$RESET" "$action" "$DIM" "$RESET"
     ((pass++))
   else
@@ -150,6 +156,14 @@ for action in no.graveklar.face.admin no.graveklar.face.verify; do
     ((fail++))
   fi
 done
+if pkaction --action-id no.graveklar.face.verify >/dev/null 2>&1; then
+  printf '  %s✗%s %-46s %sstill registered%s\n' "$RED" "$RESET" "no-prompt polkit action is gone" "$RED" "$RESET"
+  ((fail++))
+else
+  printf '  %s✓%s %-46s %sretired%s\n' "$GREEN" "$RESET" "no-prompt polkit action is gone" "$DIM" "$RESET"
+  ((pass++))
+fi
+
 # The no-prompt verifier must never grow the ability to change anything.
 # Captured first, then matched: this file runs under `set -o pipefail`, so
 # `cmd | grep -q` reports cmd's exit status even when grep matched happily.
@@ -160,6 +174,76 @@ if grep -qi usage <<<"$identity_out"; then
 else
   printf '  %s✗%s %-46s %saccepted an unexpected verb%s\n' "$RED" "$RESET" "identity helper cannot enrol" "$RED" "$RESET"
   ((fail++))
+fi
+
+section "Guards that must not be decorative"
+# An earlier version checked SSH_CONNECTION here. pam_exec never passes the
+# caller's environ, so it could not fire, and the README documented a
+# protection that did not exist. Nothing should reintroduce it.
+if grep -qE 'SSH_CONNECTION|SSH_TTY|SSH_CLIENT' /usr/local/bin/omarchy-face-gate 2>/dev/null; then
+  printf '  %s✗%s %-46s %sreads env pam_exec never passes%s\n' "$RED" "$RESET" "gate does not rely on caller env" "$RED" "$RESET"
+  ((fail++))
+else
+  printf '  %s✓%s %-46s %suses logind, not env%s\n' "$GREEN" "$RESET" "gate does not rely on caller env" "$DIM" "$RESET"
+  ((pass++))
+fi
+
+# A kept authorisation is a window in which any process running as this user
+# can enrol its own face.
+if grep -q 'auth_self_keep' /usr/share/polkit-1/actions/no.graveklar.face.policy 2>/dev/null; then
+  printf '  %s✗%s %-46s %skept authorisation window%s\n' "$RED" "$RESET" "enrolment prompts every time" "$RED" "$RESET"
+  ((fail++))
+else
+  printf '  %s✓%s %-46s %sauth_self, no keep%s\n' "$GREEN" "$RESET" "enrolment prompts every time" "$DIM" "$RESET"
+  ((pass++))
+fi
+
+# The identity verifier must hold no privilege of its own.
+if grep -qE 'pkexec|^\s*sudo ' /usr/local/bin/omarchy-face-identity 2>/dev/null; then
+  printf '  %s✗%s %-46s %sstill escalates%s\n' "$RED" "$RESET" "identity helper is unprivileged" "$RED" "$RESET"
+  ((fail++))
+else
+  printf '  %s✓%s %-46s %ssocket client only%s\n' "$GREEN" "$RESET" "identity helper is unprivileged" "$DIM" "$RESET"
+  ((pass++))
+fi
+
+# The daemon should not hold capabilities it does not use.
+if systemctl show omarchy-faced.service -p NoNewPrivileges 2>/dev/null | grep -q 'yes'; then
+  printf '  %s✓%s %-46s %sNoNewPrivileges, bounded caps%s\n' "$GREEN" "$RESET" "daemon is least-privilege" "$DIM" "$RESET"
+  ((pass++))
+else
+  printf '  %s✗%s %-46s %sruns with full root%s\n' "$RED" "$RESET" "daemon is least-privilege" "$RED" "$RESET"
+  ((fail++))
+fi
+
+section "Daemon refusals"
+daemon_says() {
+  OMARCHY_TEST_REQ="$1" python3 -c '
+import os, socket, sys
+try:
+    c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); c.settimeout(20)
+    c.connect("/run/omarchy-face/verify.sock")
+    c.sendall((os.environ["OMARCHY_TEST_REQ"] + "\n").encode())
+    sys.stdout.write(c.recv(128).decode().strip().split("\n")[0])
+except Exception:
+    sys.stdout.write("UNREACHABLE")
+' 2>/dev/null
+}
+if [[ -S /run/omarchy-face/verify.sock ]]; then
+  for probe in "VERIFY root 2:not-your-account" "VERIFY-IDENTITY ../evil 2:bad-identity" "NONSENSE:bad-request"; do
+    request=${probe%%:*}
+    expect=${probe##*:}
+    got=$(daemon_says "$request")
+    if [[ $got == *"$expect"* ]]; then
+      printf '  %s✓%s %-46s %s%s%s\n' "$GREEN" "$RESET" "${request:0:40}" "$DIM" "$got" "$RESET"
+      ((pass++))
+    else
+      printf '  %s✗%s %-46s %sgot: %s%s\n' "$RED" "$RESET" "${request:0:40}" "$RED" "$got" "$RESET"
+      ((fail++))
+    fi
+  done
+else
+  printf '  %s-%s %-46s %ssocket absent%s\n' "$YELLOW" "$RESET" "daemon refusals" "$DIM" "$RESET"
 fi
 
 section "Lint — bash traps that fail silently"

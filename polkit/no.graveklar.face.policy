@@ -18,32 +18,9 @@
     <defaults>
       <allow_any>no</allow_any>
       <allow_inactive>no</allow_inactive>
-      <allow_active>auth_self_keep</allow_active>
+      <allow_active>auth_self</allow_active>
     </defaults>
     <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/omarchy-face-admin</annotate>
     <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
   </action>
-  <!--
-    Verification only, and deliberately without a prompt. The person this
-    checks for is not the machine owner and cannot authorise as them, so
-    requiring authorisation here would make named identities impossible.
-
-    What this grants is an oracle: any process running as the active user can
-    ask whether a given enrolled face is in front of the camera, and turn the
-    IR emitter on asking. It returns a boolean and nothing else ; it cannot
-    enrol, delete, or read an encoding, all of which live behind the action
-    above. Only ever gate things that are not security boundaries with it.
-  -->
-  <action id="no.graveklar.face.verify">
-    <description>Check whether a known face is present</description>
-    <message>Checking for a known face</message>
-    <defaults>
-      <allow_any>no</allow_any>
-      <allow_inactive>no</allow_inactive>
-      <allow_active>yes</allow_active>
-    </defaults>
-    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/omarchy-face-identity</annotate>
-    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
-  </action>
-
 </policyconfig>

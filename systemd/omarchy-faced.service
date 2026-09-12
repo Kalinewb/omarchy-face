@@ -13,7 +13,16 @@ Restart=no
 
 # It needs the camera, the face models and the ability to run the engine, and
 # nothing else whatsoever.
-NoNewPrivileges=no
+# It reads root-owned models and opens the IR sensor. Both are owner-match, not
+# CAP_DAC_OVERRIDE -- except that /usr/lib/security/howdy is mode 600 with no
+# execute bit, so traversing into it needs CAP_DAC_READ_SEARCH and nothing else.
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+AmbientCapabilities=CAP_DAC_READ_SEARCH
+RestrictSUIDSGID=yes
+ProtectProc=invisible
+DevicePolicy=closed
+DeviceAllow=char-video4linux rw
 ProtectSystem=strict
 ReadWritePaths=/run/omarchy-face
 ProtectHome=yes

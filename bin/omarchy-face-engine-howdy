@@ -278,11 +278,6 @@ cmd_configure() {
   # still fails fast enough that the password prompt does not feel stalled.
   set_ini timeout 8
 
-  # Belt and braces against omarchy-face-gate: if the gate is ever missing,
-  # howdy still refuses over SSH and with the lid shut.
-  set_ini ignore_ssh true
-  set_ini ignore_closed_lid true
-
   # Off by default. Upstream writes a photograph of every authentication
   # attempt, successful or not, into a directory under /usr/lib -- unprompted,
   # and with no rotation. Anyone who wants the forensics can turn these back on.

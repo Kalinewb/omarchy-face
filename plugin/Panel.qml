@@ -251,43 +251,21 @@ Item {
   function beginCapture() {
     if (phase !== "framing" && phase !== "verdict") return
 
-    // Authorise FIRST. pkexec would otherwise prompt after the countdown, so
-    // the user is told to hold still, holds still, and is then shown a password
-    // box -- and the camera opens once they have looked away to type it.
-    //
-    // The policy is auth_self_keep, so the pkexec that follows reuses this and
-    // does not ask again.
+    // Authorise FIRST. Prompting after the countdown tells the user to hold
+    // still, then shows them a password box, and opens the camera once they
+    // have looked away to type it.
     phase = "capturing"
     message = "Authorising..."
-    authProc.running = true
-  }
-
-  Process {
-    id: authProc
-    // Run through a shell so $$ resolves to a real pid: pkcheck identifies the
-    // process whose authorisation is being asked about, and that has to be an
-    // actual process in this session.
-    command: ["bash", "-c",
-              "pkcheck --action-id no.graveklar.face.admin --process $$ --allow-user-interaction"]
-    onExited: function(code) {
-      if (code !== 0) {
-        root.phase = "verdict"
-        root.lastOk = false
-        root.lastCertainty = -1
-        root.message = "Not authorised, so nothing was recorded."
-        return
-      }
-      root.message = "Hold still and look at the camera"
-      countdown.value = 3
-      countdown.restart()
-    }
-  }
-
-  function runEnroll() {
-    message = "Recording your face..."
+    countdown.value = 3
+    // One call does the lot: the prompt comes first, then the helper waits out
+    // the same three seconds this counts down, then captures and verifies.
+    // Two calls would need a kept authorisation to bridge them, and that
+    // window is long enough for anything running as this user to enrol its own
+    // face.
     enrollProc.command = ["pkexec", "/usr/local/bin/omarchy-face-admin",
-                          "enroll", root.userName, root.chosenLabel]
+                          "enroll", root.userName, root.chosenLabel, "3"]
     enrollProc.running = true
+    countdown.restart()
   }
 
   function forgetModel(id, label) {
@@ -295,14 +273,6 @@ Item {
     forgetProc.command = ["pkexec", "/usr/local/bin/omarchy-face-admin",
                           "forget", root.userName, String(id)]
     forgetProc.running = true
-  }
-
-  function runCheck() {
-    phase = "checking"
-    message = "Checking that it recognises you..."
-    checkProc.command = ["pkexec", "/usr/local/bin/omarchy-face-admin",
-                         "check", root.userName]
-    checkProc.running = true
   }
 
   function parseJson(raw, fallback) {
@@ -345,7 +315,23 @@ Item {
       var parsed = root.parseJson(enrollOut.text, null)
       if (parsed && parsed.ok) {
         root.replacedCount = parsed.replaced || 0
-        root.runCheck()
+        root.phase = "verdict"
+        root.lastOk = !!parsed.verified
+        root.lastCertainty = (parsed.certainty === null || parsed.certainty === undefined)
+          ? -1 : Number(parsed.certainty)
+        root.threshold = (parsed.threshold === null || parsed.threshold === undefined)
+          ? -1 : Number(parsed.threshold)
+
+        if (root.lastOk && root.weak)
+          root.message = "It recognised you, but only just. Try again in different light, or without moving as much."
+        else if (root.lastOk)
+          root.message = root.replacedCount > 0
+            ? "Recognised you comfortably. Replaced the previous \"" + root.chosenLabel + "\" model."
+            : "Recognised you comfortably."
+        else
+          root.message = "Recorded, but it did not recognise you afterwards. Worth trying again."
+
+        refreshProc.running = true
       } else {
         root.phase = "verdict"
         root.lastOk = false
@@ -373,31 +359,6 @@ Item {
     id: refreshProc
     command: ["pkexec", "/usr/local/bin/omarchy-face-admin", "list", Quickshell.env("USER")]
     onExited: modelsFile.reload()
-  }
-
-  Process {
-    id: checkProc
-    stdout: StdioCollector { id: checkOut; waitForEnd: true }
-    onExited: {
-      var parsed = root.parseJson(checkOut.text, null)
-      root.phase = "verdict"
-      root.lastOk = !!(parsed && parsed.ok)
-      root.lastCertainty = (parsed && parsed.certainty !== null && parsed.certainty !== undefined)
-        ? Number(parsed.certainty) : -1
-      root.threshold = (parsed && parsed.threshold !== null && parsed.threshold !== undefined)
-        ? Number(parsed.threshold) : -1
-
-      if (root.lastOk && root.weak)
-        root.message = "It recognised you, but only just. Try again in different light, or without moving as much."
-      else if (root.lastOk)
-        root.message = root.replacedCount > 0
-          ? "Recognised you comfortably. Replaced the previous \"" + root.chosenLabel + "\" model."
-          : "Recognised you comfortably."
-      else
-        root.message = "It did not recognise you from that model. Worth trying again."
-
-      modelsFile.reload()
-    }
   }
 
   Process {

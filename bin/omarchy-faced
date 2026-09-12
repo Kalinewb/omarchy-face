@@ -22,6 +22,7 @@ It is socket activated, so it is not a root process sitting around all day.
 import os
 import pwd
 import re
+import select
 import socket
 import struct
 import subprocess
@@ -29,12 +30,15 @@ import sys
 import time
 
 SOCKET_PATH = "/run/omarchy-face/verify.sock"
+IDENTITY_PREFIX = "identity-"
+MODELS_DIR = "/usr/lib/security/howdy/models"
 ENGINE_CONFIG = "/etc/omarchy-face/config"
 IDLE_EXIT_SECONDS = 120
 MIN_INTERVAL_SECONDS = 2.0
 DEFAULT_TIMEOUT = 10
 MAX_TIMEOUT = 30
 USERNAME = re.compile(r"^[a-z_][a-z0-9_-]*\$?$")
+IDENTITY = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
 last_check = {}
 
@@ -73,7 +77,7 @@ def notify(state, detail=""):
         pass
 
 
-def verify(user, timeout):
+def verify(user, timeout, connection=None, service=""):
     engine = engine_path()
     if engine is None:
         return False, "no-engine"
@@ -82,49 +86,119 @@ def verify(user, timeout):
         return False, "disabled"
 
     environment = dict(os.environ, OMARCHY_FACE_TIMEOUT=str(timeout), PAM_USER=user)
-    notify("start", "daemon")
-    try:
-        result = subprocess.run(
-            [engine, "verify", user],
-            timeout=timeout + 10,
-            env=environment,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except subprocess.TimeoutExpired:
-        notify("failed", "timeout")
-        return False, "timeout"
+    quiet = not user.startswith(IDENTITY_PREFIX)
+    if quiet:
+        notify("start", service or "daemon")
 
-    if result.returncode == 0:
-        notify("matched", "daemon")
+    process = subprocess.Popen(
+        [engine, "verify", user],
+        env=environment,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    # Watch the client while the engine works. A caller that hangs up has
+    # stopped caring, and the only polite response is to put the camera down.
+    deadline = time.monotonic() + timeout + 10
+    while process.poll() is None:
+        if time.monotonic() > deadline:
+            process.kill()
+            process.wait(timeout=5)
+            if quiet:
+                notify("failed", "timeout")
+            return False, "timeout"
+        if connection is not None:
+            readable, _, _ = select.select([connection], [], [], 0.25)
+            if readable:
+                try:
+                    if connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b"":
+                        process.kill()
+                        process.wait(timeout=5)
+                        log("client hung up; camera released")
+                        return False, "cancelled"
+                except BlockingIOError:
+                    pass
+                except OSError:
+                    pass
+        else:
+            time.sleep(0.25)
+
+    if process.returncode == 0:
+        if quiet:
+            notify("matched", service or "daemon")
         return True, "matched"
 
-    notify("failed", str(result.returncode))
-    return False, "exit-%d" % result.returncode
+    if quiet:
+        notify("failed", str(process.returncode))
+    return False, "exit-%d" % process.returncode
+
+
+def caller_is_remote(pid):
+    """Same predicate the gate uses, so remote callers meet one policy."""
+    try:
+        with open("/proc/%d/cgroup" % pid) as handle:
+            match = re.search(r"session-(\d+)\.scope", handle.read())
+        if not match:
+            return False
+        with open("/run/systemd/sessions/%s" % match.group(1)) as handle:
+            return "REMOTE=1" in handle.read().split()
+    except OSError:
+        return False
 
 
 def peer_identity(connection):
     raw = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
-    _, uid, _ = struct.unpack("3i", raw)
-    return uid
+    pid, uid, _ = struct.unpack("3i", raw)
+    return pid, uid
 
 
 def handle(connection):
-    connection.settimeout(10)
+    connection.settimeout(2)
     try:
         request = connection.recv(256).decode("utf-8", "replace").strip()
     except OSError:
         return
 
     parts = request.split()
-    if len(parts) < 2 or parts[0] != "VERIFY":
+
+    # Listing names is not sensitive and needs no camera, so it is answered
+    # before any of the policy below. A UI cannot offer a choice it cannot see.
+    if parts[:1] == ["LIST-IDENTITIES"]:
+        try:
+            names = sorted(
+                entry[len(IDENTITY_PREFIX):-4]
+                for entry in os.listdir(MODELS_DIR)
+                if entry.startswith(IDENTITY_PREFIX) and entry.endswith(".dat")
+            )
+        except OSError:
+            names = []
+        connection.sendall("".join("NAME %s\n" % name for name in names).encode() or b"\n")
+        return
+
+    if len(parts) < 2 or parts[0] not in ("VERIFY", "VERIFY-IDENTITY"):
         connection.sendall(b"NO bad-request\n")
         return
 
-    user = parts[1]
-    if not USERNAME.match(user):
-        connection.sendall(b"NO bad-user\n")
-        return
+    # VERIFY-IDENTITY asks about a named face that is not an account: a
+    # partner, say. It lives here rather than behind its own pkexec helper so
+    # there is one rate limit, one session policy and one place that talks to
+    # the camera -- and so that nothing runs root with an argv a caller chose.
+    identity_mode = parts[0] == "VERIFY-IDENTITY"
+
+    if identity_mode:
+        name = parts[1]
+        if not IDENTITY.match(name):
+            connection.sendall(b"NO bad-identity\n")
+            return
+        user = IDENTITY_PREFIX + name
+        if not os.path.exists(os.path.join(MODELS_DIR, user + ".dat")):
+            connection.sendall(b"NO not-enrolled\n")
+            return
+    else:
+        user = parts[1]
+        if not USERNAME.match(user):
+            connection.sendall(b"NO bad-user\n")
+            return
 
     timeout = DEFAULT_TIMEOUT
     if len(parts) > 2 and parts[2].isdigit():
@@ -132,16 +206,24 @@ def handle(connection):
 
     # Who is asking is decided by the kernel, not by the request. Without this
     # any local account could ask this daemon to unlock a different one.
-    uid = peer_identity(connection)
+    pid, uid = peer_identity(connection)
     try:
         caller = pwd.getpwuid(uid).pw_name
     except KeyError:
         connection.sendall(b"NO unknown-caller\n")
         return
 
-    if uid != 0 and caller != user:
+    # An identity is not an account, so "your own account" cannot gate it. What
+    # gates it is being local: a face in front of this machine says nothing
+    # about someone on the far end of a network.
+    if not identity_mode and uid != 0 and caller != user:
         log("refused: uid %d asked about %s" % (uid, user))
         connection.sendall(b"NO not-your-account\n")
+        return
+
+    if uid != 0 and caller_is_remote(pid):
+        log("refused: uid %d asked from a remote session" % uid)
+        connection.sendall(b"NO remote-session\n")
         return
 
     # Each check runs an infrared emitter at whoever is in front of the
@@ -153,7 +235,8 @@ def handle(connection):
         return
     last_check[uid] = now
 
-    ok, reason = verify(user, timeout)
+    ok, reason = verify(user, timeout, connection=connection,
+                        service="identity" if identity_mode else "")
     connection.sendall((b"OK\n" if ok else ("NO %s\n" % reason).encode()))
 
 

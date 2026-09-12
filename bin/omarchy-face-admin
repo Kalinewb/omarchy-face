@@ -24,6 +24,13 @@ CONFIG_FILE=/etc/omarchy-face/config
 # which looks exactly like face unlock having broken itself overnight.
 SUMMARY_DIR=/var/lib/omarchy-face
 
+# Every change to what can open this account, in the journal, with who asked.
+# This is the tamper-evidence that is actually worth having: hashing templates
+# proves nothing against the only party who can rewrite them.
+audit() {
+  logger -t omarchy-face -p auth.notice -- "$*" 2>/dev/null || true
+}
+
 die_json() {
   printf '{"ok":false,"error":"%s"}\n' "${1//\"/}"
   exit 1
@@ -67,6 +74,12 @@ case $action in
     label=${3:-}
     valid_identity "$identity" || die_json "invalid identity name"
 
+    # Namespacing has to hold in both directions. identity-<name> cannot shadow
+    # an account, but an account literally called identity-partner would make
+    # that file its PAM model, so the name is refused if such an account exists.
+    getent passwd "$PREFIX$identity" >/dev/null 2>&1 &&
+      die_json "an account named $PREFIX$identity exists; pick another name"
+
     if [[ -n ${PKEXEC_UID:-} ]]; then
       id -un -- "$PKEXEC_UID" >/dev/null 2>&1 || die_json "unknown caller"
     fi
@@ -77,6 +90,7 @@ case $action in
     ENGINE=$(engine_cmd)
 
     if [[ $action == forget-identity ]]; then
+      audit "removing identity '$identity' by uid ${PKEXEC_UID:-0}"
       if "$ENGINE" clear "$target" >/dev/null 2>&1; then
         printf '{"ok":true,"identity":"%s"}\n' "${identity//\"/}"
       else
@@ -137,6 +151,13 @@ case $action in
     [[ ${#label} -le 24 ]] || die_json "label too long"
     [[ $label =~ ^[A-Za-z0-9\ _-]+$ ]] || die_json "label may only contain letters, digits, spaces, dashes and underscores"
 
+    # A pause the caller can count down against, so authorisation happens
+    # before "hold still" rather than after it -- without needing a second
+    # prompt or a kept authorisation to bridge the two.
+    if [[ ${4:-} =~ ^[0-9]+$ ]] && (( $4 > 0 && $4 <= 10 )); then
+      sleep "$4"
+    fi
+
     # A label names a state -- bare, everyday glasses, reading glasses -- so
     # recording one again means "this is what that state looks like now", not
     # "here is a second opinion". Without this the list only ever grows, every
@@ -160,7 +181,20 @@ for model in sorted(models, key=lambda m: m.get("id", 0), reverse=True):
 ' "$label")
 
     if out=$("$ENGINE" enroll "$user" "$label" 2>&1); then
-      printf '{"ok":true,"label":"%s","replaced":%d}\n' "${label//\"/}" "$replaced"
+      audit "enrolled '$label' for $user (replaced $replaced) by uid ${PKEXEC_UID:-0}"
+
+      # Verify in the same privileged call. Enrolment and the check that proves
+      # it works are one decision, and splitting them across two prompts is
+      # what made a keep window look necessary.
+      threshold=$("$ENGINE" threshold 2>/dev/null || echo "")
+      report=$("$ENGINE" verify-report "$user" 2>&1)
+      status=$?
+      certainty=$(printf '%s' "$report" | sed -n 's/.*Certainty of winning frame:[[:space:]]*\([0-9.]*\).*/\1/p' | tail -1)
+
+      printf '{"ok":true,"label":"%s","replaced":%d,"verified":%s,"certainty":%s,"threshold":%s}\n' \
+        "${label//\"/}" "$replaced" \
+        "$([[ $status -eq 0 ]] && echo true || echo false)" \
+        "${certainty:-null}" "${threshold:-null}"
     else
       # howdy's failure text is the useful part: too dark, no face found, and
       # so on. Flattened to one line so the caller can parse this as JSON.
@@ -207,6 +241,7 @@ for model in sorted(models, key=lambda m: m.get("id", 0), reverse=True):
     # owner's decision as adding one, so it sits behind the same prompt rather
     # than the no-auth verifier.
     [[ $label =~ ^[0-9]+$ ]] || die_json "invalid model id"
+    audit "removing model $label for $user by uid ${PKEXEC_UID:-0}"
     if "$ENGINE" remove "$user" "$label" >/dev/null 2>&1; then
       printf '{"ok":true,"removed":%s}\n' "$label"
     else

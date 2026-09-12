@@ -120,15 +120,19 @@ done
 # decides the outcome, and it is captured before anything else can touch $?.
 notify() { omarchy-face-notify "$@" 2>/dev/null || true; }
 
-notify start
+# Who asked, so the card can say so. A prompt that only says "look at the
+# camera" is an instruction to comply; one that names the requester lets
+# somebody notice a request they did not make.
+requester=$(cat "/proc/$PPID/comm" 2>/dev/null || echo "")
+notify start "${PAM_SERVICE:-unknown}:${requester}"
 "$adapter" verify "$user"
 status=$?
 
 if [[ $status -eq 0 ]]; then
-  notify matched
+  notify matched "${PAM_SERVICE:-unknown}"
   if key=$(attempt_key); then rm -f "$ATTEMPTS_DIR/$key" 2>/dev/null; fi
 else
-  notify failed "$status"
+  notify failed "${PAM_SERVICE:-unknown}:$status"
   # Mark this authentication as having had its turn at the camera. Best effort:
   # if the marker cannot be written the only cost is a second camera attempt.
   if key=$(attempt_key); then

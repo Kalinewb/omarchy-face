@@ -14,9 +14,12 @@
 # same inversion omarchy-hw-laptop-closed has in the fingerprint stacks, and it
 # is the wrong way round from every other predicate in the repo on purpose.
 #
-# pam_exec hands this script the environment of whatever called PAM, which is
-# to say an environment an unprivileged user chose, running as root. So: an
-# explicit PATH, no sourcing, no relative paths, and absolute commands only.
+# pam_exec builds this child's environment from PAM's own list -- it does NOT
+# pass the caller's environ (confirmed: the module imports pam_getenvlist and
+# neither environ nor getenv). That is good for injection and fatal for any
+# check that reads a variable the caller would have set, which is why the
+# SSH_* tests that used to live here were removed rather than repaired: they
+# never once fired. PATH is still pinned, because assuming is how this started.
 
 set -u
 unset IFS BASH_ENV ENV CDPATH
@@ -97,6 +100,16 @@ user=${PAM_USER:-}
 
 [[ -e $DISABLED_FILE ]] && skip "disabled by $DISABLED_FILE"
 
+# Per-service opt out. Face at a lock screen is asked for by a person standing
+# in front of it; face at a sudo prompt can be asked for by anything running as
+# that user, at a moment they did not choose. Those are different enough that
+# somebody should be able to keep one and refuse the other.
+case ${PAM_SERVICE:-} in
+  sudo) [[ $(config_get sudo true) == false ]] && skip "face is off for sudo" ;;
+  polkit-1) [[ $(config_get polkit true) == false ]] && skip "face is off for polkit" ;;
+  omarchy-lock-face) [[ $(config_get lock true) == false ]] && skip "face is off for the lock screen" ;;
+esac
+
 # Face never opens a root shell. sudo and polkit authenticate the invoking
 # user, so this only ever fires for su/login stacks -- which this project does
 # not configure, and which have no business trusting a camera.
@@ -105,10 +118,32 @@ if [[ $user == root && $(config_get allow_root false) != true ]]; then
 fi
 
 # A camera on this desk proves nothing about whoever is on the far end of an
-# SSH connection. howdy has its own ignore_ssh, and visage may not; this is the
-# check that does not depend on the engine.
-[[ -n ${PAM_RHOST:-} ]] && [[ ${PAM_RHOST:-} != localhost ]] && skip "remote session from $PAM_RHOST"
-[[ -n ${SSH_CONNECTION:-} || -n ${SSH_TTY:-} || -n ${SSH_CLIENT:-} ]] && skip "remote session (ssh)"
+# SSH connection.
+#
+# PAM_RHOST is only set for sudo when the pam_rhost sudoers flag is on, and it
+# is off by default, so it cannot carry this alone. The reliable signal is the
+# login session the caller belongs to: logind records REMOTE=1 for one opened
+# over the network, and /run/systemd/sessions is world readable.
+#
+# Its limit, stated because the previous version of this check silently had
+# none: an attacker already running as this user can escape the session scope
+# with systemd-run --user and defeat it. It stops `ssh host sudo`, not a
+# determined process. Face is a convenience factor; this is a guard rail, not
+# a boundary.
+caller_session_is_remote() {
+  local cgroup session
+
+  [[ -r /proc/$PPID/cgroup ]] || return 1
+  cgroup=$(</proc/$PPID/cgroup) || return 1
+  [[ $cgroup =~ session-([0-9]+)\.scope ]] || return 1
+  session=${BASH_REMATCH[1]}
+
+  [[ -r /run/systemd/sessions/$session ]] || return 1
+  grep -qx 'REMOTE=1' "/run/systemd/sessions/$session"
+}
+
+[[ -n ${PAM_RHOST:-} && ${PAM_RHOST:-} != localhost ]] && skip "remote session from $PAM_RHOST"
+caller_session_is_remote && skip "caller is in a remote login session"
 
 # Lid shut means the sensor is looking at the keyboard. Without this, every
 # sudo in clamshell mode waits out the engine's timeout before offering the
