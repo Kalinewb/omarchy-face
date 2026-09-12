@@ -246,6 +246,18 @@ else
   printf '  %s-%s %-46s %ssocket absent%s\n' "$YELLOW" "$RESET" "daemon refusals" "$DIM" "$RESET"
 fi
 
+section "The terminal must not ask for a face"
+# install.sh once chained into the full terminal setup, which enrolled a face in
+# a TUI. The fix lived in an edit that was never written, so the file kept
+# shipping the old behaviour while everything around it described the new one.
+if grep -qE '^\s*(exec )?omarchy-setup-security-face\s*$' install.sh 2>/dev/null; then
+  printf '  %s✗%s %-46s %schains into terminal enrolment%s\n' "$RED" "$RESET" "installer builds, never enrols" "$RED" "$RESET"
+  ((fail++))
+else
+  printf '  %s✓%s %-46s %s--no-enroll only%s\n' "$GREEN" "$RESET" "installer builds, never enrols" "$DIM" "$RESET"
+  ((pass++))
+fi
+
 section "Lint — bash traps that fail silently"
 bad=0
 for script in /usr/local/bin/omarchy-face* /usr/local/bin/omarchy-hw-ir-camera; do

@@ -196,18 +196,21 @@ if grep -q omarchy-face-verify /etc/pam.d/sudo 2>/dev/null; then
   echo -e "${GREEN}Installed.${RESET} Face authentication is already configured."
   echo "  ${DIM}Setup > Security > Manage Face ID${RESET}   record, replace or remove models"
 elif [[ -t 0 ]]; then
-  # The remaining step is the one that matters and the one people miss, so ask
-  # rather than print it and hope. Only where there is a terminal to ask in, and
-  # only when it has not already been done: this script is also how upgrades are
-  # applied, and re-running setup on every upgrade would be its own surprise.
+  # Offer the build, never the face. Compiling a package is what a terminal is
+  # for; being told to hold still while something you cannot see decides whether
+  # it recognises you is not. Enrolment happens in the panel, which shows the
+  # framing and reports whether the model actually matches.
   echo -e "${GREEN}Installed.${RESET}"
   echo
-  read -rp "Set up face authentication now? [Y/n] " answer
+  read -rp "Install the face engine now? It compiles a package and takes a few minutes. [Y/n] " answer
   if [[ ${answer,,} != n* ]]; then
-    exec omarchy-setup-security-face
+    omarchy-setup-security-face --no-enroll
+    echo
+    echo "  ${DIM}Now record your face from the panel.${RESET}"
+  else
+    echo "  ${DIM}Later: omarchy-setup-security-face --no-enroll${RESET}"
   fi
-  echo "  ${DIM}Later: omarchy-setup-security-face, or Setup > Security > Face ID${RESET}"
 else
   echo -e "${GREEN}Installed.${RESET} Next:"
-  echo "  ${DIM}omarchy-setup-security-face${RESET}   install an engine, enroll, and wire up PAM"
+  echo "  ${DIM}omarchy-setup-security-face --no-enroll${RESET}   install the engine; record your face in the panel"
 fi
