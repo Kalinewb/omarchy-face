@@ -1,0 +1,171 @@
+#!/bin/bash
+
+# omarchy:summary=Privileged face operations for the setup UI, invoked via pkexec
+# omarchy:args=<enroll|check|list> <user> [label]
+# omarchy:hidden=true
+
+# The setup panel runs as the user and cannot read the face models, which are
+# root-owned mode 600 and must stay that way. This is the only thing it is
+# allowed to ask root to do, and polkit decides whether it may.
+#
+# pkexec hands this an argv the caller chose, running as root. Every argument is
+# therefore treated as hostile until checked, and the caller is not permitted to
+# name a user other than themselves.
+
+set -uo pipefail
+export PATH=/usr/local/bin:/usr/bin
+unset IFS BASH_ENV ENV CDPATH
+umask 077
+
+CONFIG_FILE=/etc/omarchy-face/config
+STATE_DIR=/run/omarchy-face
+
+die_json() {
+  printf '{"ok":false,"error":"%s"}\n' "${1//\"/}"
+  exit 1
+}
+
+config_get() {
+  local key=$1 default=${2:-} value
+  [[ -r $CONFIG_FILE ]] || {
+    printf '%s\n' "$default"
+    return
+  }
+  value=$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$CONFIG_FILE" 2>/dev/null | tail -1)
+  value=${value%%#*}
+  value=${value%"${value##*[![:space:]]}"}
+  [[ -n $value ]] || value=$default
+  printf '%s\n' "$value"
+}
+
+engine_cmd() {
+  local engine
+  engine=$(config_get engine howdy)
+  [[ $engine =~ ^[a-z0-9][a-z0-9-]*$ ]] || die_json "invalid engine name"
+  [[ -x /usr/local/bin/omarchy-face-engine-$engine ]] || die_json "no adapter for engine $engine"
+  printf '/usr/local/bin/omarchy-face-engine-%s\n' "$engine"
+}
+
+PREFIX=identity-
+
+valid_identity() {
+  [[ $1 =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]]
+}
+
+action=${1:-}
+
+# Identity actions name a face, not an account, and are authorised as the owner
+# rather than as the person being enrolled -- deciding who may open something is
+# the machine owner's call, and the other person cannot authenticate as them.
+case $action in
+  enroll-identity | forget-identity)
+    identity=${2:-}
+    label=${3:-}
+    valid_identity "$identity" || die_json "invalid identity name"
+
+    if [[ -n ${PKEXEC_UID:-} ]]; then
+      id -un -- "$PKEXEC_UID" >/dev/null 2>&1 || die_json "unknown caller"
+    fi
+
+    # Namespaced on disk so an identity can never be named in a way that
+    # overwrites the model store PAM authenticates a real account against.
+    target=$PREFIX$identity
+    ENGINE=$(engine_cmd)
+
+    if [[ $action == forget-identity ]]; then
+      if "$ENGINE" clear "$target" >/dev/null 2>&1; then
+        printf '{"ok":true,"identity":"%s"}\n' "${identity//\"/}"
+      else
+        printf '{"ok":false,"error":"could not clear identity"}\n'
+      fi
+      exit 0
+    fi
+
+    [[ -n $label ]] || label="Model"
+    [[ ${#label} -le 24 ]] || die_json "label too long"
+    [[ $label =~ ^[A-Za-z0-9\ _-]+$ ]] || die_json "invalid label"
+
+    if out=$("$ENGINE" enroll "$target" "$label" 2>&1); then
+      printf '{"ok":true,"identity":"%s","label":"%s"}\n' "${identity//\"/}" "${label//\"/}"
+    else
+      printf '{"ok":false,"error":"%s"}\n' "$(printf '%s' "$out" | tr '\n' ' ' | sed 's/"/\\"/g' | tail -c 400)"
+    fi
+    exit 0
+    ;;
+esac
+
+user=${2:-}
+label=${3:-}
+
+[[ -n $action ]] || die_json "no action given"
+[[ $user =~ ^[a-z_][a-z0-9_-]*$ ]] || die_json "invalid user"
+id -u -- "$user" >/dev/null 2>&1 || die_json "unknown user"
+[[ $user != root ]] || die_json "refusing to manage face models for root"
+
+# The whole point of a privileged helper is that it does not become a way to do
+# more than the caller could. pkexec reports who asked; enrolling a face for
+# somebody else's account would be handing out a key to it.
+if [[ -n ${PKEXEC_UID:-} ]]; then
+  caller=$(id -un -- "$PKEXEC_UID" 2>/dev/null) || die_json "unknown caller"
+  [[ $caller == "$user" ]] || die_json "callers may only manage their own face models"
+fi
+
+ENGINE=$(engine_cmd)
+
+# Labels and timestamps only -- never the encodings, which are biometric
+# material and stay in the root-owned store. Published so a UI can show what is
+# enrolled without asking the user to authenticate just to read a list.
+publish_summary() {
+  local summary
+  summary=$("$ENGINE" list-json "$user" 2>/dev/null) || return 0
+  mkdir -p "$STATE_DIR" 2>/dev/null
+  chmod 0755 "$STATE_DIR" 2>/dev/null
+  printf '%s\n' "$summary" >"$STATE_DIR/models.json" 2>/dev/null
+  chmod 0644 "$STATE_DIR/models.json" 2>/dev/null
+}
+
+trap publish_summary EXIT
+
+case $action in
+  enroll)
+    # howdy caps labels at 24 characters and stores them verbatim in JSON.
+    [[ -n $label ]] || label="Model"
+    [[ ${#label} -le 24 ]] || die_json "label too long"
+    [[ $label =~ ^[A-Za-z0-9\ _-]+$ ]] || die_json "label may only contain letters, digits, spaces, dashes and underscores"
+
+    if out=$("$ENGINE" enroll "$user" "$label" 2>&1); then
+      printf '{"ok":true,"label":"%s"}\n' "${label//\"/}"
+    else
+      # howdy's failure text is the useful part: too dark, no face found, and
+      # so on. Flattened to one line so the caller can parse this as JSON.
+      printf '{"ok":false,"error":"%s"}\n' "$(printf '%s' "$out" | tr '\n' ' ' | sed 's/"/\\"/g' | tail -c 400)"
+    fi
+    ;;
+
+  check)
+    # A verification straight after enrolment is the only honest measure of
+    # whether the model is any good. howdy reports the winning frame's
+    # certainty; lower is a better match, and it must beat the threshold.
+    threshold=$("$ENGINE" threshold 2>/dev/null || echo "")
+    start=$EPOCHREALTIME
+    out=$("$ENGINE" verify-report "$user" 2>&1)
+    status=$?
+    elapsed=$(awk -v a="$start" -v b="$EPOCHREALTIME" 'BEGIN { printf "%.1f", b - a }')
+    certainty=$(printf '%s' "$out" | sed -n 's/.*Certainty of winning frame:[[:space:]]*\([0-9.]*\).*/\1/p' | tail -1)
+
+    printf '{"ok":%s,"exit":%d,"certainty":%s,"threshold":%s,"elapsed":%s}\n' \
+      "$([[ $status -eq 0 ]] && echo true || echo false)" \
+      "$status" \
+      "${certainty:-null}" \
+      "${threshold:-null}" \
+      "${elapsed:-null}"
+    ;;
+
+  list)
+    "$ENGINE" list-json "$user" 2>/dev/null || die_json "could not read models"
+    ;;
+
+  *)
+    die_json "unknown action"
+    ;;
+esac

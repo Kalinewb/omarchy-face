@@ -1,0 +1,211 @@
+#!/bin/bash
+
+# omarchy:summary=Set up face authentication for sudo and polkit
+# omarchy:requires-sudo=true
+
+set -e
+
+GREEN=$'\e[32m'
+RED=$'\e[31m'
+YELLOW=$'\e[33m'
+DIM=$'\e[2m'
+RESET=$'\e[0m'
+
+CONFIG_DIR=/etc/omarchy-face
+CONFIG_FILE=$CONFIG_DIR/config
+HELPER_DIR=/usr/local/bin
+
+# Honour SUDO_ASKPASS when there is no terminal for sudo to prompt on, so this
+# runs unattended as well as interactively.
+SUDO=(sudo)
+[[ ! -t 0 && -n ${SUDO_ASKPASS:-} ]] && SUDO=(sudo -A)
+
+# Enrollment belongs to the person who ran this, not to root. Running the whole
+# setup under sudo is a reasonable thing to do -- it collapses a dozen password
+# prompts into one -- and it must not silently enroll a face model for root.
+TARGET_USER=${SUDO_USER:-$USER}
+if [[ -z $TARGET_USER || $TARGET_USER == root ]]; then
+  echo "Refusing to enroll a face model for root. Run this as your own user." >&2
+  exit 1
+fi
+
+# pam_exec takes a literal absolute path, so these point at the fixed install
+# location rather than at whatever the caller's PATH resolves to. Same reasoning
+# as the fingerprint stack pointing at /usr/bin.
+#
+# `seteuid` is load-bearing. By default pam_exec runs the command with the REAL
+# uid of the calling process -- under sudo that is the invoking user, not root.
+# The face models are root-owned mode 600, so without this the verifier cannot
+# read them, or even read compare.py: python exits 2, pam_exec logs "failed:
+# exit code 2", and authentication silently falls through to the password every
+# single time. It looks exactly like a camera that cannot recognise you.
+FACE_GATE="auth      [success=1 default=ignore] pam_exec.so seteuid quiet $HELPER_DIR/omarchy-face-gate"
+FACE_AUTH="auth      sufficient pam_exec.so seteuid quiet $HELPER_DIR/omarchy-face-verify"
+
+# A helper that PAM runs as root must be root-owned and writable by nobody
+# else. If it is not, wiring it into a PAM stack hands every local user a root
+# shell, so this is checked before anything is written and is not overridable.
+assert_helper_safe() {
+  local helper=$1 perms owner
+
+  [[ -f $helper ]] || {
+    echo "${RED}Missing $helper.${RESET} Run ./install.sh from the omarchy-face checkout first." >&2
+    exit 1
+  }
+
+  read -r owner perms < <(stat -c '%u %a' "$helper")
+
+  [[ $owner == 0 ]] || {
+    echo "${RED}$helper is not owned by root.${RESET} Refusing to add it to a PAM stack." >&2
+    exit 1
+  }
+
+  # Group- or world-writable means someone other than root can change what
+  # root executes during authentication.
+  if (((8#$perms & 8#022) != 0)); then
+    echo "${RED}$helper is writable by non-root (mode $perms).${RESET} Refusing to add it to a PAM stack." >&2
+    exit 1
+  fi
+}
+
+setup_pam_config() {
+  local file
+
+  for file in /etc/pam.d/sudo /etc/pam.d/polkit-1; do
+    if [[ ! -f $file ]]; then
+      # polkit ships no PAM file on a stock Omarchy install; the fingerprint
+      # setup has the same branch for the same reason.
+      echo "Creating ${file##*/} configuration with face authentication..."
+      # omarchy:heredoc-expands paths=none -- the two PAM lines are the literals
+      # defined above, shared with the sed insertions so they cannot drift.
+      "${SUDO[@]}" tee "$file" >/dev/null <<EOF
+$FACE_GATE
+$FACE_AUTH
+auth      required pam_unix.so
+
+account   required pam_unix.so
+password  required pam_unix.so
+session   required pam_unix.so
+EOF
+      continue
+    fi
+
+    if ! grep -q 'omarchy-face-verify' "$file"; then
+      echo "Configuring ${file##*/} for face authentication..."
+      "${SUDO[@]}" sed -i "1i $FACE_AUTH" "$file"
+    fi
+
+    if ! grep -q 'omarchy-face-gate' "$file"; then
+      # Immediately before the face check, so success=1 skips exactly that one
+      # line and PAM continues to the password prompt below it.
+      echo "Adding the gate to ${file##*/}..."
+      "${SUDO[@]}" sed -i "/omarchy-face-verify/i $FACE_GATE" "$file"
+    fi
+  done
+}
+
+write_config() {
+  "${SUDO[@]}" mkdir -p "$CONFIG_DIR"
+  if [[ ! -f $CONFIG_FILE ]]; then
+    "${SUDO[@]}" tee "$CONFIG_FILE" >/dev/null <<'EOF'
+# omarchy-face configuration.
+# Read by scripts that PAM runs as root: keys and values only, never shell.
+
+# Which engine adapter to use: omarchy-face-engine-<name> must exist.
+engine=howdy
+
+# Whether face may authenticate the root account. Leave this false. sudo and
+# polkit authenticate the invoking user, so nothing here needs it.
+allow_root=false
+EOF
+    "${SUDO[@]}" chmod 0644 "$CONFIG_FILE"
+  fi
+}
+
+echo -e "${GREEN}Setting up face authentication.\n${RESET}"
+
+# Bail before installing anything if there is no sensor to talk to.
+if ! omarchy-hw-ir-camera; then
+  echo -e "${RED}No infrared camera detected.${RESET}"
+  echo "Face authentication needs a dedicated IR sensor; a colour webcam is not enough."
+  exit 1
+fi
+
+IFS=$'\t' read -r CAM_NAME CAM_NODE CAM_PATH CAM_SIZE < <(omarchy-hw-ir-camera --describe)
+echo "Found ${GREEN}${CAM_NAME}${RESET} at ${CAM_NODE} (${CAM_SIZE})"
+echo "${DIM}Pinning to ${CAM_PATH}, which survives a reboot.${RESET}"
+echo
+
+assert_helper_safe "$HELPER_DIR/omarchy-face-gate"
+assert_helper_safe "$HELPER_DIR/omarchy-face-verify"
+
+write_config
+
+ENGINE=$(omarchy-face engine)
+if "omarchy-face-engine-$ENGINE" installed 2>/dev/null; then
+  echo "Engine ${ENGINE} is already installed."
+else
+  echo "Installing the ${ENGINE} engine and its dependencies..."
+  echo "${DIM}python-dlib compiles from source; this takes a while on first install.${RESET}"
+  "omarchy-face-engine-$ENGINE" install
+fi
+
+echo
+echo "Configuring ${ENGINE} for the IR sensor..."
+"omarchy-face-engine-$ENGINE" configure "$CAM_PATH" "$CAM_SIZE"
+
+echo
+# Counted as root. The model store is root-owned, and count-models deliberately
+# refuses to raise a password prompt in the middle of a status readout -- so
+# asked as the user it answers "unknown", not "none". Treating that as zero is
+# how re-running setup silently enrolled a second model every time.
+MODELS=$("${SUDO[@]}" "omarchy-face-engine-$ENGINE" count-models "$TARGET_USER" 2>/dev/null || echo unknown)
+
+if [[ $MODELS =~ ^[0-9]+$ && $MODELS -gt 0 ]]; then
+  # Verification failing is the common reason to run this a second time, and
+  # enrolling again is rarely the fix -- it just adds another model of the same
+  # face in the same light. Keep what is there.
+  echo -e "${GREEN}${TARGET_USER} already has ${MODELS} face model(s).${RESET}"
+  echo "${DIM}Skipping enrollment. Add another angle with: omarchy-face enroll${RESET}"
+else
+  echo -e "${GREEN}Now let's record your face.${RESET}"
+  echo "Look straight at the camera in normal lighting."
+  echo "${DIM}If you wear glasses, add a second model with them off afterwards --${RESET}"
+  echo "${DIM}IR reflects off lenses and the two views can look quite different.${RESET}"
+  echo
+
+  if ! "omarchy-face-engine-$ENGINE" enroll "$TARGET_USER"; then
+    echo -e "${RED}\nEnrollment failed.${RESET} Nothing has been added to any PAM stack."
+    exit 1
+  fi
+fi
+
+echo
+echo "Now let's check that it recognises you."
+echo
+
+# PAM comes last, once a model exists and has been shown to match. The same
+# ordering the fingerprint setup uses, for the same reason: a sensor that
+# enrolls but never verifies would otherwise leave the stacks pointing at a
+# check that can only fail.
+if ! "omarchy-face-engine-$ENGINE" verify-verbose "$TARGET_USER"; then
+  echo -e "${YELLOW}\nVerification did not succeed, so PAM has been left alone.${RESET}"
+  echo "Try 'omarchy-face test' to iterate, then run this setup again."
+  exit 1
+fi
+
+setup_pam_config
+
+# The panel and `omarchy-face status` read this; only omarchy-face-admin wrote
+# it, so a face enrolled from the terminal showed up nowhere in the UI.
+"${SUDO[@]}" omarchy-face-admin list "$TARGET_USER" >/dev/null 2>&1 || true
+
+echo
+echo -e "${GREEN}Face authentication is configured for sudo and polkit.${RESET}"
+echo
+echo "  ${DIM}omarchy-face status${RESET}   what is enrolled, and whether face would run"
+echo "  ${DIM}omarchy-face test${RESET}     try a match against the live camera"
+echo "  ${DIM}omarchy-face disable${RESET}  stop PAM attempting face, keeping your models"
+echo
+echo "${DIM}Your password still works everywhere, and is still required for the lock${RESET}"
+echo "${DIM}screen, login and anything over SSH.${RESET}"

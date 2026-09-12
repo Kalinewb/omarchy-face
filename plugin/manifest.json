@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "graveklar.face",
+  "name": "Face Unlock Indicator",
+  "version": "0.1.0",
+  "author": "graveklar",
+  "license": "MIT",
+  "description": "Guided face enrolment with a live camera preview, plus an indicator while authenticating.",
+  "kinds": [
+    "service",
+    "panel"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "panel": "Panel.qml"
+  }
+}

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>omarchy-face</vendor>
+  <vendor_url>https://github.com/Kalinewb/omarchy-face</vendor_url>
+
+  <!--
+    Adding a face model adds a way into the account, so it is not something a
+    page on screen should be able to do unprompted. auth_self means the user
+    proves who they are first; _keep caches that briefly, so enrolling three
+    models for glasses on, glasses off and reading glasses is one prompt
+    rather than three.
+  -->
+  <action id="no.graveklar.face.admin">
+    <description>Manage face authentication models</description>
+    <message>Authentication is required to change your face unlock models</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_self_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/omarchy-face-admin</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+  <!--
+    Verification only, and deliberately without a prompt. The person this
+    checks for is not the machine owner and cannot authorise as them, so
+    requiring authorisation here would make named identities impossible.
+
+    What this grants is an oracle: any process running as the active user can
+    ask whether a given enrolled face is in front of the camera, and turn the
+    IR emitter on asking. It returns a boolean and nothing else ; it cannot
+    enrol, delete, or read an encoding, all of which live behind the action
+    above. Only ever gate things that are not security boundaries with it.
+  -->
+  <action id="no.graveklar.face.verify">
+    <description>Check whether a known face is present</description>
+    <message>Checking for a known face</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/omarchy-face-identity</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+</policyconfig>

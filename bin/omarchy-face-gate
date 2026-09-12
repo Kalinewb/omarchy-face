@@ -1,0 +1,152 @@
+#!/bin/bash
+
+# omarchy:summary=PAM predicate: succeeds when face auth should be SKIPPED
+# omarchy:args=[--explain]
+# omarchy:hidden=true
+
+# Runs as root from pam_exec, on the line above the face check:
+#
+#   auth  [success=1 default=ignore]  pam_exec.so quiet /usr/local/bin/omarchy-face-gate
+#   auth  sufficient                  pam_exec.so quiet /usr/local/bin/omarchy-face-verify
+#
+# so exit 0 means "skip the next line", i.e. do not attempt face -- PAM drops
+# straight to the password prompt. Exit 1 means "go ahead and try". This is the
+# same inversion omarchy-hw-laptop-closed has in the fingerprint stacks, and it
+# is the wrong way round from every other predicate in the repo on purpose.
+#
+# pam_exec hands this script the environment of whatever called PAM, which is
+# to say an environment an unprivileged user chose, running as root. So: an
+# explicit PATH, no sourcing, no relative paths, and absolute commands only.
+
+set -u
+unset IFS BASH_ENV ENV CDPATH
+
+# Resolved before PATH is pinned, because it becomes part of it. In a real
+# install this is /usr/local/bin and adds nothing; running the scripts straight
+# out of a checkout, it is what lets the siblings find each other. Either way
+# the directory is the one holding a root-owned script PAM already executes.
+SELF_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+export PATH=$SELF_DIR:/usr/local/bin:/usr/bin
+umask 077
+
+CONFIG_DIR=/etc/omarchy-face
+CONFIG_FILE=$CONFIG_DIR/config
+DISABLED_FILE=$CONFIG_DIR/disabled
+
+EXPLAIN=false
+[[ ${1:-} == --explain ]] && EXPLAIN=true
+
+config_get() {
+  local key=$1 default=${2:-} value
+  [[ -r $CONFIG_FILE ]] || {
+    printf '%s\n' "$default"
+    return
+  }
+  value=$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$CONFIG_FILE" 2>/dev/null | tail -1)
+  value=${value%%#*}
+  value=${value%"${value##*[![:space:]]}"}
+  [[ -n $value ]] || value=$default
+  printf '%s\n' "$value"
+}
+
+engine_cmd() {
+  local engine candidate
+  engine=$(config_get engine howdy)
+  [[ $engine =~ ^[a-z0-9][a-z0-9-]*$ ]] || engine=howdy
+  for candidate in "$SELF_DIR/omarchy-face-engine-$engine" "/usr/local/bin/omarchy-face-engine-$engine"; do
+    [[ -x $candidate ]] && {
+      printf '%s\n' "$candidate"
+      return 0
+    }
+  done
+  return 1
+}
+
+
+# Identifies the authentication attempt, not the moment in time. sudo re-runs
+# the whole auth stack for each password retry from the same process, so the
+# parent PID is constant across those retries and different for the next
+# invocation -- exactly the boundary we want. A PID alone would be unsafe
+# (the kernel recycles them), so the process start time goes in the key too:
+# a recycled PID has a different start time and its stale marker is ignored.
+attempt_key() {
+  local stat rest start
+  [[ -r /proc/$PPID/stat ]] || return 1
+  stat=$(</proc/$PPID/stat) || return 1
+  # comm sits in parentheses and may contain spaces, so index from after it.
+  rest=${stat#*") "}
+  start=$(awk '{print $20}' <<<"$rest")
+  [[ -n $start ]] || return 1
+  printf '%s\n' "$PPID-$start"
+}
+
+ATTEMPTS_DIR=/run/omarchy-face/attempts
+
+# Skip, with a reason worth reading in `omarchy-face status`.
+skip() {
+  $EXPLAIN && printf '%s\n' "$1"
+  # Only under PAM, and never in --explain mode, which any user can run.
+  $EXPLAIN || omarchy-face-notify skipped "$1" 2>/dev/null || true
+  exit 0
+}
+
+user=${PAM_USER:-}
+
+# No user to match a model against. Password is the only honest answer.
+[[ -n $user ]] || skip "no PAM_USER"
+
+[[ -e $DISABLED_FILE ]] && skip "disabled by $DISABLED_FILE"
+
+# Face never opens a root shell. sudo and polkit authenticate the invoking
+# user, so this only ever fires for su/login stacks -- which this project does
+# not configure, and which have no business trusting a camera.
+if [[ $user == root && $(config_get allow_root false) != true ]]; then
+  skip "root is not face-authenticable"
+fi
+
+# A camera on this desk proves nothing about whoever is on the far end of an
+# SSH connection. howdy has its own ignore_ssh, and visage may not; this is the
+# check that does not depend on the engine.
+[[ -n ${PAM_RHOST:-} ]] && [[ ${PAM_RHOST:-} != localhost ]] && skip "remote session from $PAM_RHOST"
+[[ -n ${SSH_CONNECTION:-} || -n ${SSH_TTY:-} || -n ${SSH_CLIENT:-} ]] && skip "remote session (ssh)"
+
+# Lid shut means the sensor is looking at the keyboard. Without this, every
+# sudo in clamshell mode waits out the engine's timeout before offering the
+# password prompt.
+if [[ -x /usr/bin/omarchy-hw-laptop-closed ]] && /usr/bin/omarchy-hw-laptop-closed; then
+  skip "laptop lid is closed"
+fi
+
+# Already tried and failed for THIS authentication. sudo will keep re-running
+# the stack for every password retry, and without this each retry costs another
+# full camera timeout before the prompt comes back -- eight attempts at eight
+# seconds turns a mistyped password into a minute of waiting. A fresh sudo is a
+# different process and gets a clean attempt immediately.
+if key=$(attempt_key) && [[ -e $ATTEMPTS_DIR/$key ]]; then
+  skip "face already failed for this authentication"
+fi
+
+omarchy-hw-ir-camera || skip "no IR camera present"
+
+# Another process holding the sensor (a video call) means the engine gets
+# nothing and burns its timeout. Only checked when fuser is actually installed.
+if command -v fuser >/dev/null 2>&1; then
+  node=$(omarchy-hw-ir-camera --node 2>/dev/null)
+  if [[ -n $node ]] && fuser -s "$node" 2>/dev/null; then
+    skip "IR camera is in use by another process"
+  fi
+fi
+
+# Nothing enrolled means a guaranteed failure and a guaranteed delay. An engine
+# that cannot answer (models unreadable because this is not running as root)
+# returns nothing, and an unknown count is not grounds to skip.
+if cmd=$(engine_cmd); then
+  "$cmd" installed 2>/dev/null || skip "engine is not installed"
+  count=$("$cmd" count-models "$user" 2>/dev/null)
+  [[ $count == 0 ]] && skip "no face models enrolled for $user"
+else
+  skip "no engine adapter installed"
+fi
+
+# Nothing stands in the way: let the next line try.
+exit 1

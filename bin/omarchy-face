@@ -1,0 +1,239 @@
+#!/bin/bash
+
+# omarchy:summary=Manage face authentication: enrollment, engine, camera and status
+# omarchy:args=<status|enroll|list|remove|clear|test|device|engine|disable|enable>
+
+# The front door. Everything a person types goes through here; everything PAM
+# runs goes through omarchy-face-gate and omarchy-face-verify. This script never
+# runs under PAM, so it is allowed to be chatty and to ask for sudo.
+
+set -uo pipefail
+
+CONFIG_DIR=/etc/omarchy-face
+CONFIG_FILE=$CONFIG_DIR/config
+DISABLED_FILE=$CONFIG_DIR/disabled
+SELF_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+
+GREEN=$'\e[32m'
+RED=$'\e[31m'
+DIM=$'\e[2m'
+RESET=$'\e[0m'
+
+usage() {
+  cat <<USAGE
+Usage: omarchy-face <command> [args]
+
+  status            Show engine, camera, enrollment, gate and PAM state
+  enroll [label]    Add a face model for the current user
+  list              List enrolled face models
+  remove <id>       Remove one face model by id
+  clear             Remove every face model for the current user
+  test              Run a verification against the live camera, with timings
+  device [path]     Show the detected IR camera, or pin a specific device path
+  engine [name]     Show the active engine, or switch to another one
+  disable           Stop PAM from attempting face auth (models are kept)
+  enable            Undo disable
+USAGE
+}
+
+# Read one key from the config. Deliberately not `source`: this file is read by
+# scripts that PAM runs as root, and a config format that can execute code is a
+# config format that will eventually execute someone else's.
+config_get() {
+  local key=$1 default=${2:-} value
+  [[ -r $CONFIG_FILE ]] || {
+    printf '%s\n' "$default"
+    return
+  }
+  value=$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$CONFIG_FILE" 2>/dev/null | tail -1)
+  value=${value%%#*}
+  value=${value%"${value##*[![:space:]]}"}
+  [[ -n $value ]] || value=$default
+  printf '%s\n' "$value"
+}
+
+config_set() {
+  local key=$1 value=$2
+  sudo mkdir -p "$CONFIG_DIR"
+  sudo touch "$CONFIG_FILE"
+  if sudo grep -qE "^[[:space:]]*${key}[[:space:]]*=" "$CONFIG_FILE"; then
+    sudo sed -i "s|^[[:space:]]*${key}[[:space:]]*=.*|${key}=${value}|" "$CONFIG_FILE"
+  else
+    printf '%s=%s\n' "$key" "$value" | sudo tee -a "$CONFIG_FILE" >/dev/null
+  fi
+  sudo chmod 0644 "$CONFIG_FILE"
+}
+
+engine_name() {
+  local engine
+  engine=$(config_get engine howdy)
+  # Anything that is not a plain adapter name falls back to the default rather
+  # than being handed to exec.
+  [[ $engine =~ ^[a-z0-9][a-z0-9-]*$ ]] || engine=howdy
+  printf '%s\n' "$engine"
+}
+
+engine_cmd() {
+  local engine=$1 candidate
+  for candidate in "$SELF_DIR/omarchy-face-engine-$engine" "/usr/local/bin/omarchy-face-engine-$engine"; do
+    [[ -x $candidate ]] && {
+      printf '%s\n' "$candidate"
+      return 0
+    }
+  done
+  return 1
+}
+
+engine_run() {
+  local engine cmd
+  engine=$(engine_name)
+  cmd=$(engine_cmd "$engine") || {
+    echo "${RED}No adapter for engine '$engine'.${RESET} Expected omarchy-face-engine-$engine on PATH." >&2
+    return 1
+  }
+  "$cmd" "$@"
+}
+
+cmd_status() {
+  local engine cmd describe name node path size models user gate_reason
+
+  user=${USER:-$(id -un)}
+  engine=$(engine_name)
+
+  echo "${DIM}Engine${RESET}"
+  if cmd=$(engine_cmd "$engine"); then
+    printf '  %-12s %s\n' "name" "$engine"
+    printf '  %-12s %s\n' "state" "$("$cmd" describe 2>/dev/null || echo unknown)"
+  else
+    printf '  %-12s %s\n' "name" "$engine ${RED}(no adapter installed)${RESET}"
+  fi
+
+  echo
+  echo "${DIM}Camera${RESET}"
+  if describe=$(omarchy-hw-ir-camera --describe 2>/dev/null); then
+    IFS=$'\t' read -r name node path size <<<"$describe"
+    printf '  %-12s %s\n' "sensor" "$name"
+    printf '  %-12s %s\n' "node" "$node ($size)"
+    printf '  %-12s %s\n' "stable" "$path"
+  else
+    printf '  %-12s %s\n' "sensor" "${RED}none detected${RESET}"
+  fi
+
+  echo
+  echo "${DIM}Enrollment${RESET}"
+  # Prefer the summary the admin helper publishes: it is world-readable, so a
+  # plain user gets a real number instead of "unknown".
+  if [[ -r /run/omarchy-face/models.json ]]; then
+    models=$(python3 -c '
+import json
+try:
+    print(len(json.load(open("/run/omarchy-face/models.json")).get("models", [])))
+except Exception:
+    print("unknown")
+' 2>/dev/null) || models=unknown
+  else
+    models=$(engine_run count-models "$user" 2>/dev/null) || models=unknown
+  fi
+  printf '  %-12s %s\n' "user" "$user"
+  printf '  %-12s %s\n' "models" "$models"
+
+  echo
+  echo "${DIM}Gate${RESET}"
+  if [[ -e $DISABLED_FILE ]]; then
+    printf '  %-12s %s\n' "verdict" "${RED}disabled${RESET} ($DISABLED_FILE exists)"
+  elif gate_reason=$(PAM_USER=$user "$(command -v omarchy-face-gate || echo "$SELF_DIR/omarchy-face-gate")" --explain 2>/dev/null); then
+    printf '  %-12s %s\n' "verdict" "${DIM}skip${RESET} -- $gate_reason"
+  else
+    printf '  %-12s %s\n' "verdict" "${GREEN}face would be attempted${RESET}"
+  fi
+
+  echo
+  echo "${DIM}PAM${RESET}"
+  local file
+  for file in /etc/pam.d/sudo /etc/pam.d/polkit-1; do
+    if [[ ! -f $file ]]; then
+      printf '  %-12s %s\n' "${file##*/}" "${DIM}absent${RESET}"
+    elif grep -q omarchy-face-verify "$file" 2>/dev/null; then
+      printf '  %-12s %s\n' "${file##*/}" "${GREEN}configured${RESET}"
+    else
+      printf '  %-12s %s\n' "${file##*/}" "not configured"
+    fi
+  done
+}
+
+cmd_device() {
+  local requested=${1:-}
+
+  if [[ -n $requested ]]; then
+    [[ -c $requested || -L $requested ]] || {
+      echo "${RED}Not a device: $requested${RESET}" >&2
+      exit 1
+    }
+    engine_run set-device "$requested" || exit 1
+    echo "${GREEN}Camera pinned to $requested.${RESET}"
+    return
+  fi
+
+  omarchy-hw-ir-camera --describe 2>/dev/null |
+    while IFS=$'\t' read -r name node path size; do
+      printf 'sensor  %s\nnode    %s\nstable  %s\nsize    %s\n' "$name" "$node" "$path" "$size"
+    done
+  engine_run get-device 2>/dev/null | sed 's/^/engine  /'
+}
+
+cmd_engine() {
+  local requested=${1:-}
+
+  if [[ -z $requested ]]; then
+    engine_name
+    return
+  fi
+
+  engine_cmd "$requested" >/dev/null || {
+    echo "${RED}No adapter for engine '$requested'.${RESET}" >&2
+    exit 1
+  }
+  config_set engine "$requested"
+  echo "${GREEN}Engine set to $requested.${RESET}"
+  echo "${DIM}Enrollment does not carry across engines -- run 'omarchy-face enroll' again.${RESET}"
+}
+
+case ${1:-status} in
+  status) cmd_status ;;
+  enroll)
+    shift
+    engine_run enroll "${USER:-$(id -un)}" "$@"
+    ;;
+  list) engine_run list "${USER:-$(id -un)}" ;;
+  remove)
+    shift
+    [[ $# -eq 1 ]] || {
+      echo "Usage: omarchy-face remove <id>" >&2
+      exit 2
+    }
+    engine_run remove "${USER:-$(id -un)}" "$1"
+    ;;
+  clear) engine_run clear "${USER:-$(id -un)}" ;;
+  test) engine_run verify-verbose "${USER:-$(id -un)}" ;;
+  device)
+    shift
+    cmd_device "${1:-}"
+    ;;
+  engine)
+    shift
+    cmd_engine "${1:-}"
+    ;;
+  disable)
+    sudo mkdir -p "$CONFIG_DIR" && sudo touch "$DISABLED_FILE"
+    echo "${GREEN}Face authentication disabled.${RESET} Models kept; PAM falls straight through to password."
+    ;;
+  enable)
+    sudo rm -f "$DISABLED_FILE"
+    echo "${GREEN}Face authentication enabled.${RESET}"
+    ;;
+  -h | --help | help) usage ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

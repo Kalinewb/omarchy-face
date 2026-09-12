@@ -1,0 +1,114 @@
+#!/bin/bash
+
+# omarchy:summary=Check whether a named face is in front of the camera
+# omarchy:args=<verify|list> [identity]
+# omarchy:hidden=true
+
+# Named identities exist for one reason: PAM answers "is this the account
+# owner", and sometimes the question is "is this a particular other person" --
+# a profile that should open for a partner, say. PAM cannot express that; there
+# is only one Unix user.
+#
+# This helper is deliberately the smallest possible thing. It can verify and it
+# can list names. It cannot enrol, cannot delete, and cannot emit a face
+# encoding. Enrolment lives in omarchy-face-admin behind a real authorisation
+# prompt, because deciding WHO may open something is the owner's call.
+#
+# It runs without a polkit prompt, which is the whole point -- the other person
+# cannot authorise as you. The cost is an oracle: any process running as you can
+# ask "is <identity> in front of the camera" and turn the IR emitter on doing
+# it. That is acceptable only because what it gates is not a security boundary;
+# see the warning in README. It must never become the basis for one.
+
+set -uo pipefail
+export PATH=/usr/local/bin:/usr/bin
+unset IFS BASH_ENV ENV CDPATH
+umask 077
+
+CONFIG_FILE=/etc/omarchy-face/config
+HOWDY_MODELS=/usr/lib/security/howdy/models
+
+# Identities live under a fixed prefix so a name can never be chosen that
+# collides with a real account's model store. "alice" as an identity becomes
+# identity-alice, not the file PAM authenticates against.
+PREFIX=identity-
+
+config_get() {
+  local key=$1 default=${2:-} value
+  [[ -r $CONFIG_FILE ]] || { printf '%s\n' "$default"; return; }
+  value=$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$CONFIG_FILE" 2>/dev/null | tail -1)
+  value=${value%%#*}
+  value=${value%"${value##*[![:space:]]}"}
+  [[ -n $value ]] || value=$default
+  printf '%s\n' "$value"
+}
+
+engine_cmd() {
+  local engine
+  engine=$(config_get engine howdy)
+  [[ $engine =~ ^[a-z0-9][a-z0-9-]*$ ]] || exit 1
+  [[ -x /usr/local/bin/omarchy-face-engine-$engine ]] || exit 1
+  printf '/usr/local/bin/omarchy-face-engine-%s\n' "$engine"
+}
+
+valid_identity() {
+  [[ $1 =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]]
+}
+
+# The models are root-owned mode 600, so this cannot do its job as the calling
+# user -- it could not even stat the file to see whether an identity exists.
+# Re-exec through pkexec, whose policy for this path grants active sessions
+# access without a prompt. That no-prompt grant is the entire point: the person
+# being checked for cannot authorise as the owner.
+#
+# Without this the helper fails for every identity, and fails in the most
+# misleading way available: exactly like a face that was not recognised.
+if [[ $EUID -ne 0 ]]; then
+  command -v pkexec >/dev/null 2>&1 || exit 1
+  exec pkexec /usr/local/bin/omarchy-face-identity "$@"
+fi
+
+action=${1:-}
+
+case $action in
+  verify)
+    identity=${2:-}
+    valid_identity "$identity" || exit 1
+    [[ -e /etc/omarchy-face/disabled ]] && exit 1
+
+    # A face that was never enrolled must fail fast rather than burning the
+    # engine's full timeout staring at nobody.
+    [[ -f $HOWDY_MODELS/$PREFIX$identity.dat ]] || exit 1
+
+    # The IR sensor takes one streamer at a time, and PAM authentication has a
+    # better claim on it than a profile switch does.
+    if command -v fuser >/dev/null 2>&1; then
+      node=$(omarchy-hw-ir-camera --node 2>/dev/null)
+      [[ -n $node ]] && fuser -s "$node" 2>/dev/null && exit 3
+    fi
+
+    omarchy-face-notify start "identity:$identity" 2>/dev/null || true
+    if "$(engine_cmd)" verify "$PREFIX$identity" >/dev/null 2>&1; then
+      omarchy-face-notify matched "identity:$identity" 2>/dev/null || true
+      exit 0
+    fi
+    omarchy-face-notify failed "identity:$identity" 2>/dev/null || true
+    exit 1
+    ;;
+
+  list)
+    # Names only. There is nothing sensitive in knowing an identity exists, and
+    # a UI needs it to offer the choice at all.
+    shopt -s nullglob
+    for f in "$HOWDY_MODELS/$PREFIX"*.dat; do
+      name=${f##*/}
+      name=${name%.dat}
+      printf '%s\n' "${name#$PREFIX}"
+    done
+    ;;
+
+  *)
+    echo "usage: omarchy-face-identity <verify|list> [identity]" >&2
+    exit 2
+    ;;
+esac

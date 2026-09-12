@@ -1,0 +1,469 @@
+#!/bin/bash
+
+# omarchy:summary=Face engine adapter for howdy
+# omarchy:args=<describe|install|uninstall|configure|get-device|set-device|enroll|list|remove|clear|count-models|verify|verify-verbose>
+# omarchy:hidden=true
+
+# One adapter per engine, all of them answering the same verbs, so the rest of
+# the project never learns which one is installed. Swapping engines is adding a
+# sibling of this file and running `omarchy-face engine <name>`.
+#
+# howdy 2.6.1 specifics worth knowing before editing this:
+#   * Its shipped PAM module is pam.py, which needs pam-python -- a C module
+#     built against Python 2 that no longer builds on current Arch. We do not
+#     use it. compare.py is called directly instead: argv is the username, and
+#     the exit code is the whole answer (0 match, 10 no models, 11 timeout,
+#     12 abort, 13 too dark).
+#   * Everything under /usr/lib/security/howdy is mode 600, root-owned. That is
+#     the correct posture -- the face models are authentication material -- and
+#     it means every verb here that touches models needs root.
+#   * config.ini key names are unique across its sections, so a plain sed on
+#     `^key =` cannot hit the wrong one, and editing in place keeps the file's
+#     own documentation intact where configparser would strip it.
+
+set -uo pipefail
+
+HOWDY_DIR=/usr/lib/security/howdy
+HOWDY_CONFIG=$HOWDY_DIR/config.ini
+HOWDY_MODELS=$HOWDY_DIR/models
+HOWDY_COMPARE=$HOWDY_DIR/compare.py
+
+# Both AUR spellings ship identical payloads; howdy-bin repacks the upstream
+# .deb, howdy builds the same tree from the git tag.
+AUR_PACKAGES=(python-dlib howdy)
+
+# Everything the two AUR builds link against, from the official repos. Pulled
+# up front in one privileged call so makepkg never needs root of its own --
+# makepkg shells out to a bare `sudo`, which cannot prompt where there is no
+# terminal, and would strand the build half way.
+REPO_PACKAGES=(
+  v4l-utils
+  python-opencv python-setuptools boost cmake sqlite git
+  cblas lapack libx11 giflib libjpeg-turbo libjxl libpng libwebp
+  libinih libevdev
+)
+
+die() {
+  echo "omarchy-face-engine-howdy: $*" >&2
+  exit 1
+}
+
+installed() {
+  [[ -f $HOWDY_COMPARE ]] && return 0
+
+  # The package leaves /usr/lib/security/howdy at mode 600 -- no execute bit,
+  # so a non-root caller cannot traverse it and the test above says "missing"
+  # for a perfectly good install. Ask the package database instead, which any
+  # user can read.
+  pacman -Qq howdy >/dev/null 2>&1 || pacman -Qq howdy-bin >/dev/null 2>&1
+}
+
+require_installed() {
+  installed || die "howdy is not installed (run omarchy-setup-security-face)"
+}
+
+# Root for the model store, and nothing else. Called as root under PAM, and
+# with sudo from the CLI. Falls back to SUDO_ASKPASS when there is no terminal
+# for sudo to prompt on, so enrollment is drivable from something that is not a
+# shell -- a setup panel, a script, an editor.
+as_root() {
+  if [[ $EUID -eq 0 ]]; then
+    "$@"
+  elif [[ ! -t 0 && -n ${SUDO_ASKPASS:-} ]]; then
+    sudo -A "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+# Accumulated, then applied in one pass. Each privileged call may cost a
+# password prompt -- there are a dozen settings below, and a dozen prompts to
+# configure a camera is not a setup flow anyone finishes.
+INI_EDITS=()
+
+set_ini() {
+  local key=$1 value=$2
+  INI_EDITS+=(-e "s|^([[:space:]]*${key}[[:space:]]*=[[:space:]]*).*|\1${value}|")
+}
+
+apply_ini_edits() {
+  [[ ${#INI_EDITS[@]} -gt 0 ]] || return 0
+  as_root sed -i -E "${INI_EDITS[@]}" "$HOWDY_CONFIG" || die "could not write howdy's config.ini"
+  INI_EDITS=()
+}
+
+get_ini() {
+  local key=$1
+  as_root sed -n -E "s|^[[:space:]]*${key}[[:space:]]*=[[:space:]]*||p" "$HOWDY_CONFIG" 2>/dev/null | tail -1
+}
+
+cmd_describe() {
+  if installed; then
+    local version
+    version=$(pacman -Qq howdy howdy-bin 2>/dev/null | head -1)
+    version=$(pacman -Q "${version:-howdy}" 2>/dev/null | awk '{print $2}')
+    printf 'howdy %s installed\n' "${version:-(version unknown)}"
+  else
+    printf 'howdy not installed\n'
+  fi
+}
+
+# Fetch an AUR PKGBUILD into a scratch directory and print the path. Building
+# is kept separate from installing so the PKGBUILD can be inspected -- and, for
+# python-dlib, edited -- in between.
+fetch_pkgbuild() {
+  local pkg=$1 dir
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/omarchy-face-build.XXXXXX") || return 1
+  (cd "$dir" && yay -G "$pkg" >/dev/null 2>&1) || {
+    rm -rf "$dir"
+    return 1
+  }
+  printf '%s\n' "$dir/$pkg"
+}
+
+build_and_install() {
+  local dir=$1 pkg=$2
+  # --nodeps because the dependencies were installed in one privileged call
+  # above; without it makepkg reaches for a sudo it cannot prompt on. pacman -U
+  # still checks them at install time, so a gap in that list surfaces here
+  # rather than silently producing a broken package.
+  (cd "$dir" && makepkg -f --noconfirm --nodeps) || die "building $pkg failed"
+  as_root pacman -U --needed --noconfirm "$dir"/"$pkg"-*.pkg.tar.zst || die "installing $pkg failed"
+}
+
+cmd_install() {
+  command -v yay >/dev/null 2>&1 || die "yay is required to fetch AUR build files"
+
+  echo "Installing build and runtime dependencies..."
+  # Fatal on purpose. Everything below builds with --nodeps, so a half-finished
+  # dependency step does not stop the build -- it just produces a confusing
+  # failure several minutes later, inside a compiler.
+  as_root pacman -S --needed --noconfirm "${REPO_PACKAGES[@]}" ||
+    die "could not install build dependencies (a stale /var/lib/pacman/db.lck will do this)"
+
+  # python-dlib is a split package: one PKGBUILD produces a CPU variant built
+  # with DLIB_USE_CUDA=OFF and a separate CUDA variant. Only the CUDA half needs
+  # cuda and cudnn, and those alone are ~2.7 GB of build dependencies -- for a
+  # package howdy does not use. It runs dlib's HOG detector on the CPU, because
+  # use_cnn is off by default and the CNN model wants a GPU to be worth it.
+  #
+  # So the CUDA half is switched off before building. If upstream ever renames
+  # that flag the edit is skipped rather than guessed at, and the build proceeds
+  # the expensive way instead of silently producing something else.
+  if ! omarchy-pkg-present python-dlib 2>/dev/null; then
+    local dlib_dir
+    dlib_dir=$(fetch_pkgbuild python-dlib) || die "could not fetch the python-dlib build files"
+
+    if grep -q '^_build_cuda=1$' "$dlib_dir/PKGBUILD"; then
+      sed -i 's/^_build_cuda=1$/_build_cuda=0/' "$dlib_dir/PKGBUILD"
+      echo "Building python-dlib (CPU only -- skipping ~2.7 GB of CUDA build dependencies)..."
+    else
+      echo "Building python-dlib..."
+      echo "  Note: no _build_cuda flag in this PKGBUILD; building it as upstream ships it."
+    fi
+
+    build_and_install "$dlib_dir" python-dlib
+    rm -rf "${dlib_dir%/*}"
+  fi
+
+  if ! installed; then
+    local howdy_dir
+    howdy_dir=$(fetch_pkgbuild howdy) || die "could not fetch the howdy build files"
+    echo "Building howdy..."
+    build_and_install "$howdy_dir" howdy
+    rm -rf "${howdy_dir%/*}"
+  fi
+
+  installed || die "howdy install did not produce $HOWDY_COMPARE"
+}
+
+cmd_uninstall() {
+  omarchy-pkg-drop howdy howdy-bin python-dlib 2>/dev/null || true
+}
+
+# Tuned defaults for an IR sensor. Deliberately conservative: certainty and
+# timeout are left at howdy's stock values, because loosening the match
+# threshold is the one knob that trades security for convenience and it should
+# be a decision someone makes on purpose, not a default they inherit.
+cmd_configure() {
+  local device=${1:-} size=${2:-} width height
+  require_installed
+  [[ -n $device ]] || die "configure needs a device path"
+
+  set_ini device_path "$device"
+
+  if [[ $size =~ ^([0-9]+)x([0-9]+)$ ]]; then
+    width=${BASH_REMATCH[1]}
+    height=${BASH_REMATCH[2]}
+    set_ini frame_width "$width"
+    set_ini frame_height "$height"
+  fi
+
+  # howdy's config warns that the opencv recorder can struggle with greyscale,
+  # and an IR sensor is greyscale and nothing else -- but the ffmpeg recorder
+  # needs the python ffmpeg-python module (AUR), which is a whole extra
+  # dependency, and opencv was measured driving this class of sensor correctly.
+  # Stay on the stock recorder; if frames come back black on some other camera,
+  # `omarchy-face` reports it as "every frame was too dark" and the fix is
+  # installing python-ffmpeg-python and setting recording_plugin = ffmpeg.
+  #
+  # Note that the first frame after opening the device is always near-black:
+  # the IR emitter takes a moment to fire. Anything probing this sensor has to
+  # read a run of frames, not one.
+  set_ini recording_plugin opencv
+  set_ini device_format v4l2
+
+  # howdy's stock timeout is 4 seconds, measured on cameras that are lit the
+  # instant they open. An IR emitter is not: the first second of frames comes
+  # back below dark_threshold and is discarded, so a stock timeout can expire
+  # having examined very little. Eight seconds leaves room for the warm-up and
+  # still fails fast enough that the password prompt does not feel stalled.
+  set_ini timeout 8
+
+  # Belt and braces against omarchy-face-gate: if the gate is ever missing,
+  # howdy still refuses over SSH and with the lid shut.
+  set_ini ignore_ssh true
+  set_ini ignore_closed_lid true
+
+  # Off by default. Upstream writes a photograph of every authentication
+  # attempt, successful or not, into a directory under /usr/lib -- unprompted,
+  # and with no rotation. Anyone who wants the forensics can turn these back on.
+  set_ini capture_failed false
+  set_ini capture_successful false
+
+  set_ini disabled false
+
+  # Left ON, against howdy's own advice, because it is the only way to see the
+  # match certainty -- and the certainty is how the setup flow decides whether
+  # a freshly enrolled model is actually good or merely scraped past the
+  # threshold. Upstream's warning is that the report breaks UI applications by
+  # printing during authentication; the PAM path here sends compare.py's stdout
+  # to /dev/null, so nothing it prints can reach a caller.
+  set_ini end_report true
+
+  apply_ini_edits
+}
+
+cmd_get_device() {
+  require_installed
+  printf 'device_path %s\n' "$(get_ini device_path)"
+}
+
+cmd_set_device() {
+  require_installed
+  [[ -n ${1:-} ]] || die "set-device needs a path"
+  set_ini device_path "$1"
+  apply_ini_edits
+}
+
+cmd_enroll() {
+  local user=${1:?enroll needs a user} label=${2:-}
+  require_installed
+
+  # Labels matter more than they look. Someone who wears glasses needs a model
+  # per state -- bare, everyday, reading -- and telling those apart later to
+  # remove the bad one is only possible if they were named when captured.
+  #
+  # howdy only offers a label through an interactive prompt, with no flag for
+  # it. That prompt is a plain read from stdin, so a caller with no terminal --
+  # a setup panel, a script -- can still name a model by piping it in.
+  if [[ -n $label ]]; then
+    printf '%s\n' "$label" | as_root howdy -U "$user" add
+  elif [[ -t 0 ]]; then
+    as_root howdy -U "$user" add
+  else
+    # No terminal and no label: take howdy's default rather than hang on a
+    # prompt nobody can answer.
+    as_root howdy -U "$user" add -y
+  fi
+}
+
+cmd_list() {
+  local user=${1:?list needs a user}
+  require_installed
+  as_root howdy -U "$user" list
+}
+
+cmd_remove() {
+  local user=${1:?remove needs a user} id=${2:?remove needs a model id}
+  require_installed
+  as_root howdy -U "$user" remove "$id"
+}
+
+cmd_clear() {
+  local user=${1:?clear needs a user}
+  local flags=()
+  require_installed
+  # howdy asks "Do you want to continue [y/N]" and throws on EOF when there is
+  # no terminal. Uninstallers do not have one, so without this the removal of
+  # somebody's biometric templates fails and reports success.
+  [[ -t 0 ]] || flags+=(-y)
+  as_root howdy -U "$user" clear "${flags[@]}"
+}
+
+# Prints a count, or nothing at all when the answer is unknowable without root.
+# The gate treats an unknown count as "carry on" rather than "skip", so the
+# distinction between 0 and unknown matters.
+cmd_count_models() {
+  local user=${1:?count-models needs a user}
+  # Separate statement on purpose: `local` is a builtin, so every argument is
+  # expanded before any assignment takes effect. Written as one `local a=.. b=$a`
+  # the second reads an unset variable, which under `set -u` kills the function
+  # and makes an enrolled user look like an unknown one.
+  local file=$HOWDY_MODELS/$user.dat
+  installed || return 1
+
+  if [[ $EUID -ne 0 ]]; then
+    # Never prompt: this runs inside `omarchy-face status`, and a password
+    # prompt in the middle of a status table is worse than "unknown".
+    sudo -n true 2>/dev/null || return 1
+  fi
+
+  as_root test -d "$HOWDY_MODELS" 2>/dev/null || {
+    echo 0
+    return 0
+  }
+  as_root test -f "$file" 2>/dev/null || {
+    echo 0
+    return 0
+  }
+
+  as_root python3 -c '
+import json, sys
+try:
+    print(len(json.load(open(sys.argv[1]))))
+except Exception:
+    sys.exit(1)
+' "$file"
+}
+
+# The authentication path. Silent, and its exit code is the answer.
+cmd_verify() {
+  local user=${1:?verify needs a user}
+  installed || return 1
+  exec /usr/bin/python3 "$HOWDY_COMPARE" "$user" >/dev/null 2>&1
+}
+
+cmd_verify_verbose() {
+  local user=${1:?verify-verbose needs a user} start elapsed status
+
+  require_installed
+  echo "Looking for $user on $(get_ini device_path)..."
+
+  start=$EPOCHREALTIME
+  as_root /usr/bin/python3 "$HOWDY_COMPARE" "$user"
+  status=$?
+  elapsed=$(awk -v a="$start" -v b="$EPOCHREALTIME" 'BEGIN { printf "%.1f", b - a }')
+
+  case $status in
+    0) echo -e "\e[32mMatched in ${elapsed}s.\e[0m" ;;
+    10) echo -e "\e[31mNo face models enrolled for $user.\e[0m Run: omarchy-face enroll" ;;
+    11) echo -e "\e[31mNo match within the timeout (${elapsed}s).\e[0m" ;;
+    12) echo -e "\e[31mAborted.\e[0m howdy is disabled in config, or refused this context." ;;
+    13) echo -e "\e[31mEvery frame was too dark.\e[0m The IR emitter may not be firing; check dark_threshold." ;;
+    *) echo -e "\e[31mUnknown failure (exit $status) after ${elapsed}s.\e[0m" ;;
+  esac
+
+  return $status
+}
+
+# The configured match threshold. Lower is stricter; a match must come in under
+# it. Reported so a UI can say how much room a model actually had.
+cmd_threshold() {
+  require_installed
+  get_ini certainty
+}
+
+# Like verify, but hands back howdy's diagnostic text instead of swallowing it,
+# so the caller can pull the certainty out. Exit code still carries the verdict.
+cmd_verify_report() {
+  local user=${1:?verify-report needs a user}
+  require_installed
+  as_root /usr/bin/python3 "$HOWDY_COMPARE" "$user" 2>&1
+}
+
+cmd_list_json() {
+  local user=${1:?list-json needs a user}
+  local file=$HOWDY_MODELS/$user.dat
+  installed || die "howdy is not installed"
+
+  as_root test -f "$file" 2>/dev/null || {
+    echo '{"ok":true,"models":[]}'
+    return 0
+  }
+
+  as_root python3 -c '
+import json, sys
+try:
+    models = json.load(open(sys.argv[1]))
+except Exception:
+    print(json.dumps({"ok": False, "error": "unreadable model store"}))
+    sys.exit(0)
+
+# Only the metadata. The encodings themselves are biometric material and have
+# no business leaving the root-owned store for a UI that just lists labels.
+print(json.dumps({
+    "ok": True,
+    "models": [
+        {"id": m.get("id"), "label": m.get("label", ""), "time": m.get("time", 0)}
+        for m in models
+    ],
+}))
+' "$file"
+}
+
+case ${1:-} in
+  describe) cmd_describe ;;
+  threshold) cmd_threshold ;;
+  verify-report)
+    shift
+    cmd_verify_report "$@"
+    ;;
+  list-json)
+    shift
+    cmd_list_json "$@"
+    ;;
+  installed) installed ;;
+  install) cmd_install ;;
+  uninstall) cmd_uninstall ;;
+  configure)
+    shift
+    cmd_configure "$@"
+    ;;
+  get-device) cmd_get_device ;;
+  set-device)
+    shift
+    cmd_set_device "${1:-}"
+    ;;
+  enroll)
+    shift
+    cmd_enroll "$@"
+    ;;
+  list)
+    shift
+    cmd_list "$@"
+    ;;
+  remove)
+    shift
+    cmd_remove "$@"
+    ;;
+  clear)
+    shift
+    cmd_clear "$@"
+    ;;
+  count-models)
+    shift
+    cmd_count_models "$@"
+    ;;
+  verify)
+    shift
+    cmd_verify "$@"
+    ;;
+  verify-verbose)
+    shift
+    cmd_verify_verbose "$@"
+    ;;
+  *)
+    die "unknown verb '${1:-}'"
+    ;;
+esac

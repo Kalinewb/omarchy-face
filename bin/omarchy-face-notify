@@ -1,0 +1,47 @@
+#!/bin/bash
+
+# omarchy:summary=Publish face authentication state for the shell to animate against
+# omarchy:args=<state> [detail]
+# omarchy:hidden=true
+
+# The seam between the authentication path and any UI that wants to draw it.
+#
+# PAM runs as root; omarchy-shell runs as the user. So the state goes through a
+# world-readable file in /run, written whole and renamed into place so a reader
+# never catches a half-written line. Phase 3's overlay watches this file; until
+# then it costs one write per authentication and nobody reads it.
+#
+# States: start, matched, failed, skipped. `detail` is free text -- an engine
+# exit code, a gate reason -- and is never parsed for control flow.
+#
+# This must never be able to affect the outcome of an authentication. Every
+# failure in here is swallowed, and the caller's exit status is preserved by
+# the caller, not by this script.
+
+set -u
+export PATH=/usr/local/bin:/usr/bin
+unset IFS BASH_ENV ENV CDPATH
+
+STATE_DIR=/run/omarchy-face
+STATE_FILE=$STATE_DIR/state.json
+
+state=${1:-}
+detail=${2:-}
+[[ -n $state ]] || exit 0
+
+# Only root writes state; a user-writable state file would let any process
+# paint a fake "matched" on the lock screen.
+[[ $EUID -eq 0 ]] || exit 0
+
+{
+  mkdir -p "$STATE_DIR" 2>/dev/null
+  chmod 0755 "$STATE_DIR" 2>/dev/null
+
+  tmp=$(mktemp "$STATE_DIR/.state.XXXXXX" 2>/dev/null) || exit 0
+  printf '{"state":"%s","detail":"%s","user":"%s","service":"%s","at":%s}\n' \
+    "${state//\"/}" "${detail//\"/}" "${PAM_USER:-}" "${PAM_SERVICE:-}" "$(date +%s%3N)" >"$tmp"
+  chmod 0644 "$tmp" 2>/dev/null
+  mv -f "$tmp" "$STATE_FILE" 2>/dev/null
+} 2>/dev/null
+
+exit 0
