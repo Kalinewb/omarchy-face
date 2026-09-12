@@ -20,6 +20,7 @@ HELPERS=(
   omarchy-face-identity
   omarchy-security-probe
   omarchy-face-set-idle-lock
+  omarchy-faced
   omarchy-hw-ir-camera
   omarchy-face
   omarchy-face-gate
@@ -111,6 +112,20 @@ fi
 # The setup panel runs as the user and must ask root to touch the face models.
 # Without this policy pkexec falls back to demanding the root password, which on
 # a single-user laptop is usually not even set.
+# The verification daemon, for PAM stacks that run unprivileged. Socket
+# activated: it is started by the first request and exits when idle.
+UNIT_SRC=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/systemd
+if [[ -d $UNIT_SRC ]] && command -v systemctl >/dev/null 2>&1; then
+  echo -e "\nInstalling the verification daemon..."
+  "${SUDO[@]}" install -o root -g root -m 0644 \
+    "$UNIT_SRC/omarchy-faced.socket" "$UNIT_SRC/omarchy-faced.service" \
+    -t /etc/systemd/system
+  "${SUDO[@]}" systemctl daemon-reload
+  "${SUDO[@]}" systemctl enable --now omarchy-faced.socket >/dev/null 2>&1 ||
+    echo "  ${RED}could not enable omarchy-faced.socket${RESET}"
+  echo "  omarchy-faced.socket"
+fi
+
 POLICY_SRC=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/polkit/no.graveklar.face.policy
 if [[ -f $POLICY_SRC ]]; then
   echo -e "\nInstalling the polkit policy..."

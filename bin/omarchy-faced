@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""Answer face-verification requests for callers that cannot hold privilege.
+
+The lock screen is an ordinary user process calling PAM directly. There is no
+privilege for pam_exec's seteuid to elevate to, so a helper launched from that
+stack runs as the user and cannot read the root-owned face models. That is not
+a bug to fix in the helper; it is the reason every other biometric PAM
+integration has a privileged component. pam_unix shells out to setuid
+unix_chkpwd, pam_fprintd talks to fprintd. This is that component.
+
+What it will not do is as important as what it will:
+
+  * it answers yes or no, and never returns a model, an encoding, or a score
+  * it answers only about the caller's own account, decided from the kernel's
+    peer credentials rather than from anything the caller says
+  * it runs one check at a time and rate limits them, because each one turns
+    on an infrared emitter pointed at whoever is sitting there
+
+It is socket activated, so it is not a root process sitting around all day.
+"""
+
+import os
+import pwd
+import re
+import socket
+import struct
+import subprocess
+import sys
+import time
+
+SOCKET_PATH = "/run/omarchy-face/verify.sock"
+ENGINE_CONFIG = "/etc/omarchy-face/config"
+IDLE_EXIT_SECONDS = 120
+MIN_INTERVAL_SECONDS = 2.0
+DEFAULT_TIMEOUT = 10
+MAX_TIMEOUT = 30
+USERNAME = re.compile(r"^[a-z_][a-z0-9_-]*\$?$")
+
+last_check = {}
+
+
+def log(message):
+    print(message, file=sys.stderr, flush=True)
+
+
+def engine_path():
+    engine = "howdy"
+    try:
+        with open(ENGINE_CONFIG) as handle:
+            for line in handle:
+                key, _, value = line.partition("=")
+                if key.strip() == "engine":
+                    value = value.split("#", 1)[0].strip()
+                    if re.fullmatch(r"[a-z0-9][a-z0-9-]*", value):
+                        engine = value
+    except OSError:
+        pass
+    path = "/usr/local/bin/omarchy-face-engine-%s" % engine
+    return path if os.access(path, os.X_OK) else None
+
+
+def notify(state, detail=""):
+    """Best effort: the indicator is never allowed to affect the answer."""
+    try:
+        subprocess.run(
+            ["/usr/local/bin/omarchy-face-notify", state, detail],
+            timeout=5,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+
+
+def verify(user, timeout):
+    engine = engine_path()
+    if engine is None:
+        return False, "no-engine"
+
+    if os.path.exists("/etc/omarchy-face/disabled"):
+        return False, "disabled"
+
+    environment = dict(os.environ, OMARCHY_FACE_TIMEOUT=str(timeout), PAM_USER=user)
+    notify("start", "daemon")
+    try:
+        result = subprocess.run(
+            [engine, "verify", user],
+            timeout=timeout + 10,
+            env=environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired:
+        notify("failed", "timeout")
+        return False, "timeout"
+
+    if result.returncode == 0:
+        notify("matched", "daemon")
+        return True, "matched"
+
+    notify("failed", str(result.returncode))
+    return False, "exit-%d" % result.returncode
+
+
+def peer_identity(connection):
+    raw = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+    _, uid, _ = struct.unpack("3i", raw)
+    return uid
+
+
+def handle(connection):
+    connection.settimeout(10)
+    try:
+        request = connection.recv(256).decode("utf-8", "replace").strip()
+    except OSError:
+        return
+
+    parts = request.split()
+    if len(parts) < 2 or parts[0] != "VERIFY":
+        connection.sendall(b"NO bad-request\n")
+        return
+
+    user = parts[1]
+    if not USERNAME.match(user):
+        connection.sendall(b"NO bad-user\n")
+        return
+
+    timeout = DEFAULT_TIMEOUT
+    if len(parts) > 2 and parts[2].isdigit():
+        timeout = max(1, min(MAX_TIMEOUT, int(parts[2])))
+
+    # Who is asking is decided by the kernel, not by the request. Without this
+    # any local account could ask this daemon to unlock a different one.
+    uid = peer_identity(connection)
+    try:
+        caller = pwd.getpwuid(uid).pw_name
+    except KeyError:
+        connection.sendall(b"NO unknown-caller\n")
+        return
+
+    if uid != 0 and caller != user:
+        log("refused: uid %d asked about %s" % (uid, user))
+        connection.sendall(b"NO not-your-account\n")
+        return
+
+    # Each check runs an infrared emitter at whoever is in front of the
+    # machine. A caller that can ask freely can both keep it running and use it
+    # as a presence oracle, so asks are spaced out.
+    now = time.monotonic()
+    if now - last_check.get(uid, 0.0) < MIN_INTERVAL_SECONDS:
+        connection.sendall(b"NO too-soon\n")
+        return
+    last_check[uid] = now
+
+    ok, reason = verify(user, timeout)
+    connection.sendall((b"OK\n" if ok else ("NO %s\n" % reason).encode()))
+
+
+def listener():
+    """Prefer the socket systemd passed in; fall back to making our own."""
+    if os.environ.get("LISTEN_FDS") == "1" and int(os.environ.get("LISTEN_PID", 0)) == os.getpid():
+        return socket.socket(fileno=3, family=socket.AF_UNIX, type=socket.SOCK_STREAM), False
+
+    os.makedirs(os.path.dirname(SOCKET_PATH), mode=0o755, exist_ok=True)
+    if os.path.exists(SOCKET_PATH):
+        os.unlink(SOCKET_PATH)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(SOCKET_PATH)
+    # The socket is reachable by anyone; the peer-credential check above is what
+    # actually decides. File permissions cannot express "your own account only".
+    os.chmod(SOCKET_PATH, 0o666)
+    server.listen(8)
+    return server, True
+
+
+def main():
+    if os.geteuid() != 0:
+        log("omarchy-faced must run as root")
+        return 1
+
+    server, owned = listener()
+    server.settimeout(IDLE_EXIT_SECONDS)
+    log("omarchy-faced ready")
+
+    try:
+        while True:
+            try:
+                connection, _ = server.accept()
+            except socket.timeout:
+                # Socket activation will start us again on the next request.
+                log("idle, exiting")
+                return 0
+            with connection:
+                try:
+                    handle(connection)
+                except Exception as error:
+                    log("error: %s" % error)
+                    try:
+                        connection.sendall(b"NO internal-error\n")
+                    except OSError:
+                        pass
+    finally:
+        if owned:
+            try:
+                os.unlink(SOCKET_PATH)
+            except OSError:
+                pass
+
+
+if __name__ == "__main__":
+    sys.exit(main())

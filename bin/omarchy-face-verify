@@ -72,6 +72,40 @@ id -u -- "$user" >/dev/null 2>&1 || exit 1
 engine=$(config_get engine howdy)
 [[ $engine =~ ^[a-z0-9][a-z0-9-]*$ ]] || exit 1
 
+# When this runs from a privileged stack -- sudo, polkit -- it is already root
+# and can drive the engine directly. From the lock screen it is not: that stack
+# belongs to an ordinary user process, there is nothing for seteuid to elevate
+# to, and the face models are unreadable. Ask the daemon, which holds the
+# privilege this context never had.
+if [[ $EUID -ne 0 ]]; then
+  if [[ -S /run/omarchy-face/verify.sock ]]; then
+    # python3 rather than socat: the engine already requires it, and a face
+    # unlock that fails because a networking swiss-army-knife is missing would
+    # be a poor way to find out about a dependency.
+    reply=$(OMARCHY_FACE_USER="$user" OMARCHY_FACE_WAIT="${OMARCHY_FACE_TIMEOUT:-10}" \
+      /usr/bin/python3 -c '
+import os, socket, sys
+
+try:
+    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    connection.settimeout(float(os.environ.get("OMARCHY_FACE_WAIT", 10)) + 15)
+    connection.connect("/run/omarchy-face/verify.sock")
+    connection.sendall(("VERIFY %s %s\n" % (
+        os.environ["OMARCHY_FACE_USER"],
+        os.environ.get("OMARCHY_FACE_WAIT", "10"),
+    )).encode())
+    sys.stdout.write(connection.recv(128).decode("utf-8", "replace").strip())
+except Exception:
+    sys.stdout.write("NO unreachable")
+' 2>/dev/null)
+    [[ $reply == OK* ]] && exit 0
+    exit 1
+  fi
+  # No daemon and no privilege: there is no way to check, and guessing yes is
+  # not among the options.
+  exit 1
+fi
+
 adapter=""
 for candidate in "$SELF_DIR/omarchy-face-engine-$engine" "/usr/local/bin/omarchy-face-engine-$engine"; do
   if [[ -x $candidate ]]; then

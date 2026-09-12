@@ -32,6 +32,14 @@ done
 
 echo -e "${GREEN}Removing omarchy-face.\n${RESET}"
 
+if command -v systemctl >/dev/null 2>&1; then
+  "${SUDO[@]}" systemctl disable --now omarchy-faced.socket >/dev/null 2>&1 || true
+  "${SUDO[@]}" systemctl stop omarchy-faced.service >/dev/null 2>&1 || true
+  "${SUDO[@]}" rm -f /etc/systemd/system/omarchy-faced.socket /etc/systemd/system/omarchy-faced.service
+  "${SUDO[@]}" systemctl daemon-reload || true
+  echo "  verification daemon"
+fi
+
 # The shell holds the plugin open; stopping it from being enabled first means
 # the restart at the end does not race a directory being deleted underneath it.
 if command -v omarchy >/dev/null 2>&1; then

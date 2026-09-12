@@ -1,0 +1,31 @@
+[Unit]
+Description=Face verification for callers that cannot hold privilege
+Documentation=https://github.com/Kalinewb/omarchy-face
+Requires=omarchy-faced.socket
+After=omarchy-faced.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/omarchy-faced
+# Socket activated and idle-exiting, so this is not a root process sitting
+# around all day waiting to be interesting to somebody.
+Restart=no
+
+# It needs the camera, the face models and the ability to run the engine, and
+# nothing else whatsoever.
+NoNewPrivileges=no
+ProtectSystem=strict
+ReadWritePaths=/run/omarchy-face
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
