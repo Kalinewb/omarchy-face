@@ -32,9 +32,16 @@ the tool for that.
 omarchy plugin add https://github.com/Kalinewb/omarchy-face --enable
 ```
 
-Then open **Setup → Security → Manage Face ID** and press **Install**. The rest
+It will ask which bar section to put the button in. Click that button, then
+press **Install**. The rest
 happens in a terminal it opens for you: the helpers go in, the daemon is
 registered, and it offers to walk you through enrolment.
+
+The button is the way in on purpose. Menu entries are written by `install.sh`,
+which adding a plugin does not run — so "open Setup > Security" would be
+circular advice, telling you to use an entry that the step you have not taken
+is what creates. A bar widget is there the moment the plugin is enabled. Once
+`install.sh` has run, the menu entries exist too.
 
 The second step cannot be folded into the first, and the panel says so rather
 than pretending: `omarchy plugin add` clones a repository into your plugin

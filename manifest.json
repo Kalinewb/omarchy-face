@@ -8,11 +8,20 @@
   "description": "Face unlock for sudo, polkit and the lock screen using your laptop's infrared camera, with guided enrolment and a security overview.",
   "kinds": [
     "service",
-    "panel"
+    "panel",
+    "bar-widget"
   ],
   "keepLoaded": true,
   "entryPoints": {
     "service": "Service.qml",
-    "panel": "Panel.qml"
+    "panel": "Panel.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Face Unlock",
+    "description": "Face authentication status; click to manage models and see the machine's security posture",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
   }
 }

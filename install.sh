@@ -151,7 +151,8 @@ if command -v omarchy-shell >/dev/null 2>&1; then
     # copy gets read half-finished and reported as a broken plugin. The staging
     # name starts with a dot; the registry's glob skips it.
     staging=$(mktemp -d "$HOME/.config/omarchy/plugins/.graveklar.face.XXXXXX")
-    cp -r "$PLUGIN_SRC/manifest.json" "$PLUGIN_SRC/Service.qml" "$PLUGIN_SRC/Panel.qml" "$staging/"
+    cp -r "$PLUGIN_SRC/manifest.json" "$PLUGIN_SRC/Service.qml" \
+      "$PLUGIN_SRC/Panel.qml" "$PLUGIN_SRC/BarWidget.qml" "$staging/"
     rm -rf "$PLUGIN_DIR"
     mv "$staging" "$PLUGIN_DIR"
   fi
