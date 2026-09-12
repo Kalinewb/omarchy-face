@@ -72,7 +72,7 @@ entries = '''
   // omarchy-face
   "setup.security.face": {"icon":"","label":"Face ID","when":"omarchy-hw-ir-camera","action":"omarchy-launch-floating-terminal-with-presentation omarchy-setup-security-face"},
   "remove.security.face": {"icon":"","label":"Face ID","when":"grep -q omarchy-face-verify /etc/pam.d/sudo","action":"omarchy-launch-floating-terminal-with-presentation omarchy-remove-security-face"},
-  "setup.security.face-models": {"icon":"","label":"Face Models","when":"omarchy-hw-ir-camera","action":"omarchy-shell shell summon graveklar.face '{}'"},
+  "setup.security.face-models": {"icon":"","label":"Manage Face ID","when":"omarchy-hw-ir-camera","action":"omarchy-shell shell summon graveklar.face '{}'"},
 '''
 
 # The file is JSONC with comments and trailing commas, so it is edited as text
