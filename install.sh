@@ -29,6 +29,7 @@ HELPERS=(
   omarchy-face-engine-howdy
   omarchy-setup-security-face
   omarchy-remove-security-face
+  omarchy-face-uninstall
   omarchy-setup-security-face-lock
   omarchy-remove-security-face-lock
 )
@@ -78,7 +79,7 @@ entries = [
     ("setup.security.face",
      '  "setup.security.face": {"icon":"","label":"Face ID","when":"omarchy-hw-ir-camera","action":"omarchy-launch-floating-terminal-with-presentation omarchy-setup-security-face"},'),
     ("remove.security.face",
-     '  "remove.security.face": {"icon":"","label":"Face ID","when":"grep -q omarchy-face-verify /etc/pam.d/sudo","action":"omarchy-launch-floating-terminal-with-presentation omarchy-remove-security-face"},'),
+     '  "remove.security.face": {"icon":"","label":"Face ID","when":"command -v omarchy-face-uninstall","action":"omarchy-launch-floating-terminal-with-presentation omarchy-face-uninstall"},'),
     ("setup.security.face-models",
      '  "setup.security.face-models": {"icon":"","label":"Manage Face ID","when":"omarchy-hw-ir-camera","action":"omarchy-shell shell summon graveklar.face \'{}\'"},'),
     ("setup.security.face-lock",

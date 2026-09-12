@@ -1,0 +1,162 @@
+#!/bin/bash
+
+# omarchy:summary=Remove face authentication and everything it installed
+# omarchy:requires-sudo=true
+
+# The complete teardown, and deliberately installed into /usr/local/bin rather
+# than left in the repository.
+#
+# Removing a plugin deletes its directory. If the only full uninstaller lives
+# there, then removing the plugin is exactly what takes away the ability to
+# undo the rest -- the PAM edits, the polkit action, the daemon, the cloned
+# lock screen. Somebody who installs from the marketplace never had a checkout
+# to go back to.
+#
+# So this is the one place that knows how to undo everything, and the repo's
+# uninstall.sh simply calls it.
+
+set -uo pipefail
+
+GREEN=$'\e[32m'
+DIM=$'\e[2m'
+RESET=$'\e[0m'
+
+PLUGINS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins"
+SHELL_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json"
+MENU_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/extensions/omarchy-menu.jsonc"
+
+SUDO=(sudo)
+[[ ! -t 0 && -n ${SUDO_ASKPASS:-} ]] && SUDO=(sudo -A)
+
+echo -e "${GREEN}Removing face authentication.\n${RESET}"
+
+# 1. PAM first, always. A stack pointing at helpers that are about to be
+#    deleted means no sudo, and the way out of that is a root shell somebody
+#    had the foresight to leave open.
+for file in /etc/pam.d/sudo /etc/pam.d/polkit-1; do
+  [[ -f $file ]] || continue
+  if grep -qE 'omarchy-face-gate|omarchy-face-verify' "$file"; then
+    "${SUDO[@]}" sed -i -e '/omarchy-face-gate/d' -e '/omarchy-face-verify/d' "$file"
+    echo "  face removed from ${file##*/}"
+  fi
+done
+
+# 2. The lock screen, before the shell restarts. A clone of Omarchy's lock that
+#    outlives this is a fork of the lock screen nobody is maintaining.
+for manifest in "$PLUGINS_DIR"/*/manifest.json; do
+  [[ -f $manifest ]] || continue
+  clone_of=$(jq -r '.omarchy.clonedFrom // empty' "$manifest" 2>/dev/null) || continue
+  [[ $clone_of == omarchy.lock ]] || continue
+  id=$(jq -r .id "$manifest")
+
+  if grep -q 'added by omarchy-face' "$(dirname "$manifest")/Service.qml" 2>/dev/null; then
+    # Ours: put Omarchy's own lock back before removing it, or the machine is
+    # left with no lock plugin enabled at all -- which does not fail loudly, it
+    # just stops locking.
+    omarchy plugin enable omarchy.lock >/dev/null 2>&1 || true
+    omarchy plugin disable "$id" >/dev/null 2>&1 || true
+    rm -rf "${PLUGINS_DIR:?}/$id"
+    echo "  removed the patched lock screen, restored Omarchy's"
+  fi
+done
+
+# A lock screen belonging to another project was adopted, not authored: put its
+# detector back and leave the plugin alone.
+for detector in "$PLUGINS_DIR"/*/check-face-auth.sh; do
+  [[ -f $detector.omarchy-face.bak ]] || continue
+  mv -f "$detector.omarchy-face.bak" "$detector"
+  chmod +x "$detector"
+  echo "  restored ${detector##*/} in $(basename "$(dirname "$detector")")"
+done
+
+# 3. Face models, including identities enrolled for other people. Biometric
+#    material left on disk after an uninstall is the kind of thing nobody
+#    expects and nobody thinks to check.
+if command -v omarchy-face-engine-howdy >/dev/null 2>&1; then
+  omarchy-face-engine-howdy clear "$USER" >/dev/null 2>&1 </dev/null || true
+fi
+"${SUDO[@]}" rm -f /usr/lib/security/howdy/models/identity-*.dat 2>/dev/null || true
+echo "  face models and identities"
+
+# 4. The daemon.
+if command -v systemctl >/dev/null 2>&1; then
+  "${SUDO[@]}" systemctl disable --now omarchy-faced.socket >/dev/null 2>&1 || true
+  "${SUDO[@]}" systemctl stop omarchy-faced.service >/dev/null 2>&1 || true
+  "${SUDO[@]}" rm -f /etc/systemd/system/omarchy-faced.socket \
+    /etc/systemd/system/omarchy-faced.service
+  "${SUDO[@]}" systemctl daemon-reload || true
+  echo "  verification daemon"
+fi
+
+# 5. The engine. Left until last because the steps above use it.
+if command -v omarchy-pkg-drop >/dev/null 2>&1; then
+  omarchy-pkg-drop howdy howdy-bin python-dlib >/dev/null 2>&1 || true
+  echo "  engine packages"
+fi
+
+# 6. Everything privileged, in one call.
+"${SUDO[@]}" bash -s <<'ROOT'
+set -e
+rm -f /usr/local/bin/omarchy-hw-ir-camera \
+      /usr/local/bin/omarchy-face \
+      /usr/local/bin/omarchy-face-gate \
+      /usr/local/bin/omarchy-face-verify \
+      /usr/local/bin/omarchy-face-notify \
+      /usr/local/bin/omarchy-face-engine-howdy \
+      /usr/local/bin/omarchy-face-admin \
+      /usr/local/bin/omarchy-face-identity \
+      /usr/local/bin/omarchy-face-set-idle-lock \
+      /usr/local/bin/omarchy-faced \
+      /usr/local/bin/omarchy-security-probe \
+      /usr/local/bin/omarchy-setup-security-face \
+      /usr/local/bin/omarchy-remove-security-face \
+      /usr/local/bin/omarchy-setup-security-face-lock \
+      /usr/local/bin/omarchy-remove-security-face-lock
+rm -f /usr/share/polkit-1/actions/no.graveklar.face.policy
+rm -f /etc/pam.d/omarchy-lock-face
+rm -rf /run/omarchy-face /var/lib/omarchy-face /etc/omarchy-face
+ROOT
+echo "  helpers, polkit policy, and all state"
+
+# 7. The plugin itself, and the menu that points at it.
+omarchy plugin disable graveklar.face >/dev/null 2>&1 || true
+rm -rf "${PLUGINS_DIR:?}/graveklar.face"
+
+if [[ -f $SHELL_CONFIG ]] && grep -q 'graveklar.face' "$SHELL_CONFIG"; then
+  python3 - "$SHELL_CONFIG" <<'PY'
+import json, sys
+
+path = sys.argv[1]
+try:
+    config = json.load(open(path))
+except Exception:
+    sys.exit(0)
+
+for key in ("plugins", "disabledPlugins"):
+    value = config.get(key)
+    if isinstance(value, list):
+        config[key] = [
+            entry for entry in value
+            if not (entry == "graveklar.face"
+                    or (isinstance(entry, dict) and entry.get("id") == "graveklar.face"))
+        ]
+
+json.dump(config, open(path, "w"), indent=2)
+open(path, "a").write("\n")
+PY
+fi
+
+if [[ -f $MENU_FILE ]] && grep -q 'security.face' "$MENU_FILE"; then
+  sed -i -e '/\/\/ omarchy-face/d' -e '/"setup.security.face"/d' \
+    -e '/"remove.security.face"/d' -e '/"setup.security.face-models"/d' \
+    -e '/"setup.security.face-lock"/d' "$MENU_FILE"
+fi
+echo "  plugin, shell.json entry and menu entries"
+
+# This helper is deleting itself, so it goes last and by absolute path.
+"${SUDO[@]}" rm -f /usr/local/bin/omarchy-face-uninstall
+
+command -v omarchy >/dev/null 2>&1 && omarchy restart shell >/dev/null 2>&1 || true
+
+echo
+echo -e "${GREEN}Removed.${RESET} ${DIM}Your password is what authenticates you again.${RESET}"
