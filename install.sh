@@ -62,33 +62,48 @@ for helper in "${HELPERS[@]}"; do
 done
 
 if [[ -f $MENU_FILE ]]; then
-  if grep -q 'setup.security.face' "$MENU_FILE"; then
-    echo -e "\n${DIM}Menu entries already present.${RESET}"
-  else
-    echo -e "\nAdding Face ID to the Omarchy menu..."
-    python3 - "$MENU_FILE" <<'PY'
+  echo -e "\nUpdating the Omarchy menu..."
+  # Entry by entry, not all-or-nothing. The previous version skipped the whole
+  # block when any face entry was already present, so on an upgrade a newly
+  # added entry could never appear -- indistinguishable from the menu ignoring
+  # it.
+  python3 - "$MENU_FILE" <<'PYMENU'
 import sys
 
 path = sys.argv[1]
 text = open(path).read()
 
-entries = '''
-  // omarchy-face
-  "setup.security.face": {"icon":"","label":"Face ID","when":"omarchy-hw-ir-camera","action":"omarchy-launch-floating-terminal-with-presentation omarchy-setup-security-face"},
-  "remove.security.face": {"icon":"","label":"Face ID","when":"grep -q omarchy-face-verify /etc/pam.d/sudo","action":"omarchy-launch-floating-terminal-with-presentation omarchy-remove-security-face"},
-  "setup.security.face-models": {"icon":"","label":"Manage Face ID","when":"omarchy-hw-ir-camera","action":"omarchy-shell shell summon graveklar.face '{}'"},
-  "setup.security.face-lock": {"icon":"","label":"Face ID on Lock Screen","when":"omarchy-hw-ir-camera","action":"omarchy-launch-floating-terminal-with-presentation omarchy-setup-security-face-lock"},
-'''
+entries = [
+    ("setup.security.face",
+     '  "setup.security.face": {"icon":"","label":"Face ID","when":"omarchy-hw-ir-camera","action":"omarchy-launch-floating-terminal-with-presentation omarchy-setup-security-face"},'),
+    ("remove.security.face",
+     '  "remove.security.face": {"icon":"","label":"Face ID","when":"grep -q omarchy-face-verify /etc/pam.d/sudo","action":"omarchy-launch-floating-terminal-with-presentation omarchy-remove-security-face"},'),
+    ("setup.security.face-models",
+     '  "setup.security.face-models": {"icon":"","label":"Manage Face ID","when":"omarchy-hw-ir-camera","action":"omarchy-shell shell summon graveklar.face \'{}\'"},'),
+    ("setup.security.face-lock",
+     '  "setup.security.face-lock": {"icon":"","label":"Face ID on Lock Screen","when":"omarchy-hw-ir-camera","action":"omarchy-launch-floating-terminal-with-presentation omarchy-setup-security-face-lock"},'),
+]
 
-# The file is JSONC with comments and trailing commas, so it is edited as text
-# rather than parsed and rewritten -- reserializing would throw away the
-# commentary Omarchy ships in it.
-close = text.rindex('}')
-open(path, 'w').write(text[:close] + entries + text[close:])
-PY
-    echo "  Setup > Security > Face ID"
-    echo "  Remove > Security > Face ID"
-  fi
+# The id is matched with its quotes. "setup.security.face" is a prefix of
+# "setup.security.face-models", so a bare substring test answers wrongly for
+# three of these four.
+missing = [line for key, line in entries if ('"%s"' % key) not in text]
+
+if not missing:
+    print("  already up to date")
+else:
+    block = "\n"
+    if "// omarchy-face" not in text:
+        block += "  // omarchy-face\n"
+    block += "\n".join(missing) + "\n"
+
+    # JSONC, with comments and trailing commas: edited as text because
+    # reserializing would throw away the commentary Omarchy ships in it.
+    close = text.rindex("}")
+    open(path, "w").write(text[:close] + block + text[close:])
+    for line in missing:
+        print("  added: %s" % line.split('"label":"')[1].split('"')[0])
+PYMENU
 else
   echo -e "\n${DIM}No $MENU_FILE -- skipping menu entries.${RESET}"
 fi
