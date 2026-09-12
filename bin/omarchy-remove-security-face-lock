@@ -31,6 +31,25 @@ for manifest in "$PLUGINS_DIR"/*/manifest.json; do
   [[ -n $id ]] && CLONE_ID=$id && break
 done
 
+# A lock screen belonging to another project was adopted, not authored: put its
+# detector back and leave the plugin itself alone.
+for detector in "$PLUGINS_DIR"/*/check-face-auth.sh; do
+  [[ -f $detector.omarchy-face.bak ]] || continue
+  mv -f "$detector.omarchy-face.bak" "$detector"
+  chmod +x "$detector"
+  echo "  restored ${detector##*/} in $(basename "$(dirname "$detector")")"
+  ADOPTED=true
+done
+
+if [[ ${ADOPTED:-false} == true ]]; then
+  "${SUDO[@]}" rm -f "$PAM_FILE"
+  echo "  removed $PAM_FILE"
+  omarchy restart shell >/dev/null 2>&1 || true
+  echo
+  echo -e "${GREEN}Done.${RESET} ${DIM}The other plugin's lock screen is untouched.${RESET}"
+  exit 0
+fi
+
 if [[ -n $CLONE_ID ]]; then
   echo "Disabling ${CLONE_ID}, so Omarchy's lock screen takes over again..."
   omarchy plugin disable "$CLONE_ID" >/dev/null 2>&1 || true

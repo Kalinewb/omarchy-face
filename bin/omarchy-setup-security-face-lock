@@ -77,8 +77,62 @@ fi
 SERVICE="$PLUGINS_DIR/$CLONE_ID/Service.qml"
 [[ -f $SERVICE ]] || die "no Service.qml in the clone"
 
-if grep -q 'omarchy-lock-face' "$SERVICE"; then
-  echo "The clone already has the face flow."
+# Somebody else's lock screen may already be the active clone -- Omarchy allows
+# exactly one, and replacements like lock-explorer register as one. Rewriting a
+# plugin this project did not author is not ours to do, and the edit would be
+# lost on their next update anyway. So: adopt it if it already speaks this PAM
+# service, and refuse if it does not.
+OURS=false
+grep -q 'added by omarchy-face' "$SERVICE" && OURS=true
+
+if [[ $OURS == false ]] && grep -q 'omarchy-lock-face' "$SERVICE"; then
+  echo "${DIM}${CLONE_ID} is another project's lock screen, and it already has a"
+  echo "face flow on the same PAM service. Adopting it rather than editing it.${RESET}"
+
+  # Their flow is gated by their own detector, which looks for the engine they
+  # had in mind. Ours is a different engine behind the same PAM service, so the
+  # detector says no and the camera is never tried. Teach it about this setup,
+  # keeping the original so removal can put it back exactly.
+  DETECTOR="$PLUGINS_DIR/$CLONE_ID/check-face-auth.sh"
+  if [[ -f $DETECTOR ]]; then
+    [[ -f $DETECTOR.omarchy-face.bak ]] || cp -a "$DETECTOR" "$DETECTOR.omarchy-face.bak"
+    cat >"$DETECTOR" <<'DETECT'
+#!/bin/bash
+# Replaced by omarchy-face. The original is alongside as
+# check-face-auth.sh.omarchy-face.bak and is restored on removal.
+#
+# Answers yes when EITHER face engine is configured: this lock screen's own,
+# or omarchy-face. Both drive the same PAM service, so whichever is set up is
+# the one that answers when the context starts.
+
+FACE_PAM="/etc/pam.d/omarchy-lock-face"
+[[ -f $FACE_PAM ]] || { echo no; exit 0; }
+
+# omarchy-face: its verifier in the stack, and a model to match against.
+if grep -q "omarchy-face-verify" "$FACE_PAM" 2>/dev/null &&
+  grep -q '"label"' /var/lib/omarchy-face/models.json 2>/dev/null; then
+  echo yes
+  exit 0
+fi
+
+# The original arrangement, unchanged.
+if grep -q "pam_facelock.so" "$FACE_PAM" 2>/dev/null &&
+  [[ -f /usr/lib/security/pam_facelock.so ]] &&
+  compgen -G "/var/lib/facelock/models/*.onnx" >/dev/null 2>&1; then
+  echo yes
+  exit 0
+fi
+
+echo no
+DETECT
+    chmod +x "$DETECTOR"
+    echo "  taught ${DETECTOR##*/} about this setup"
+  else
+    die "${CLONE_ID} has a face flow but no detector this knows how to adopt"
+  fi
+
+elif [[ $OURS == true ]]; then
+  echo "The clone already has our face flow."
 else
   # Two anchors, both checked before anything is written. If Omarchy's lock
   # screen has been rewritten upstream, this refuses rather than guessing --
