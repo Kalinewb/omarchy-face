@@ -250,7 +250,10 @@ section "The terminal must not ask for a face"
 # install.sh once chained into the full terminal setup, which enrolled a face in
 # a TUI. The fix lived in an edit that was never written, so the file kept
 # shipping the old behaviour while everything around it described the new one.
-if grep -qE '^\s*(exec )?omarchy-setup-security-face\s*$' install.sh 2>/dev/null; then
+# Matched on the invocation, not the name: the name also appears in the list of
+# helpers to install, which the first version of this test flagged as a call.
+if grep -q 'exec omarchy-setup-security-face' install.sh 2>/dev/null ||
+  ! grep -q 'omarchy-setup-security-face --no-enroll' install.sh 2>/dev/null; then
   printf '  %s✗%s %-46s %schains into terminal enrolment%s\n' "$RED" "$RESET" "installer builds, never enrols" "$RED" "$RESET"
   ((fail++))
 else
