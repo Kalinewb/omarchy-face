@@ -122,12 +122,41 @@ fetch_pkgbuild() {
 }
 
 build_and_install() {
-  local dir=$1 pkg=$2
+  local dir=$1 pkg=$2 log build_pid elapsed
+
+  log=$(mktemp "${TMPDIR:-/tmp}/omarchy-face-build-$pkg.XXXXXX.log")
+
+  # cmake's progress is counted per object file, so it skips numbers and prints
+  # 100% twice -- once for linking and once for "built target". Watching it go
+  # 98, 100, 100 and then sit there for another minute is not information, it is
+  # an invitation to assume the build has hung. So the build log goes to a file
+  # and what is shown instead is the one number that cannot mislead: how long
+  # this has actually been running.
+  #
   # --nodeps because the dependencies were installed in one privileged call
   # above; without it makepkg reaches for a sudo it cannot prompt on. pacman -U
-  # still checks them at install time, so a gap in that list surfaces here
+  # still checks them at install time, so a gap in that list surfaces at install
   # rather than silently producing a broken package.
-  (cd "$dir" && makepkg -f --noconfirm --nodeps) || die "building $pkg failed"
+  (cd "$dir" && makepkg -f --noconfirm --nodeps) >"$log" 2>&1 &
+  build_pid=$!
+
+  if [[ -t 1 ]]; then
+    local start=$SECONDS
+    while kill -0 "$build_pid" 2>/dev/null; do
+      elapsed=$((SECONDS - start))
+      printf '\r  building %s... %dm%02ds' "$pkg" $((elapsed / 60)) $((elapsed % 60))
+      sleep 1
+    done
+    printf '\r\033[K'
+  fi
+
+  if ! wait "$build_pid"; then
+    echo "Building $pkg failed. Last 20 lines of $log:" >&2
+    tail -20 "$log" >&2
+    die "building $pkg failed"
+  fi
+
+  rm -f "$log"
   as_root pacman -U --needed --noconfirm "$dir"/"$pkg"-*.pkg.tar.zst || die "installing $pkg failed"
 }
 
