@@ -44,7 +44,13 @@ Item {
   // the one failure mode a security overview must not have.
   readonly property var postureRows: {
     var p = root.posture
-    if (!p) return [{ name: "Reading state...", value: "", tone: "unknown" }]
+    if (!p) {
+      if (!root.helpersMissing) return [{ name: "Reading state...", value: "", tone: "unknown" }]
+      return [
+        { name: "Not installed yet", value: "run install.sh", tone: "bad" },
+        { name: "", value: "~/.config/omarchy/plugins/graveklar.face/install.sh", tone: "unknown" },
+      ]
+    }
 
     var rows = []
     var face = p.face || {}
@@ -361,11 +367,20 @@ Item {
     onExited: modelsFile.reload()
   }
 
+  // True when the QML is here but the privileged half is not -- which is
+  // exactly what `omarchy plugin add` produces, since it clones a repository
+  // and installs nothing into /usr/local/bin. Saying so beats a panel that
+  // renders and then does nothing when touched.
+  property bool helpersMissing: false
+
   Process {
     id: probeProc
     command: ["omarchy-security-probe"]
     stdout: StdioCollector { id: probeOut; waitForEnd: true }
-    onExited: root.posture = root.parseJson(probeOut.text, null)
+    onExited: function(code) {
+      root.posture = root.parseJson(probeOut.text, null)
+      root.helpersMissing = (root.posture === null)
+    }
   }
 
   MediaDevices { id: mediaDevices }
@@ -718,7 +733,8 @@ Item {
               : Qt.rgba(Color.polkit.text.r, Color.polkit.text.g, Color.polkit.text.b, 0.09)
             Text {
               anchors.centerIn: parent
-              text: root.needsSetup ? "Set up face unlock"
+              text: root.helpersMissing ? "Run install.sh first"
+                  : root.needsSetup ? "Set up face unlock"
                   : (root.posture && root.posture.face && root.posture.face.models > 0)
                     ? "Manage face models" : "Record your face"
               color: (root.posture && root.posture.face && root.posture.face.hardware)
@@ -728,7 +744,8 @@ Item {
             }
             MouseArea {
               anchors.fill: parent
-              enabled: root.posture && root.posture.face && root.posture.face.hardware
+              enabled: !root.helpersMissing
+                && root.posture && root.posture.face && root.posture.face.hardware
               onClicked: root.needsSetup ? root.runFirstTimeSetup() : root.enterFaceFlow()
             }
           }

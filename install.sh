@@ -134,20 +134,26 @@ if [[ -f $POLICY_SRC ]]; then
   echo "  no.graveklar.face.admin (auth_self_keep)"
 fi
 
-PLUGIN_SRC=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/plugin
+PLUGIN_SRC=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PLUGIN_DIR=$HOME/.config/omarchy/plugins/graveklar.face
 
-if [[ -d $PLUGIN_SRC ]] && command -v omarchy-shell >/dev/null 2>&1; then
-  echo -e "\nInstalling the shell indicator plugin..."
+if command -v omarchy-shell >/dev/null 2>&1; then
+  echo -e "\nInstalling the shell plugin..."
 
-  # Staged in the plugins directory and moved into place, rather than copied
-  # over the live one. The shell watches that directory and reloads on any
-  # change, so a slow copy gets read half-finished and reported as a broken
-  # plugin. The staging name starts with a dot; the registry's glob skips it.
-  staging=$(mktemp -d "$HOME/.config/omarchy/plugins/.graveklar.face.XXXXXX")
-  cp -r "$PLUGIN_SRC/." "$staging/"
-  rm -rf "$PLUGIN_DIR"
-  mv "$staging" "$PLUGIN_DIR"
+  if [[ $PLUGIN_SRC == "$PLUGIN_DIR" ]]; then
+    # `omarchy plugin add` already cloned the repository here, so the plugin is
+    # in place and copying it over itself would only destroy the checkout.
+    echo "  already in the plugins directory"
+  else
+    # Staged alongside and moved into place, rather than copied over the live
+    # one. The shell watches that directory and reloads on any change, so a slow
+    # copy gets read half-finished and reported as a broken plugin. The staging
+    # name starts with a dot; the registry's glob skips it.
+    staging=$(mktemp -d "$HOME/.config/omarchy/plugins/.graveklar.face.XXXXXX")
+    cp -r "$PLUGIN_SRC/manifest.json" "$PLUGIN_SRC/Service.qml" "$PLUGIN_SRC/Panel.qml" "$staging/"
+    rm -rf "$PLUGIN_DIR"
+    mv "$staging" "$PLUGIN_DIR"
+  fi
 
   # Third-party plugins are inert until they appear in shell.json, however
   # valid the manifest is. Enabling is what actually mounts the service.

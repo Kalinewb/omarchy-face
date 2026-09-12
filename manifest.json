@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "id": "graveklar.face",
-  "name": "Face Unlock Indicator",
-  "version": "0.1.0",
+  "name": "Face Unlock",
+  "version": "1.0.0",
   "author": "graveklar",
   "license": "MIT",
-  "description": "Guided face enrolment with a live camera preview, plus an indicator while authenticating.",
+  "description": "Face unlock for sudo, polkit and the lock screen using your laptop's infrared camera, with guided enrolment and a security overview.",
   "kinds": [
     "service",
     "panel"
