@@ -168,10 +168,19 @@ Item {
   // True when there is nothing to enrol INTO yet: no engine installed, or the
   // PAM stacks were never wired. Enrolling in that state produces a model that
   // authenticates nothing, after a failure whose message is about cameras.
-  readonly property bool needsSetup: {
+  // Only the engine build needs a terminal: it compiles a package. Everything
+  // after that -- recording a face, and the PAM wiring a verified recording
+  // earns -- happens here, which is the whole point of the panel.
+  readonly property bool needsEngine: {
     var face = root.posture && root.posture.face
     if (!face) return false
-    return !face.installed || !(face.sudo || face.polkit)
+    return !face.installed
+  }
+
+  readonly property bool nothingEnrolled: {
+    var face = root.posture && root.posture.face
+    if (!face) return false
+    return !face.models
   }
 
   // Cold start belongs in a terminal: it builds a package, and a progress bar
@@ -244,8 +253,11 @@ Item {
 
   Process {
     id: setupProc
+    // --no-enroll: the terminal installs the engine and points it at the
+    // camera, and stops. Being told to hold still by a window full of build
+    // output is not a setup flow.
     command: ["omarchy-launch-floating-terminal-with-presentation",
-              "omarchy-setup-security-face"]
+              "omarchy-setup-security-face --no-enroll"]
   }
 
   function enterFaceFlow() {
@@ -754,9 +766,9 @@ Item {
             Text {
               anchors.centerIn: parent
               text: root.helpersMissing ? "Install"
-                  : root.needsSetup ? "Set up face unlock"
-                  : (root.posture && root.posture.face && root.posture.face.models > 0)
-                    ? "Manage face models" : "Record your face"
+                  : root.needsEngine ? "Install the face engine"
+                  : root.nothingEnrolled ? "Record your face"
+                  : "Manage face models"
               color: (root.helpersMissing
                       || (root.posture && root.posture.face && root.posture.face.hardware))
                 ? Color.polkit.background : Color.polkit.text
@@ -768,7 +780,7 @@ Item {
               enabled: root.helpersMissing
                 || (root.posture && root.posture.face && root.posture.face.hardware)
               onClicked: root.helpersMissing ? root.runInstaller()
-                       : root.needsSetup ? root.runFirstTimeSetup()
+                       : root.needsEngine ? root.runFirstTimeSetup()
                        : root.enterFaceFlow()
             }
           }
