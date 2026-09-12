@@ -70,10 +70,27 @@ require_installed() {
 #
 # We are root by then and the target account is explicit via -U, so supplying it
 # changes nothing about who is affected; it only satisfies the check.
+# Every destructive howdy subcommand asks "Do you want to continue [y/N]" and
+# throws on EOF when there is no terminal to answer it. That has now bitten
+# twice: an uninstall that reported success while leaving biometric templates on
+# disk, and a replace-by-label that hung forever. So -y is supplied to all of
+# them whenever stdin is not a terminal, rather than remembered case by case.
+#
+# `add` is deliberately not in this list: its prompt is for a label, not a
+# confirmation, and cmd_enroll answers it by piping the label in.
 run_howdy() {
   local user=$1
   shift
-  as_root env SUDO_USER="$user" howdy -U "$user" "$@"
+  local sub=${1:-}
+  local flags=()
+
+  case $sub in
+    remove | clear | disable)
+      [[ -t 0 ]] || flags+=(-y)
+      ;;
+  esac
+
+  as_root env SUDO_USER="$user" howdy -U "$user" "$@" "${flags[@]}"
 }
 
 # Root for the model store, and nothing else. Called as root under PAM, and
@@ -335,13 +352,8 @@ cmd_remove() {
 
 cmd_clear() {
   local user=${1:?clear needs a user}
-  local flags=()
   require_installed
-  # howdy asks "Do you want to continue [y/N]" and throws on EOF when there is
-  # no terminal. Uninstallers do not have one, so without this the removal of
-  # somebody's biometric templates fails and reports success.
-  [[ -t 0 ]] || flags+=(-y)
-  run_howdy "$user" clear "${flags[@]}"
+  run_howdy "$user" clear
 }
 
 # Prints a count, or nothing at all when the answer is unknowable without root.

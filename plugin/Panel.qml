@@ -26,6 +26,7 @@ Item {
   property string chosenLabel: "Everyday glasses"
   property string message: ""
   property bool lastOk: false
+  property int replacedCount: 0
   property real lastCertainty: -1
   property real threshold: -1
   property var models: []
@@ -164,10 +165,37 @@ Item {
 
   function beginCapture() {
     if (phase !== "framing" && phase !== "verdict") return
+
+    // Authorise FIRST. pkexec would otherwise prompt after the countdown, so
+    // the user is told to hold still, holds still, and is then shown a password
+    // box -- and the camera opens once they have looked away to type it.
+    //
+    // The policy is auth_self_keep, so the pkexec that follows reuses this and
+    // does not ask again.
     phase = "capturing"
-    message = "Hold still and look at the camera"
-    countdown.value = 3
-    countdown.restart()
+    message = "Authorising..."
+    authProc.running = true
+  }
+
+  Process {
+    id: authProc
+    // Run through a shell so $$ resolves to a real pid: pkcheck identifies the
+    // process whose authorisation is being asked about, and that has to be an
+    // actual process in this session.
+    command: ["bash", "-c",
+              "pkcheck --action-id no.graveklar.face.admin --process $$ --allow-user-interaction"]
+    onExited: function(code) {
+      if (code !== 0) {
+        root.phase = "verdict"
+        root.lastOk = false
+        root.lastCertainty = -1
+        root.message = "Not authorised, so nothing was recorded."
+        return
+      }
+      root.message = "Hold still and look at the camera"
+      countdown.value = 3
+      countdown.restart()
+    }
   }
 
   function runEnroll() {
@@ -224,6 +252,7 @@ Item {
     onExited: function(code) {
       var parsed = root.parseJson(enrollOut.text, null)
       if (parsed && parsed.ok) {
+        root.replacedCount = parsed.replaced || 0
         root.runCheck()
       } else {
         root.phase = "verdict"
@@ -251,7 +280,9 @@ Item {
       if (root.lastOk && root.weak)
         root.message = "It recognised you, but only just. Try again in different light, or without moving as much."
       else if (root.lastOk)
-        root.message = "Recognised you comfortably."
+        root.message = root.replacedCount > 0
+          ? "Recognised you comfortably. Replaced the previous \"" + root.chosenLabel + "\" model."
+          : "Recognised you comfortably."
       else
         root.message = "It did not recognise you from that model. Worth trying again."
 
