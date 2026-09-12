@@ -5,6 +5,23 @@
 
 set -e
 
+# --no-enroll installs the engine and points it at the camera, and stops there.
+# Recording a face belongs in the panel, where the framing is visible; a
+# terminal is the right place for a package build and the wrong place to be
+# told to hold still.
+#
+# --pam-only is the other half, used by the panel once it has recorded a model
+# and confirmed it matches. Splitting them keeps the rule that made this safe:
+# PAM is only ever pointed at face authentication once a model exists AND has
+# been shown to work, so a failed setup cannot leave the stacks pointing at a
+# check that can only fail.
+NO_ENROLL=false
+PAM_ONLY=false
+case ${1:-} in
+  --no-enroll) NO_ENROLL=true ;;
+  --pam-only) PAM_ONLY=true ;;
+esac
+
 GREEN=$'\e[32m'
 RED=$'\e[31m'
 YELLOW=$'\e[33m'
@@ -122,6 +139,26 @@ EOF
   fi
 }
 
+if [[ $PAM_ONLY == true ]]; then
+  assert_helper_safe "$HELPER_DIR/omarchy-face-gate"
+  assert_helper_safe "$HELPER_DIR/omarchy-face-verify"
+
+  # The whole point of splitting enrolment out was to keep PAM from being
+  # pointed at face authentication before there is a face to authenticate
+  # against. A mode that skips straight to the wiring has to enforce that
+  # itself, or it is just a shorter way to break the rule -- which is exactly
+  # what it did the first time it was run.
+  ENGINE=$(omarchy-face engine)
+  MODELS=$("${SUDO[@]}" "omarchy-face-engine-$ENGINE" count-models "$TARGET_USER" 2>/dev/null || echo 0)
+  if ! [[ $MODELS =~ ^[0-9]+$ ]] || (( MODELS < 1 )); then
+    echo "Refusing to wire PAM: no face is enrolled for $TARGET_USER." >&2
+    exit 1
+  fi
+
+  setup_pam_config
+  exit 0
+fi
+
 echo -e "${GREEN}Setting up face authentication.\n${RESET}"
 
 # Bail before installing anything if there is no sensor to talk to.
@@ -155,6 +192,13 @@ echo "Configuring ${ENGINE} for the IR sensor..."
 "omarchy-face-engine-$ENGINE" configure "$CAM_PATH" "$CAM_SIZE"
 
 echo
+if [[ $NO_ENROLL == true ]]; then
+  echo -e "${GREEN}The engine is installed and pointed at your camera.${RESET}"
+  echo "${DIM}Record your face from the panel: it shows you the framing, and tells${RESET}"
+  echo "${DIM}you whether the model it captured actually recognises you.${RESET}"
+  exit 0
+fi
+
 # Counted as root. The model store is root-owned, and count-models deliberately
 # refuses to raise a password prompt in the middle of a status readout -- so
 # asked as the user it answers "unknown", not "none". Treating that as zero is

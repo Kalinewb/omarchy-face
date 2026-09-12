@@ -191,10 +191,24 @@ for model in sorted(models, key=lambda m: m.get("id", 0), reverse=True):
       status=$?
       certainty=$(printf '%s' "$report" | sed -n 's/.*Certainty of winning frame:[[:space:]]*\([0-9.]*\).*/\1/p' | tail -1)
 
-      printf '{"ok":true,"label":"%s","replaced":%d,"verified":%s,"certainty":%s,"threshold":%s}\n' \
+      # Wiring PAM is the last step of setting this up, and it belongs here
+      # rather than in the installer: the rule worth keeping is that PAM is
+      # only ever pointed at face authentication once a model exists AND has
+      # been shown to match. That is exactly what just happened, and it is not
+      # knowable any earlier. A failed enrolment therefore leaves the auth
+      # stacks untouched, which is the same guarantee the terminal setup gave.
+      wired=false
+      if [[ $status -eq 0 ]] && ! grep -q omarchy-face-verify /etc/pam.d/sudo 2>/dev/null; then
+        if omarchy-setup-security-face --pam-only >/dev/null 2>&1; then
+          wired=true
+          audit "wired face authentication into sudo and polkit for $user"
+        fi
+      fi
+
+      printf '{"ok":true,"label":"%s","replaced":%d,"verified":%s,"certainty":%s,"threshold":%s,"wired":%s}\n' \
         "${label//\"/}" "$replaced" \
         "$([[ $status -eq 0 ]] && echo true || echo false)" \
-        "${certainty:-null}" "${threshold:-null}"
+        "${certainty:-null}" "${threshold:-null}" "$wired"
     else
       # howdy's failure text is the useful part: too dark, no face found, and
       # so on. Flattened to one line so the caller can parse this as JSON.

@@ -338,7 +338,9 @@ Item {
         root.threshold = (parsed.threshold === null || parsed.threshold === undefined)
           ? -1 : Number(parsed.threshold)
 
-        if (root.lastOk && root.weak)
+        if (parsed.wired)
+          root.message = "Recognised you. Face unlock is now on for sudo and polkit."
+        else if (root.lastOk && root.weak)
           root.message = "It recognised you, but only just. Try again in different light, or without moving as much."
         else if (root.lastOk)
           root.message = root.replacedCount > 0

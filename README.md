@@ -33,9 +33,20 @@ omarchy plugin add https://github.com/Kalinewb/omarchy-face --enable
 ```
 
 It will ask which bar section to put the button in. Click that button, then
-press **Install**. The rest
-happens in a terminal it opens for you: the helpers go in, the daemon is
-registered, and it offers to walk you through enrolment.
+press **Install**. A terminal opens for the part that belongs in one — the
+helpers go in, the daemon is registered, and it offers to build the engine,
+which compiles a package and takes a few minutes.
+
+Recording your face happens in the panel afterwards, not in that terminal. A
+terminal is the right place for a package build and the wrong place to be told
+to hold still while something you cannot see decides whether it recognises you.
+The panel shows the framing, and tells you whether the model it captured
+actually recognises you rather than assuming it does.
+
+PAM is wired at that moment and not before: the rule worth keeping is that
+nothing points at face authentication until a model exists **and** has been
+shown to work, so a failed setup cannot leave a machine pointing at a check
+that can only fail.
 
 The button is the way in on purpose. Menu entries are written by `install.sh`,
 which adding a plugin does not run — so "open Setup > Security" would be
