@@ -91,6 +91,32 @@ run_howdy() {
   as_root env SUDO_USER="$user" howdy -U "$user" "$@" "${flags[@]}"
 }
 
+# The mirror of as_root, and just as necessary. An AUR build has to happen
+# unprivileged -- yay and makepkg both refuse to run as root, and they are right
+# to -- but when this is invoked from a GUI the whole helper is already root,
+# because that is the only way the privileged half of the work can happen at
+# all. So the build steps drop back to whoever asked.
+#
+# Without this, installing the engine from the panel fails at the first fetch
+# with an error about build files, which sounds like a network problem and is
+# not one.
+as_user() {
+  local target=""
+  if [[ $EUID -eq 0 ]]; then
+    if [[ -n ${PKEXEC_UID:-} ]]; then
+      target=$(id -un "$PKEXEC_UID" 2>/dev/null || true)
+    elif [[ -n ${SUDO_USER:-} ]]; then
+      target=$SUDO_USER
+    fi
+  fi
+
+  if [[ -n $target && $target != root ]]; then
+    runuser -u "$target" -- "$@"
+  else
+    "$@"
+  fi
+}
+
 # Root for the model store, and nothing else. Called as root under PAM, and
 # with sudo from the CLI. Falls back to SUDO_ASKPASS when there is no terminal
 # for sudo to prompt on, so enrollment is drivable from something that is not a
@@ -142,8 +168,10 @@ cmd_describe() {
 # python-dlib, edited -- in between.
 fetch_pkgbuild() {
   local pkg=$1 dir
-  dir=$(mktemp -d "${TMPDIR:-/tmp}/omarchy-face-build.XXXXXX") || return 1
-  (cd "$dir" && yay -G "$pkg" >/dev/null 2>&1) || {
+  # Created by the build user, not by root: makepkg will not write into a
+  # directory it does not own.
+  dir=$(as_user mktemp -d "${TMPDIR:-/tmp}/omarchy-face-build.XXXXXX") || return 1
+  as_user bash -c 'cd "$1" && yay -G "$2" >/dev/null 2>&1' _ "$dir" "$pkg" || {
     rm -rf "$dir"
     return 1
   }
@@ -166,7 +194,7 @@ build_and_install() {
   # above; without it makepkg reaches for a sudo it cannot prompt on. pacman -U
   # still checks them at install time, so a gap in that list surfaces at install
   # rather than silently producing a broken package.
-  (cd "$dir" && makepkg -f --noconfirm --nodeps) >"$log" 2>&1 &
+  as_user bash -c 'cd "$1" && makepkg -f --noconfirm --nodeps' _ "$dir" >"$log" 2>&1 &
   build_pid=$!
 
   if [[ -t 1 ]]; then

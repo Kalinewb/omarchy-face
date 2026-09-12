@@ -43,6 +43,13 @@ Item {
   // purpose -- reporting something as fine when it could not be determined is
   // the one failure mode a security overview must not have.
   readonly property var postureRows: {
+    if (root.phase === "installing") {
+      return [
+        { name: "Installing the face engine", value: root.buildSeconds + "s", tone: "unknown" },
+        { name: "It compiles a package. This takes a few minutes.", value: "", tone: "unknown" },
+      ]
+    }
+
     var p = root.posture
     if (!p) {
       if (!root.helpersMissing) return [{ name: "Reading state...", value: "", tone: "unknown" }]
@@ -237,9 +244,41 @@ Item {
     if (entry.run) root.runInTerminal(entry.run)
   }
 
+  property int buildSeconds: 0
+
+  // The build stays here rather than opening a terminal. It takes minutes, so
+  // the one number that cannot mislead -- how long it has been going -- is
+  // shown, and the failure path prints what actually went wrong instead of
+  // sending somebody to find a log.
   function runFirstTimeSetup() {
-    setupProc.running = true
-    root.requestClose()
+    phase = "installing"
+    buildSeconds = 0
+    message = "Installing the face engine. This compiles a package and takes a few minutes."
+    buildClock.restart()
+    engineProc.command = ["pkexec", "/usr/local/bin/omarchy-face-admin",
+                          "install-engine", root.userName]
+    engineProc.running = true
+  }
+
+  Timer {
+    id: buildClock
+    interval: 1000
+    repeat: true
+    running: root.phase === "installing"
+    onTriggered: root.buildSeconds += 1
+  }
+
+  Process {
+    id: engineProc
+    stdout: StdioCollector { id: engineOut; waitForEnd: true }
+    onExited: {
+      var parsed = root.parseJson(engineOut.text, null)
+      root.phase = "overview"
+      root.message = (parsed && parsed.ok)
+        ? ""
+        : ("The engine did not install. " + ((parsed && parsed.error) ? String(parsed.error).slice(0, 160) : ""))
+      probeProc.running = true
+    }
   }
 
   // `omarchy plugin add` leaves the plugin here without its privileged half,
@@ -765,7 +804,8 @@ Item {
               : Qt.rgba(Color.polkit.text.r, Color.polkit.text.g, Color.polkit.text.b, 0.09)
             Text {
               anchors.centerIn: parent
-              text: root.helpersMissing ? "Install"
+              text: root.phase === "installing" ? "Installing..."
+                  : root.helpersMissing ? "Install"
                   : root.needsEngine ? "Install the face engine"
                   : root.nothingEnrolled ? "Record your face"
                   : "Manage face models"
@@ -777,8 +817,9 @@ Item {
             }
             MouseArea {
               anchors.fill: parent
-              enabled: root.helpersMissing
-                || (root.posture && root.posture.face && root.posture.face.hardware)
+              enabled: root.phase !== "installing"
+                && (root.helpersMissing
+                    || (root.posture && root.posture.face && root.posture.face.hardware))
               onClicked: root.helpersMissing ? root.runInstaller()
                        : root.needsEngine ? root.runFirstTimeSetup()
                        : root.enterFaceFlow()

@@ -239,6 +239,29 @@ for model in sorted(models, key=lambda m: m.get("id", 0), reverse=True):
     "$ENGINE" list-json "$user" 2>/dev/null || die_json "could not read models"
     ;;
 
+  install-engine)
+    # The engine build, behind the same prompt as everything else privileged
+    # here, so the panel can run it without opening a terminal. It compiles a
+    # package and takes minutes; the caller is expected to show that it is
+    # working rather than freeze.
+    audit "installing the face engine, requested by uid ${PKEXEC_UID:-0}"
+
+    if ! out=$("$ENGINE" install 2>&1); then
+      printf '{"ok":false,"error":"%s"}\n' \
+        "$(printf '%s' "$out" | tr '\n' ' ' | sed 's/"/\\"/g' | tail -c 400)"
+      exit 0
+    fi
+
+    # Point it at the camera in the same call: an engine installed but aimed at
+    # nothing is a state with no honest name.
+    if describe=$(omarchy-hw-ir-camera --describe 2>/dev/null); then
+      IFS=$'\t' read -r _ _ path size <<<"$describe"
+      "$ENGINE" configure "$path" "$size" >/dev/null 2>&1 || true
+    fi
+
+    printf '{"ok":true}\n'
+    ;;
+
   reset-faillock)
     # A tripped faillock is what "my password suddenly stopped working" is,
     # and clearing it is exactly as sensitive as any other change here, so it
