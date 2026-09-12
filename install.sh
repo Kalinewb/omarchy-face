@@ -116,14 +116,36 @@ if [[ -d $PLUGIN_SRC ]] && command -v omarchy-shell >/dev/null 2>&1; then
 
   # Third-party plugins are inert until they appear in shell.json, however
   # valid the manifest is. Enabling is what actually mounts the service.
-  omarchy plugin enable graveklar.face >/dev/null 2>&1 || true
+  #
+  # `enable` resolves the id against the shell's registry, not the directory on
+  # disk, so calling it the instant after creating that directory can fail --
+  # the shell has not noticed yet. Nudge the registry, then retry rather than
+  # assume. And do NOT swallow the outcome: a silent failure here installs
+  # everything correctly and leaves the plugin switched off, which looks like
+  # the plugin being broken rather than not enabled.
+  omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
+
+  enabled=false
+  for attempt in 1 2 3; do
+    if omarchy plugin enable graveklar.face >/dev/null 2>&1; then
+      enabled=true
+      break
+    fi
+    sleep 1
+  done
+
+  if [[ $enabled == true ]]; then
+    echo "  graveklar.face (spinner while authenticating, flourish on unlock)"
+  else
+    echo "  ${RED}graveklar.face installed but could not be enabled${RESET}"
+    echo "  run: omarchy plugin enable graveklar.face"
+  fi
 
   # rescanPlugins is not enough here. This plugin is keepLoaded, and a rescan
   # leaves an already-mounted service instance running the code it started
   # with -- so an updated Service.qml installs cleanly, reports no errors, and
   # changes nothing on screen. Only a restart re-instantiates it.
   omarchy restart shell >/dev/null 2>&1 || true
-  echo "  graveklar.face (spinner while authenticating, flourish on unlock)"
 fi
 
 echo

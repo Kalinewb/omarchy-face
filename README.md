@@ -279,7 +279,10 @@ Two notes for anyone editing it:
   `Service.qml`. Run `omarchy restart shell`.
 - Third-party plugins are inert until they appear in `shell.json`. A valid
   manifest in the plugins directory does nothing on its own; `omarchy plugin
-  enable graveklar.face` is what mounts it.
+  enable graveklar.face` is what mounts it. `enable` resolves the id against the
+  running shell's registry rather than the directory on disk, so calling it
+  immediately after creating that directory can fail; the installer nudges the
+  registry and retries.
 
 Its card is forced opaque. The theme's polkit surface token is semi-transparent
 because Hyprland blurs that dialog through a layer rule matched on its
