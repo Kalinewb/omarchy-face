@@ -1,216 +1,74 @@
 #!/bin/bash
 
-# Install the omarchy-face helpers into /usr/local/bin and add the menu entries.
-# Installing does not configure anything: run `omarchy-setup-security-face`
-# (or Setup > Security > Face ID) afterwards.
-
-set -e
-
-GREEN=$'\e[32m'
-RED=$'\e[31m'
-DIM=$'\e[2m'
-RESET=$'\e[0m'
-
-SRC_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/bin
-BIN_DIR=/usr/local/bin
-MENU_FILE=$HOME/.config/omarchy/extensions/omarchy-menu.jsonc
-
-HELPERS=(
-  omarchy-face-admin
-  omarchy-face-identity
-  omarchy-security-probe
-  omarchy-face-set-idle-lock
-  omarchy-faced
-  omarchy-hw-ir-camera
-  omarchy-face
-  omarchy-face-gate
-  omarchy-face-verify
-  omarchy-face-notify
-  omarchy-face-engine-howdy
-  omarchy-setup-security-face
-  omarchy-remove-security-face
-  omarchy-face-uninstall
-  omarchy-setup-security-face-lock
-  omarchy-remove-security-face-lock
-)
-
-echo -e "${GREEN}Installing omarchy-face helpers to ${BIN_DIR}.\n${RESET}"
-
-sources=()
-for helper in "${HELPERS[@]}"; do
-  [[ -f $SRC_DIR/$helper ]] || {
-    echo "Missing $SRC_DIR/$helper" >&2
-    exit 1
-  }
-  sources+=("$SRC_DIR/$helper")
-done
-
-# One privileged call for the lot, rather than one per file: on a machine where
-# sudo cannot cache a credential -- no controlling terminal, for instance --
-# per-file calls mean one password prompt per helper.
+# Sync this working tree into the live plugin directory.
 #
-# Honour SUDO_ASKPASS when there is no terminal to prompt on, so this is
-# drivable from a script or an editor as well as from a shell.
-SUDO=(sudo)
-[[ ! -t 0 && -n ${SUDO_ASKPASS:-} ]] && SUDO=(sudo -A)
+# Development cannot happen in ~/.config/omarchy/plugins: that tree is watched
+# recursively, and every write there reloads every plugin bar widget in the
+# shell (plan-engine.md E13). Editing in place makes the desktop flicker
+# continuously, and running git there is worse. So the repo lives outside it and
+# this pushes a copy in: one write burst, one reload, instead of one per
+# keystroke.
+#
+#   ./install.sh              install and restart the shell
+#   ./install.sh --no-restart install only (non-entry QML will render stale)
+#   ./install.sh --dev        restart the shell with OMARCHY_FACE_DEV_BIN set,
+#                             so the GUI talks to dev/bin instead of helpers
+#                             that do not exist yet (plan-gui.md §8)
+#
+# It installs nothing outside the plugin folder. Face's helpers, units and
+# polkit policy are installed by the GUI, under one owner prompt, and they are
+# not part of this repo's phase 1.
 
-# root:root 0755 is not housekeeping: two of these are executed by root from a
-# PAM stack, and the setup script refuses to wire them in if they are writable
-# by anyone else.
-"${SUDO[@]}" install -o root -g root -m 0755 -t "$BIN_DIR" "${sources[@]}"
+set -euo pipefail
 
-for helper in "${HELPERS[@]}"; do
-  echo "  $helper"
-done
+ID="graveklar.face"
+DEST="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/$ID"
+SRC="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-if [[ -f $MENU_FILE ]]; then
-  echo -e "\nUpdating the Omarchy menu..."
-  # Entry by entry, not all-or-nothing. The previous version skipped the whole
-  # block when any face entry was already present, so on an upgrade a newly
-  # added entry could never appear -- indistinguishable from the menu ignoring
-  # it.
-  python3 - "$MENU_FILE" <<'PYMENU'
-import sys
+MODE=${1:-}
 
-path = sys.argv[1]
-text = open(path).read()
+mkdir -p "$DEST"
 
-entries = [
-    ("setup.security.face",
-     '  "setup.security.face": {"icon":"","label":"Face ID","when":"omarchy-hw-ir-camera","action":"omarchy-launch-floating-terminal-with-presentation omarchy-setup-security-face"},'),
-    ("remove.security.face",
-     '  "remove.security.face": {"icon":"","label":"Face ID","when":"command -v omarchy-face-uninstall","action":"omarchy-launch-floating-terminal-with-presentation omarchy-face-uninstall"},'),
-    ("setup.security.face-models",
-     '  "setup.security.face-models": {"icon":"","label":"Manage Face ID","when":"omarchy-hw-ir-camera","action":"omarchy-shell shell summon graveklar.face \'{}\'"},'),
-    ("setup.security.face-lock",
-     '  "setup.security.face-lock": {"icon":"","label":"Face ID on Lock Screen","when":"omarchy-hw-ir-camera","action":"omarchy-launch-floating-terminal-with-presentation omarchy-setup-security-face-lock"},'),
-]
+# dev/ stays out of the installed copy: the stubs are run from the repo through
+# $OMARCHY_FACE_DEV_BIN, and a plugin folder should not ship a second set of
+# helpers that answer differently from the real ones.
+rsync -a --delete \
+  --exclude '.git' --exclude 'install.sh' --exclude 'dev' \
+  --exclude '*.bak' --exclude '*.bak.*' \
+  "$SRC/" "$DEST/"
 
-# The id is matched with its quotes. "setup.security.face" is a prefix of
-# "setup.security.face-models", so a bare substring test answers wrongly for
-# three of these four.
-missing = [line for key, line in entries if ('"%s"' % key) not in text]
+if command -v omarchy >/dev/null; then
+  omarchy plugin validate "$DEST" || { echo "install.sh: plugin failed validation" >&2; exit 1; }
+fi
+echo "installed $ID -> $DEST"
 
-if not missing:
-    print("  already up to date")
-else:
-    block = "\n"
-    if "// omarchy-face" not in text:
-        block += "  // omarchy-face\n"
-    block += "\n".join(missing) + "\n"
-
-    # JSONC, with comments and trailing commas: edited as text because
-    # reserializing would throw away the commentary Omarchy ships in it.
-    close = text.rindex("}")
-    open(path, "w").write(text[:close] + block + text[close:])
-    for line in missing:
-        print("  added: %s" % line.split('"label":"')[1].split('"')[0])
-PYMENU
-else
-  echo -e "\n${DIM}No $MENU_FILE -- skipping menu entries.${RESET}"
+if [[ $MODE == --no-restart ]]; then
+  echo "(shell not restarted — edits to any .qml but the entry points will render stale)"
+  exit 0
 fi
 
-# The setup panel runs as the user and must ask root to touch the face models.
-# Without this policy pkexec falls back to demanding the root password, which on
-# a single-user laptop is usually not even set.
-# The verification daemon, for PAM stacks that run unprivileged. Socket
-# activated: it is started by the first request and exits when idle.
-UNIT_SRC=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/systemd
-if [[ -d $UNIT_SRC ]] && command -v systemctl >/dev/null 2>&1; then
-  echo -e "\nInstalling the verification daemon..."
-  "${SUDO[@]}" install -o root -g root -m 0644 \
-    "$UNIT_SRC/omarchy-faced.socket" "$UNIT_SRC/omarchy-faced.service" \
-    -t /etc/systemd/system
-  "${SUDO[@]}" systemctl daemon-reload
-  "${SUDO[@]}" systemctl enable --now omarchy-faced.socket >/dev/null 2>&1 ||
-    echo "  ${RED}could not enable omarchy-faced.socket${RESET}"
-  echo "  omarchy-faced.socket"
-fi
+command -v omarchy >/dev/null || exit 0
 
-POLICY_SRC=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/polkit/no.graveklar.face.policy
-if [[ -f $POLICY_SRC ]]; then
-  echo -e "\nInstalling the polkit policy..."
-  "${SUDO[@]}" install -o root -g root -m 0644 "$POLICY_SRC" \
-    /usr/share/polkit-1/actions/no.graveklar.face.policy
-  echo "  no.graveklar.face.admin (auth_self_keep)"
-fi
-
-PLUGIN_SRC=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PLUGIN_DIR=$HOME/.config/omarchy/plugins/graveklar.face
-
-if command -v omarchy-shell >/dev/null 2>&1; then
-  echo -e "\nInstalling the shell plugin..."
-
-  if [[ $PLUGIN_SRC == "$PLUGIN_DIR" ]]; then
-    # `omarchy plugin add` already cloned the repository here, so the plugin is
-    # in place and copying it over itself would only destroy the checkout.
-    echo "  already in the plugins directory"
-  else
-    # Staged alongside and moved into place, rather than copied over the live
-    # one. The shell watches that directory and reloads on any change, so a slow
-    # copy gets read half-finished and reported as a broken plugin. The staging
-    # name starts with a dot; the registry's glob skips it.
-    staging=$(mktemp -d "$HOME/.config/omarchy/plugins/.graveklar.face.XXXXXX")
-    cp -r "$PLUGIN_SRC/manifest.json" "$PLUGIN_SRC/Service.qml" \
-      "$PLUGIN_SRC/Panel.qml" "$PLUGIN_SRC/BarWidget.qml" "$staging/"
-    rm -rf "$PLUGIN_DIR"
-    mv "$staging" "$PLUGIN_DIR"
-  fi
-
-  # Third-party plugins are inert until they appear in shell.json, however
-  # valid the manifest is. Enabling is what actually mounts the service.
-  #
-  # `enable` resolves the id against the shell's registry, not the directory on
-  # disk, so calling it the instant after creating that directory can fail --
-  # the shell has not noticed yet. Nudge the registry, then retry rather than
-  # assume. And do NOT swallow the outcome: a silent failure here installs
-  # everything correctly and leaves the plugin switched off, which looks like
-  # the plugin being broken rather than not enabled.
-  omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
-
-  enabled=false
-  for _ in 1 2 3; do
-    if omarchy plugin enable graveklar.face >/dev/null 2>&1; then
-      enabled=true
-      break
-    fi
-    sleep 1
+if [[ $MODE == --dev ]]; then
+  # The shell is spawned by Hyprland, so it inherits Hyprland's environment and
+  # not this terminal's (omarchy-restart-shell:68-70). To give the shell a
+  # variable for one session, kill it the way the restart script does and ask
+  # Hyprland to exec the launcher with the variable in front of it.
+  FIXTURE=${OMARCHY_FACE_DEV_FIXTURE:-fresh}
+  SHELL_PATH=${OMARCHY_PATH:-$(systemctl --user show-environment 2>/dev/null | sed -n 's/^OMARCHY_PATH=//p' | tail -n 1)}
+  echo "restarting the shell with OMARCHY_FACE_DEV_BIN=$SRC/dev/bin (fixture: $FIXTURE)"
+  while timeout 5 quickshell kill -p "$SHELL_PATH/shell" --any-display >/dev/null 2>&1; do :; done
+  hyprctl dispatch "hl.dsp.exec_cmd(\"env OMARCHY_FACE_DEV_BIN=$SRC/dev/bin OMARCHY_FACE_DEV_FIXTURE=$FIXTURE OMARCHY_FACE_DEV_STATE=$SRC/dev/fixtures/$FIXTURE omarchy-launch-shell\")" >/dev/null
+  for _ in $(seq 1 40); do
+    omarchy-shell shell ping >/dev/null 2>&1 && break
+    sleep 0.25
   done
-
-  if [[ $enabled == true ]]; then
-    echo "  graveklar.face (spinner while authenticating, flourish on unlock)"
-  else
-    echo "  ${RED}graveklar.face installed but could not be enabled${RESET}"
-    echo "  run: omarchy plugin enable graveklar.face"
-  fi
-
-  # rescanPlugins is not enough here. This plugin is keepLoaded, and a rescan
-  # leaves an already-mounted service instance running the code it started
-  # with -- so an updated Service.qml installs cleanly, reports no errors, and
-  # changes nothing on screen. Only a restart re-instantiates it.
-  omarchy restart shell >/dev/null 2>&1 || true
+  echo "shell restarted in development mode"
+  exit 0
 fi
 
-echo
-if grep -q omarchy-face-verify /etc/pam.d/sudo 2>/dev/null; then
-  echo -e "${GREEN}Installed.${RESET} Face authentication is already configured."
-  echo "  ${DIM}Setup > Security > Manage Face ID${RESET}   record, replace or remove models"
-elif [[ -t 0 ]]; then
-  # Offer the build, never the face. Compiling a package is what a terminal is
-  # for; being told to hold still while something you cannot see decides whether
-  # it recognises you is not. Enrolment happens in the panel, which shows the
-  # framing and reports whether the model actually matches.
-  echo -e "${GREEN}Installed.${RESET}"
-  echo
-  read -rp "Install the face engine now? It compiles a package and takes a few minutes. [Y/n] " answer
-  if [[ ${answer,,} != n* ]]; then
-    omarchy-setup-security-face --no-enroll
-    echo
-    echo "  ${DIM}Now record your face from the panel.${RESET}"
-  else
-    echo "  ${DIM}Later: omarchy-setup-security-face --no-enroll${RESET}"
-  fi
-else
-  echo -e "${GREEN}Installed.${RESET} Next:"
-  echo "  ${DIM}omarchy-setup-security-face --no-enroll${RESET}   install the engine; record your face in the panel"
-fi
+# A reload re-instantiates the entry point but does not recompile the other QML
+# types in the folder, and a keepLoaded service keeps the code it started with.
+# Both look exactly like "my change did nothing", so a restart is the honest
+# default.
+omarchy restart shell >/dev/null 2>&1 && echo "restarted the shell"

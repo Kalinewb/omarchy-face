@@ -2,24 +2,22 @@
   "schemaVersion": 1,
   "id": "graveklar.face",
   "name": "Face Unlock",
-  "version": "1.0.0",
+  "version": "2.0.0-dev",
   "author": "graveklar",
   "license": "MIT",
-  "description": "Face unlock for sudo, polkit and the lock screen using your laptop's infrared camera, with guided enrolment and a security overview.",
+  "description": "Look at your laptop instead of typing your password into sudo -- for you, and for the people you choose.",
   "kinds": [
-    "service",
-    "panel",
-    "bar-widget"
+    "bar-widget",
+    "service"
   ],
   "keepLoaded": true,
   "entryPoints": {
-    "service": "Service.qml",
-    "panel": "Panel.qml",
-    "barWidget": "BarWidget.qml"
+    "barWidget": "FacePanel.qml",
+    "service": "Service.qml"
   },
   "barWidget": {
     "displayName": "Face Unlock",
-    "description": "Face authentication status; click to manage models and see the machine's security posture",
+    "description": "Whether a face can approve sudo; click to set up people and permissions.",
     "category": "System",
     "allowMultiple": false,
     "defaultSection": "right"
