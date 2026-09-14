@@ -5,20 +5,316 @@
 #
 # PAM verifier for `sudo`: exit 0 AUTHENTICATES (plan-engine.md §4.3).
 #
-# Phase 5 (F4) writes the real one -- camera flock, state.json, compare.py,
-# attribution in the journal. It ships now because the `system` row installs and
-# compares all seven helpers as a set (§10.1), and it ships in the only state a
-# half-written verifier may ever have: one that never authenticates anybody.
+# It runs on the `auth sufficient` line, below the gate, and only when the gate
+# exited 1. Exit 0 here means the person in front of the camera becomes root as
+# this account; every other exit code, and every condition this file did not
+# expect, does not. That asymmetry is the whole design: a bug in here must cost
+# somebody a password prompt, never hand somebody a session.
 #
-# `auth sufficient` on a failing verifier is ignored and PAM continues to
-# system-auth, so the worst case of this file being reached is a password
-# prompt -- which is also its best case until F4.
+# `sufficient` is what makes that true at the stack level too -- a verifier that
+# exits non-zero is ignored and PAM continues to system-auth -- and it is why
+# the one thing this file may never do is exit 0 by accident. Every path out of
+# it is an explicit exit, and every check it cannot evaluate exits 1.
 
 set -u
 unset IFS BASH_ENV ENV CDPATH
 PATH=/usr/local/bin:/usr/bin
 umask 077
 
-# §4.2: the verifier's unevaluable paths exit 1, never 0, so an unexpected shape
-# is never an authentication. Right now every path is unevaluable.
+# The engine is run through `env -i`, for the reason the gate states: nothing
+# inherited steers a decision made as root. The three variables are what howdy's
+# compare.py needs and no more (the admin helper's engine_env() is the same set;
+# SUDO_USER is only there for cli.py, which this file never runs).
+CLEAN_ENV=(env -i PATH=/usr/local/bin:/usr/bin HOME=/root LC_ALL=C PYTHONDONTWRITEBYTECODE=1)
+
+CONFIG_FILE=/etc/omarchy-face/config
+RUN_DIR=/run/omarchy-face
+STATE_FILE=$RUN_DIR/state.json
+ATTEMPTS_DIR=$RUN_DIR/attempts
+CAMERA_LOCK=$RUN_DIR/camera.lock
+HOWDY_DIR=/usr/lib/security/howdy
+MODELS=$HOWDY_DIR/models
+
+# howdy scans for its own `timeout` (5 s, set by configure) and this is the
+# backstop around it: -k 2 because a V4L ioctl stuck in the kernel ignores TERM,
+# and fd 9 -- the camera lock, inherited by compare.py -- must not stay held by
+# a process nothing can kill (§2 rule 9).
+COMPARE_SECONDS=8
+
+config_get() { # config_get <key> [default]
+  local key=$1 default=${2:-} value
+  [[ -r $CONFIG_FILE ]] || { printf '%s' "$default"; return; }
+  value=$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$CONFIG_FILE" 2>/dev/null | tail -1)
+  value=${value%%#*}
+  value=${value%"${value##*[![:space:]]}"}
+  [[ -n $value ]] || value=$default
+  printf '%s' "$value"
+}
+
+log() { logger -t omarchy-face -p auth.notice -- "$*" 2>/dev/null || true; }
+
+# Anything from outside this file -- a program name out of /proc, a label out of
+# the engine -- is reduced to printable ASCII with no quote or backslash before
+# it is pasted into JSON or into a journal line. It is the same function the
+# gate has, and for the same reason: these two are the only writers of the state
+# document, and one lax idea of "safe" between them would be the one that counts.
+json_safe() { # json_safe <text> [width]
+  printf '%s' "$1" | tr -d '\\"' | tr -cd '\040-\176' | cut -c1-"${2:-32}"
+}
+
+# --- who asked (plan-merged.md §2.6, plan-engine.md §4.3 step 3) --------------
+#
+# Under pam_exec this helper's parent IS sudo, so /proc/$PPID/comm would say
+# "sudo" every time and tell nobody anything. What a person needs to see on the
+# card is the program that wants root and the place it was asked from -- because
+# a prompt that only says "look at the camera" is an instruction to comply, and
+# one that names a `pacman` you did not start is something you can refuse.
+#
+# Neither field is part of any decision. They are a record.
+
+# The first non-option word of sudo's own argv, basename only.
+#
+# The rule reads options the way sudo's getopt does: a word starting with `-`
+# is an option; the ten short options -u -g -h -p -C -D -r -t -T -U take an
+# argument, and so do their long spellings; an argument attached to its option
+# (`-uroot`, `--user=root`) is already consumed. A short cluster is read letter
+# by letter and stops at the first one that takes an argument: everything after
+# that letter IS the argument, and only when there is nothing after it does the
+# next word get skipped. That is what separates `-Hu root` (skip `root`) from
+# `-uroot` (skip nothing) -- and "the last letter decides" would get the second
+# one wrong, because `-uroot` ends in a `t`, which is an option that takes an
+# argument in its own right.
+#
+# `sudo -v` and `sudo -l` have no command at all and produce an empty string,
+# which the contract allows. An environment assignment (`sudo FOO=bar cmd`) is a
+# non-option word and is reported as it stands: the field says what sudo was
+# asked to do, and that is the first thing it was asked to do.
+sudo_command_from() { # sudo_command_from <cmdline file>
+  local file=$1 words=() word opt letters index count first=1 skip_next=0
+  [[ -r $file ]] || return 1
+  # NUL-separated, which is what /proc/<pid>/cmdline is; -t strips the
+  # delimiter, so a trailing NUL does not become an empty last word.
+  mapfile -d '' -t words <"$file" 2>/dev/null || return 1
+  for word in ${words[@]+"${words[@]}"}; do
+    if ((first)); then first=0; continue; fi
+    if ((skip_next)); then skip_next=0; continue; fi
+    if [[ $word == -* ]]; then
+      [[ $word == --*=* ]] && continue
+      if [[ $word == --* ]]; then
+        opt=${word#--}
+        case $opt in
+          user | group | host | prompt | close-from | chdir | role | type | command-timeout | other-user)
+            skip_next=1 ;;
+        esac
+        continue
+      fi
+      letters=${word#-}
+      count=${#letters}
+      for ((index = 0; index < count; index++)); do
+        [[ ${letters:index:1} == [ughpCDrtTU] ]] || continue
+        ((index == count - 1)) && skip_next=1
+        break
+      done
+      continue
+    fi
+    printf '%s' "${word##*/}"
+    return 0
+  done
+  return 0
+}
+
+# The first ancestor that is not a shell, starting at the pid given, at most
+# five levels up. sudo's parent is nearly always the shell it was typed into and
+# the terminal is one level above that, which is why the walk skips shells
+# rather than stopping at the parent.
+#
+# The parent link is field 4 of /proc/<pid>/stat, read after the LAST ')':
+# fields 1 and 2 are the pid and comm, comm sits in parentheses, and a program
+# is free to be called ")((". Anything unreadable ends the walk with no answer,
+# and `from` is then simply omitted.
+ancestor_comm() { # ancestor_comm <pid>
+  local pid=$1 level comm stat rest
+  for ((level = 0; level < 5; level++)); do
+    [[ $pid =~ ^[0-9]+$ ]] || return 1
+    ((pid > 1)) || return 1
+    comm=$(cat "/proc/$pid/comm" 2>/dev/null) || return 1
+    case $comm in
+      bash | zsh | fish | sh | dash | nu) ;;
+      *) printf '%s' "$comm"; return 0 ;;
+    esac
+    stat=$(cat "/proc/$pid/stat" 2>/dev/null) || return 1
+    rest=${stat##*) }
+    [[ $rest != "$stat" ]] || return 1
+    # shellcheck disable=SC2086
+    set -- $rest
+    pid=${2:-}
+  done
+  return 1
+}
+
+parent_pid_of() { # parent_pid_of <pid>
+  local stat rest
+  stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  rest=${stat##*) }
+  [[ $rest != "$stat" ]] || return 1
+  # shellcheck disable=SC2086
+  set -- $rest
+  [[ ${2:-} =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$2"
+}
+
+# --- the state document -------------------------------------------------------
+#
+# §2.6's shape, written by same-directory temp + rename, 0644 because the GUI
+# that draws it runs as the owner. Nothing here can influence the outcome: every
+# failure is swallowed, and the exit status is decided by the engine alone.
+
+requester_json='{}'
+state_write() { # state_write <state> <person> <detail>
+  local state=$1 person=$2 detail=$3 tmp
+  [[ -d $RUN_DIR ]] || mkdir -p "$RUN_DIR" 2>/dev/null || return 0
+  chmod 0755 "$RUN_DIR" 2>/dev/null
+  tmp=$(mktemp "$RUN_DIR/.state.XXXXXX" 2>/dev/null) || return 0
+  printf '{"state":"%s","service":"sudo","requester":%s,"person":"%s","detail":"%s","at":%s}\n' \
+    "$(json_safe "$state")" "$requester_json" "$(json_safe "$person")" \
+    "$(json_safe "$detail" 64)" "$(date +%s%3N)" >"$tmp" 2>/dev/null
+  chmod 0644 "$tmp" 2>/dev/null
+  mv -f "$tmp" "$STATE_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  return 0
+}
+
+# The same key the gate checks, computed the same way (its comment explains why
+# the start time is in it). Writing it is what makes an attempt cost one camera
+# check per sudo call and not one per password retry.
+attempt_key() {
+  local stat rest
+  [[ -r /proc/$PPID/stat ]] || return 1
+  stat=$(</proc/$PPID/stat) || return 1
+  rest=${stat##*) }
+  [[ $rest != "$stat" ]] || return 1
+  # shellcheck disable=SC2086
+  set -- $rest
+  [[ ${20:-} =~ ^[0-9]+$ ]] || return 1
+  printf '%s-%s' "$PPID" "${20}"
+}
+
+mark_attempt_spent() {
+  local key
+  key=$(attempt_key) || return 0
+  mkdir -p "$ATTEMPTS_DIR" 2>/dev/null || return 0
+  chmod 0700 "$ATTEMPTS_DIR" 2>/dev/null
+  # Markers outlive their process when PAM is killed mid-stack, so old ones are
+  # swept rather than left to accumulate until the next boot.
+  find "$ATTEMPTS_DIR" -maxdepth 1 -type f -mmin +10 -delete 2>/dev/null
+  : >"$ATTEMPTS_DIR/$key" 2>/dev/null
+  return 0
+}
+
+clear_attempt() {
+  local key
+  key=$(attempt_key) || return 0
+  rm -f "$ATTEMPTS_DIR/$key" 2>/dev/null
+  return 0
+}
+
+# --- step 1: the gate's cheap checks, re-asserted ------------------------------
+#
+# A stack that somehow carries this line without its gate -- a hand edit, a copy
+# into another file, a gate that could not be executed -- is still safe, because
+# these four are the ones that decide WHETHER a face may answer at all rather
+# than whether it is worth asking.
+
+[[ ${EUID:-1} -eq 0 ]] || exit 1
+[[ ${PAM_SERVICE:-} == sudo ]] || exit 1
+[[ $(config_get sudo false) == true ]] || exit 1
+
+account=$(config_get account)
+[[ -n $account ]] || exit 1
+[[ ${PAM_USER:-} == "$account" ]] || exit 1
+[[ ${PAM_USER:-} != root ]] || exit 1
+# The account name becomes part of a path and of the engine's argv. It was
+# written by root, and it is still checked: a config that says something else is
+# a config that has been edited.
+[[ $account =~ ^[a-z_][a-z0-9_-]*$ ]] || exit 1
+
+MODEL=omarchy-face.sudo.$account
+[[ -e $MODELS/$MODEL.dat ]] || exit 1
+[[ -f $HOWDY_DIR/compare.py ]] || exit 1
+
+# --- step 2: the camera, held for exactly this process's lifetime --------------
+#
+# compare.py inherits fd 9, which is intended: the lock is released when the
+# last holder exits, nothing here is backgrounded, and so no process outlives
+# the lock. The file is created 0600 BEFORE anything opens it -- `exec 9>` would
+# create it at the umask and a chmod afterwards leaves a window in which any
+# local process can open it and hold LOCK_EX for ever.
+[[ -d $RUN_DIR ]] || mkdir -p "$RUN_DIR" 2>/dev/null || exit 1
+chmod 0755 "$RUN_DIR" 2>/dev/null
+[[ -e $CAMERA_LOCK ]] || (umask 077; : >"$CAMERA_LOCK") 2>/dev/null
+chmod 0600 "$CAMERA_LOCK" 2>/dev/null
+exec 9>>"$CAMERA_LOCK" 2>/dev/null || exit 1
+flock -w 1 9 || exit 1
+
+# --- step 3: who asked ---------------------------------------------------------
+
+command_name=$(sudo_command_from "/proc/$PPID/cmdline" 2>/dev/null) || command_name=""
+command_name=$(json_safe "$command_name")
+
+from_name=""
+if sudo_parent=$(parent_pid_of "$PPID"); then
+  from_name=$(ancestor_comm "$sudo_parent" 2>/dev/null) || from_name=""
+fi
+from_name=$(json_safe "$from_name")
+
+# `from` is omitted when no ancestor qualified; `command` stays, empty, because
+# "sudo with no command" (`sudo -v`) is a thing that happened rather than a
+# thing that could not be determined.
+if [[ -n $from_name ]]; then
+  requester_json=$(printf '{"command":"%s","from":"%s"}' "$command_name" "$from_name")
+else
+  requester_json=$(printf '{"command":"%s"}' "$command_name")
+fi
+
+# What the journal calls this attempt, in one phrase both lines below reuse.
+for_whom="for ${command_name:-no command}"
+[[ -n $from_name ]] && for_whom="$for_whom from $from_name"
+
+state_write start "" "looking"
+
+# --- step 4: the engine --------------------------------------------------------
+
+out=$("${CLEAN_ENV[@]}" timeout -k 2 "$COMPARE_SECONDS" \
+  python3 "$HOWDY_DIR/compare.py" "$MODEL" 2>/dev/null)
+status=$?
+
+# --- step 5 and 6: the answer --------------------------------------------------
+
+if ((status == 0)); then
+  # E8: `Winning model: <i> ("<name>/<appearance>")`, printed because configure
+  # sets end_report, and correct as attribution only because each model in the
+  # derived set holds exactly one encoding. The label is sanitised before it is
+  # logged or written -- it came out of another program's stdout.
+  person=""
+  appearance=""
+  line=$(grep -m1 '^Winning model:' <<<"$out")
+  if [[ $line =~ \"([a-z][a-z0-9-]{0,23})/(.+)\"\)[[:space:]]*$ ]]; then
+    person=${BASH_REMATCH[1]}
+    appearance=$(json_safe "${BASH_REMATCH[2]}")
+  fi
+
+  clear_attempt
+  if [[ -n $person ]]; then
+    log "sudo approved by face: $person (${appearance:-unnamed appearance}) $for_whom"
+  else
+    # A howdy that changed its report is still a howdy that matched. Attribution
+    # is a record, not part of the decision (§4.3 step 5).
+    log "sudo approved by face: unattributed $for_whom"
+  fi
+  state_write matched "$person" "${appearance}"
+  exit 0
+fi
+
+mark_attempt_spent
+log "sudo face attempt failed (engine exit $status) $for_whom"
+state_write failed "" "engine exit $status"
 exit 1

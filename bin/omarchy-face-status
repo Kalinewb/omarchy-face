@@ -480,15 +480,29 @@ for pam_file in /etc/pam.d/*; do
   grep -q '^# omarchy-face begin$' "$pam_file" 2>/dev/null && pam_files+=("$pam_file")
 done
 sudo_blocks=$(grep -c '^# omarchy-face begin$' /etc/pam.d/sudo 2>/dev/null) || sudo_blocks=0
+# Both helper lines, not just the marker: a block that lost one of its two lines
+# is a stack that either never checks a face (no verifier) or checks one on every
+# password retry (no gate), and neither is the thing `ok` is supposed to mean.
+sudo_lines=$(grep -c 'pam_exec\.so.*/usr/local/bin/omarchy-face-\(gate\|verify\)' /etc/pam.d/sudo 2>/dev/null) || sudo_lines=0
 
-if [[ $config_sudo == true && $sudo_blocks == 1 ]] && ((sudo_faces > 0)); then
+# The Fix is only offered once somebody could actually be recognised: `sudo-on`
+# refuses with `no_sudo_faces` otherwise, and a button that is refused for a
+# reason the row already knows is a button that should not have been there
+# (plan-gui.md §4 row 6 -- offered only once `people` is ok).
+sudo_fixable=false
+((owner_appearances > 0 && sudo_faces > 0)) && sudo_fixable=true
+
+if [[ $config_sudo == true && $sudo_blocks == 1 && $sudo_lines == 2 ]] && ((sudo_faces > 0)); then
   add_row sudo "Face for sudo" ok "$sudo_faces face(s) can approve sudo" false ""
-elif [[ $config_sudo != true && $sudo_blocks == 0 ]]; then
-  add_row sudo "Face for sudo" needs_action "off" false ""
+elif [[ $config_sudo != true && $sudo_blocks == 0 && $sudo_lines == 0 ]]; then
+  add_row sudo "Face for sudo" needs_action "off" "$sudo_fixable" sudo-on
 else
+  # The two halves disagree. The honest repair is always the one that ends with
+  # sudo asking for a password: `sudo-off` is the verb that is always allowed,
+  # and it is what takes a half-written block back out.
   add_row sudo "Face for sudo" broken \
-    "the sudo stack and the config disagree ($sudo_blocks marked block(s), sudo=$config_sudo, $sudo_faces face(s))" \
-    false ""
+    "the sudo stack and the config disagree ($sudo_blocks marked block(s), $sudo_lines face line(s), sudo=$config_sudo, $sudo_faces face(s))" \
+    true sudo-off
 fi
 
 if grep -q 'omarchy-face' /etc/pam.d/polkit-1 2>/dev/null; then

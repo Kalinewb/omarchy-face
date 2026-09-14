@@ -6,31 +6,236 @@
 # PAM gate for `sudo`: exit 0 means SKIP face, exit 1 means try it
 # (plan-engine.md §4.2).
 #
-# Phase 5 (F4) fills in the nine skip checks and the state.json writes. Until
-# then this file exists for one reason: the seven helpers are installed and
-# compared as a set (§10.1's `system` row), and a set with a hole in it cannot
-# be checked. So it ships in its safe state -- skip, always -- and F4 replaces
-# the body.
+#   auth  [success=1 default=ignore]  pam_exec.so seteuid quiet …-gate
+#   auth  sufficient                  pam_exec.so seteuid quiet …-verify
 #
-# Nothing wires this into a PAM stack before phase 5's gate: `sudo-on` is the
-# only verb that edits /etc/pam.d/sudo and it does not exist yet. If the lines
-# are copied in by hand anyway, `exit 0` is `success=1 default=ignore`'s skip
-# branch, so `sudo` falls through to the password prompt exactly as it does
-# today.
+# so this file's exit 0 takes `success=1`, which jumps over the verifier and
+# leaves sudo at its password prompt. Exit 1 takes `default=ignore`, and the
+# verifier below gets its one attempt.
+#
+# The inversion is the wrong way round from every other predicate in this
+# project, and it is that way round on purpose: PAM has no "skip the next line
+# on failure" jump, so the only shape that fails safe is one where the DEFAULT
+# outcome of a broken or missing gate -- ignore -- is the one that keeps going
+# to the verifier, and the verifier is the file that fails closed. A gate that
+# cannot answer therefore answers "skip": see the exit rule at the foot of this
+# file.
+#
+# Nothing here decides who anybody is. It decides whether asking the camera is
+# worth the two seconds it costs, and every one of its answers has a cheaper
+# version of the same effect: the password prompt.
 
 set -u
 unset IFS BASH_ENV ENV CDPATH
 PATH=/usr/local/bin:/usr/bin
 umask 077
 
-# F4 note, and a requirement rather than a preference: every helper this gate
-# runs -- omarchy-face-camera, compare.py, anything else -- is invoked through
-# `env -i PATH=/usr/local/bin:/usr/bin …`, so no inherited variable can steer a
-# decision made as root. omarchy-face-camera already refuses its own sysfs
-# override when EUID is 0; the gate is where that rule is enforced for the
-# whole tree.
+# Every helper this gate runs is invoked through `env -i PATH=…`, so no
+# inherited variable can steer a decision made as root. omarchy-face-camera
+# already refuses its own sysfs override when EUID is 0; this is where that rule
+# is enforced for the whole tree. pam_exec builds a clean environment of its own
+# (PAM_* and nothing else), so this is belt and braces -- and belt and braces is
+# what a root helper in an auth stack is for.
+CLEAN_ENV=(env -i PATH=/usr/local/bin:/usr/bin LC_ALL=C)
 
-# §4.2: every path ends in an explicit exit. A helper that falls off the end
-# returns whatever the last command happened to return, and in this file that
-# status is a decision about an authentication.
-exit 0
+CONFIG_FILE=/etc/omarchy-face/config
+RUN_DIR=/run/omarchy-face
+STATE_FILE=$RUN_DIR/state.json
+ATTEMPTS_DIR=$RUN_DIR/attempts
+CAMERA_LOCK=$RUN_DIR/camera.lock
+MODELS=/usr/lib/security/howdy/models
+CAMERA=/usr/local/bin/omarchy-face-camera
+
+# Config is read with sed, never sourced: the file is root-owned, but `source`
+# on a key=value file is a habit that stops being safe the moment somebody adds
+# a path to it (§4.2).
+config_get() { # config_get <key> [default]
+  local key=$1 default=${2:-} value
+  [[ -r $CONFIG_FILE ]] || { printf '%s' "$default"; return; }
+  value=$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$CONFIG_FILE" 2>/dev/null | tail -1)
+  value=${value%%#*}
+  value=${value%"${value##*[![:space:]]}"}
+  [[ -n $value ]] || value=$default
+  printf '%s' "$value"
+}
+
+# Diagnostics go to the journal, never to fds 1 and 2: `pam_exec` without its
+# `stdout` option discards those, and a helper that writes to them is a helper
+# whose messages exist only in its author's terminal (§4.2).
+log() { logger -t omarchy-face -p auth.notice -- "$*" 2>/dev/null || true; }
+
+# One field of the state document, reduced to something that cannot change the
+# shape of the JSON it is pasted into. Everything written here is either a
+# constant of this file or a reason string built from one, but the function is
+# the same one the verifier uses on engine output, and having two ideas of what
+# "safe to write" means is how one of them ends up being the lax one.
+json_safe() { # json_safe <text>
+  printf '%s' "$1" | tr -d '\\"' | tr -cd '\040-\176' | cut -c1-64
+}
+
+# /run/omarchy-face/state.json, exactly the §2.6 shape, written by
+# same-directory temp + rename so the GUI never reads half a document. 0644,
+# because the thing that draws it runs as the owner.
+#
+# It never influences an authentication: PAM has already decided, or is about to
+# decide, on the exit status of this file alone. Every failure in here is
+# swallowed for that reason.
+state_write() { # state_write <state> <detail>
+  local state=$1 detail=$2 tmp
+  [[ -d $RUN_DIR ]] || mkdir -p "$RUN_DIR" 2>/dev/null || return 0
+  chmod 0755 "$RUN_DIR" 2>/dev/null
+  tmp=$(mktemp "$RUN_DIR/.state.XXXXXX" 2>/dev/null) || return 0
+  printf '{"state":"%s","service":"sudo","requester":{},"person":"","detail":"%s","at":%s}\n' \
+    "$(json_safe "$state")" "$(json_safe "$detail")" "$(date +%s%3N)" >"$tmp" 2>/dev/null
+  chmod 0644 "$tmp" 2>/dev/null
+  mv -f "$tmp" "$STATE_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  return 0
+}
+
+# Skip face, and say why. The reason is a record, not a control flow: nothing
+# reads it back.
+skip() { # skip <reason>
+  state_write skipped "$1"
+  exit 0
+}
+
+# The key of ONE authentication, not of a moment in time. sudo re-runs the whole
+# auth stack for every password retry from the same process, so its pid is
+# constant across those retries and different for the next invocation -- which
+# is exactly the boundary "one camera attempt per sudo call" needs. A pid alone
+# would be unsafe (the kernel recycles them), so the process start time goes in
+# the key: a recycled pid has a different start time and its stale marker is
+# ignored. Field 22 of /proc/<pid>/stat, parsed after the last ')' because comm
+# sits in parentheses and may contain spaces and parentheses of its own.
+attempt_key() {
+  local stat rest
+  [[ -r /proc/$PPID/stat ]] || return 1
+  stat=$(</proc/$PPID/stat) || return 1
+  rest=${stat##*) }
+  [[ $rest != "$stat" ]] || return 1
+  # shellcheck disable=SC2086
+  set -- $rest
+  [[ ${20:-} =~ ^[0-9]+$ ]] || return 1
+  printf '%s-%s' "$PPID" "${20}"
+}
+
+# --- the checks, in the order of §4.2 ----------------------------------------
+
+# 0. Not root. Under `pam_exec … seteuid` from sudo this cannot happen: sudo is
+#    setuid root and the helper inherits that euid. Anywhere else it means the
+#    stack is not one we can answer for -- the models are root-only and so is
+#    the state directory -- and an unevaluable check skips (the rule at the foot
+#    of this file).
+[[ ${EUID:-1} -eq 0 ]] || exit 0
+
+# 1. sudo only, enforced in code and not only in the file the lines live in.
+#    Lines copied into another stack stay inert whatever that stack is for.
+#
+#    No state document for this one: `service` has three values in the contract
+#    (§2.6) and none of them describes a stack Face was never meant to be in,
+#    and the indicator ignores `skipped` anyway. The journal is the right place
+#    for "your copied lines did nothing", and it is also the only record that
+#    says it happened at all.
+if [[ ${PAM_SERVICE:-} != sudo ]]; then
+  log "gate refused service '${PAM_SERVICE:-}': these lines belong in /etc/pam.d/sudo and nowhere else"
+  exit 0
+fi
+
+# 2. Turned off, or never installed.
+[[ $(config_get sudo false) == true ]] || skip "face for sudo is off"
+
+# 3. The one account Face is set up for, and never root. Face never opens a root
+#    shell: sudo authenticates the INVOKING user, so this fires for `sudo -u
+#    someone-else`'s target user and for su/login stacks, neither of which has
+#    any business trusting a camera.
+account=$(config_get account)
+[[ -n $account ]] || skip "face is not set up on this machine"
+# root first, so the reason says the thing that is worth saying: on a machine
+# where the account is not root (every machine -- the installer refuses root),
+# the account check would fire first and report it as an unknown user.
+[[ ${PAM_USER:-} != root ]] || skip "root is never authenticated by face"
+[[ ${PAM_USER:-} == "$account" ]] || skip "face is not set up for ${PAM_USER:-this user}"
+
+# 4. A camera on this desk proves nothing about who is on the far end of an SSH
+#    connection.
+#
+#    Its limit, stated because a check with an unstated limit gets trusted for
+#    more than it does: a process already running as this user can escape its
+#    login session with `systemd-run --user` and defeat the second half. This
+#    stops `ssh host sudo`, not a determined local process. Face is a
+#    convenience factor and the README says so.
+caller_session_is_remote() {
+  local cgroup session
+  [[ -r /proc/$PPID/cgroup ]] || return 1
+  cgroup=$(</proc/$PPID/cgroup) || return 1
+  [[ $cgroup =~ session-([0-9]+)\.scope ]] || return 1
+  session=${BASH_REMATCH[1]}
+  [[ -r /run/systemd/sessions/$session ]] || return 1
+  grep -qx 'REMOTE=1' "/run/systemd/sessions/$session"
+}
+case ${PAM_RHOST:-} in
+  "" | localhost | localhost.localdomain | 127.0.0.1 | ::1) ;;
+  *) skip "remote session from ${PAM_RHOST}" ;;
+esac
+caller_session_is_remote && skip "the caller is in a remote login session"
+
+# 5. A closed lid is a sensor looking at the keyboard: the IR camera is in the
+#    lid. Without this, every sudo in clamshell mode waits out the engine's
+#    whole timeout before the password prompt appears.
+#
+#    Read here rather than through an Omarchy script: those live in
+#    /usr/share/omarchy/bin, outside this file's pinned PATH, and a root helper
+#    in an auth stack does not reach outside it (R2-S5).
+lid_closed() {
+  local state_file
+  for state_file in /proc/acpi/button/lid/*/state; do
+    [[ -r $state_file ]] || continue
+    grep -qi 'closed' "$state_file" && return 0
+  done
+  return 1
+}
+lid_closed && skip "the laptop lid is closed"
+
+# 6. This authentication has already had its turn at the camera. sudo re-runs
+#    the stack for every password retry, and without this each retry costs
+#    another full camera timeout before the prompt comes back -- eight wrong
+#    passwords would be a minute of waiting, and a retry loop at a camera is
+#    also a way to keep trying faces until one lands. A fresh sudo is a
+#    different process and gets a clean attempt immediately.
+if key=$(attempt_key) && [[ -e $ATTEMPTS_DIR/$key ]]; then
+  skip "face already had its attempt for this sudo"
+fi
+
+# 7. The sensor. No IR camera at all, or somebody else is streaming it (a video
+#    call): either way the engine would get nothing and burn its timeout.
+node=$("${CLEAN_ENV[@]}" "$CAMERA" --ir-node 2>/dev/null) || skip "no infrared camera"
+[[ -n $node && -c $node ]] || skip "no infrared camera"
+if command -v fuser >/dev/null 2>&1; then
+  "${CLEAN_ENV[@]}" fuser -s "$node" 2>/dev/null && skip "the infrared camera is in use"
+fi
+
+# 8. Nothing enrolled for sudo means a guaranteed failure and a guaranteed wait.
+#    The derived set is root-only, which is why this is checked here and not by
+#    anything running as the user.
+[[ -e $MODELS/omarchy-face.sudo.$account.dat ]] || skip "nobody has Sudo"
+
+# 9. One camera user at a time (§4.3, §6.2 -- the enrol session and the daemon
+#    take the same lock). Checked without holding: -n does not wait, -E 75 is
+#    the status flock reports when it would have, and `true` releases it again
+#    immediately. The verifier takes it for real a moment later, and losing that
+#    race costs a password prompt rather than a wait.
+flock -n -E 75 "$CAMERA_LOCK" true 2>/dev/null
+case $? in
+  0) ;;
+  75) skip "the camera is busy" ;;
+  *) skip "the camera lock could not be read" ;;
+esac
+
+# Nothing stands in the way: let the verifier have its one attempt.
+#
+# §4.2: EVERY path out of this file is an explicit exit, and a check that cannot
+# be evaluated -- an unreadable /proc, a missing tool, a helper that will not run
+# -- exits 0 here, because in this file the status is a decision about an
+# authentication and falling off the end would make it whatever the last sed,
+# grep or [[ ]] happened to return.
+exit 1

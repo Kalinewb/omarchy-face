@@ -16,8 +16,11 @@
 # Phase 2 (F1) implements the three verbs that exist before there is a store or
 # an engine: install-system, purge and purge-legacy. Phase 3 (F2) adds the two
 # that build it: install-engine, which starts the job, and build-engine, which
-# is the job. The rest answer not_implemented rather than pretending: a verb
-# that returns {"ok":true} for work it did not do is worse than one that says so.
+# is the job. Phase 4 (F3) adds the store verbs, and phase 5 (F4) the two that
+# wire sudo: sudo-on and sudo-off, the only verbs here that edit a file PAM
+# reads. lock-on and lock-off still answer not_implemented rather than
+# pretending: a verb that returns {"ok":true} for work it did not do is worse
+# than one that says so.
 #
 # WHO MAY RUN THIS. The polkit action is auth_self, so on a machine with more
 # than one login *any* active user can authenticate as themselves and get this
@@ -534,6 +537,31 @@ pam_remove_block() { # pam_remove_block <file>
   mv -f "$copy" "$file" || { rm -f "$copy"; return 1; }
   audit "removed the face block from $file"
   return 0
+}
+
+# Is this file already carrying exactly the block we write, and nothing else of
+# ours? Strictly: one begin, one end, in that order, and between them the two
+# lines verbatim.
+#   0  yes -- the stack is already wired, and correctly
+#   1  no  -- either nothing of ours, or something that is not what we write
+#
+# It is the question `sudo-on` asks before it inserts, so that a machine whose
+# config and stack disagree (the `sudo` row's `broken` state) can be repaired by
+# the same button that turns the feature on, rather than needing an off-then-on
+# that would refuse in the middle.
+pam_block_intact() { # pam_block_intact <file>
+  local file=$1 begin end n_begin n_end body
+  [[ -f $file ]] || return 1
+  n_begin=$(grep -c "^${PAM_BEGIN}\$" "$file" 2>/dev/null) || return 1
+  n_end=$(grep -c "^${PAM_END}\$" "$file" 2>/dev/null) || return 1
+  [[ $n_begin == 1 && $n_end == 1 ]] || return 1
+  begin=$(grep -n "^${PAM_BEGIN}\$" "$file" | head -1 | cut -d: -f1)
+  end=$(grep -n "^${PAM_END}\$" "$file" | head -1 | cut -d: -f1)
+  [[ -n $begin && -n $end && $begin -lt $end ]] || return 1
+  # Exactly four lines of ours, nowhere else in the file.
+  [[ $(grep -c 'omarchy-face' "$file") == 4 ]] || return 1
+  body=$(sed -n "$((begin + 1)),$((end - 1))p" "$file")
+  [[ $body == "$PAM_GATE_LINE"$'\n'"$PAM_VERIFY_LINE" ]]
 }
 
 # Insert Face's block above the first auth line of one PAM stack (§4.1).
@@ -2800,8 +2828,95 @@ case $verb in
     exit $?
     ;;
 
-  sudo-on | sudo-off | lock-on | lock-off)
-    # Phases 5 and 7 (plan-engine.md §1). Answering in the contract's error shape
+  sudo-on)
+    # The one verb that points sudo's auth stack at a camera (plan-engine.md
+    # §4.1, §4.4). Everything it checks is a precondition for that being safe,
+    # and every one of them is checked here rather than trusted from the GUI:
+    # this verb is one pkexec away from any process running as the owner.
+    assert_owner
+    [[ -n $account ]] || die "not_installed"
+    require_python
+
+    # 1. Derive first. The stack is about to point at
+    #    models/omarchy-face.sudo.<account>.dat, and `regenerate` is what makes
+    #    that file agree with people/*.json. A corrupt store stops here, before
+    #    anything is wired, rather than after.
+    regen=$(store_py regenerate)
+    regen_status=$?
+    if ((regen_status != 0)); then
+      printf '%s\n' "$regen"
+      exit "$regen_status"
+    fi
+
+    # 2. Somebody has to be behind it (§3.4 invariant 1). Read back from the
+    #    store's own answer, not from a count the caller carried in.
+    faces=$(sed -n 's/.*"sudo_faces":\([0-9]\{1,\}\).*/\1/p' <<<"$regen" | head -1)
+    [[ $faces =~ ^[0-9]+$ ]] || die "store_corrupt"
+    ((faces > 0)) || die "no_sudo_faces"
+
+    # 3. Nothing points an auth stack at a file somebody else can write. The
+    #    same question pam_insert_block asks, asked here too so the answer can
+    #    be `helper_unsafe` rather than a generic refusal -- these two are the
+    #    files sudo would run as root on every authentication.
+    for helper in /usr/local/bin/omarchy-face-gate /usr/local/bin/omarchy-face-verify; do
+      file_is_safe "$helper" || die "helper_unsafe"
+    done
+
+    # 4. The edit. An intact block already in place is not an error: it is the
+    #    `broken` state where the stack was wired and the config was not (a
+    #    purge that was interrupted, a config restored from elsewhere), and the
+    #    repair for it is to write the config and stop.
+    if ! pam_block_intact "$PAM_DIR/sudo"; then
+      pam_insert_block "$PAM_DIR/sudo" || die "pam_edit_failed"
+    fi
+
+    # A config that could not be written after the block went in would leave the
+    # stack pointing at Face with the config saying it is off -- harmless (the
+    # gate's check 2 skips) but a state nobody asked for, and the `sudo` row
+    # would call it broken. Put the file back the way it was and say so.
+    if ! config_set sudo true; then
+      pam_remove_block "$PAM_DIR/sudo"
+      die "config_write_failed"
+    fi
+    audit "sudo wired to face by uid ${caller_uid:-0}: $faces face(s) can approve sudo"
+    printf '{"ok":true,"sudo_faces":%s}\n' "$faces"
+    exit 0
+    ;;
+
+  sudo-off)
+    # Always allowed (§4.4). Not "allowed unless": every reason this verb could
+    # find to refuse -- a store that will not parse, a python that is not
+    # installed, a people.json from a future version -- is a reason somebody
+    # would want sudo unwired, and a machine whose only way back to a password
+    # prompt is a text editor as root is not a machine this plugin may create.
+    assert_owner
+    [[ -n $account ]] || die "not_installed"
+
+    # Best effort, and deliberately not fatal: the derived sets are rebuilt
+    # because the sudo set is about to stop being the thing PAM reads, and a
+    # failure to do so must not stand between the owner and an unwired stack.
+    if command -v python3 >/dev/null 2>&1; then
+      store_py regenerate >/dev/null 2>&1 || true
+    fi
+
+    # 0 removed · 2 there was nothing of ours in it (already off) · 1 refused,
+    # and the file is exactly as it was. The status is the whole point: writing
+    # `sudo=false` over a stack that still runs the verifier would report a
+    # machine as safe while every sudo still opened the camera.
+    pam_remove_block "$PAM_DIR/sudo"
+    case $? in
+      0 | 2) ;;
+      *) die "pam_edit_failed" ;;
+    esac
+
+    config_set sudo false || die "config_write_failed"
+    audit "sudo unwired from face by uid ${caller_uid:-0}"
+    printf '{"ok":true}\n'
+    exit 0
+    ;;
+
+  lock-on | lock-off)
+    # Phase 7 (plan-engine.md §1). Answering in the contract's error shape
     # rather than with prose keeps the GUI's error path honest: whatever asked
     # for this gets {"error":…} and exit 1, exactly as it will if the real verb
     # ever fails.
