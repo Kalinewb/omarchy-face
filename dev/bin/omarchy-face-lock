@@ -2,22 +2,43 @@
 
 # Stub of the lock-screen verbs (plan-merged.md §2.5).
 #
-# It deliberately does nothing at all. `stage` and `sync` write the plugins
-# folder on a real machine, which reloads every bar widget and destroys the
-# popup (plan-engine.md E13); a stub that did it during GUI work would close the
-# window under the person testing it, for no gain.
+# It deliberately never touches ~/.config/omarchy/plugins. `stage` and `sync`
+# write that folder on a real machine, which reloads every bar widget and
+# destroys the popup (plan-engine.md E13); a stub that did it during GUI work
+# would close the window under the person testing it, for no gain. The real
+# thing is bin/omarchy-face-lock, and dev/f6-lock.sh is what exercises it.
+#
+#   OMARCHY_FACE_DEV_LOCK_ERROR   the next write verb answers with this code
+#   OMARCHY_FACE_DEV_LOCK_ENABLED "1" makes `status` report the clone enabled
+#   OMARCHY_FACE_DEV_LOCK_COMPAT  overrides the fixture's compat word
 
 set -uo pipefail
 
 verb=${1:-}
+shift 2>/dev/null || true
+
+# Every verb, as it was called. The Settings switch has to be SHOWN to call
+# `enable` before `lock-on` and `disable` after a declined prompt -- the order is
+# the whole of the rollback rule (plan-engine.md §9.4), and a test cannot see the
+# argv of a process the GUI started any other way.
+if [[ -n ${OMARCHY_FACE_DEV_STATE:-} && -d ${OMARCHY_FACE_DEV_STATE:-} ]]; then
+  printf 'lock:%s %s\n' "$verb" "$*" >>"$OMARCHY_FACE_DEV_STATE/verbs.log"
+fi
 
 case "$verb" in
-  stage | enable | disable)
+  stage | enable | disable | sync)
+    if [[ -n ${OMARCHY_FACE_DEV_LOCK_ERROR:-} ]]; then
+      printf '{"error":"%s"}\n' "$OMARCHY_FACE_DEV_LOCK_ERROR"
+      exit 1
+    fi
     printf '{"ok":true,"verb":"%s","dev":true}\n' "$verb"
     exit 0
     ;;
-  sync)
-    printf '{"ok":true,"dev":true}\n'
+  notify-once)
+    # Recorded above like every other verb; nothing is raised on a development
+    # desktop, because a suite that popped a notification per case would be a
+    # suite nobody runs twice.
+    printf '{"ok":true,"said":false,"dev":true}\n'
     exit 0
     ;;
   status)
@@ -25,7 +46,9 @@ case "$verb" in
     FIXTURE=${OMARCHY_FACE_DEV_FIXTURE:-fresh}
     FILE="$FIXTURES/$FIXTURE/status.json"
     if [[ -f $FILE ]] && command -v jq >/dev/null 2>&1; then
-      jq -c '.lock' "$FILE"
+      jq -c --argjson enabled "$([[ ${OMARCHY_FACE_DEV_LOCK_ENABLED:-} == 1 ]] && echo true || echo false)" \
+        --arg compat "${OMARCHY_FACE_DEV_LOCK_COMPAT:-}" \
+        '.lock | .enabled = $enabled | (if $compat == "" then . else .compat = $compat end)' "$FILE"
     else
       printf '{"enabled":false,"compat":"n/a","missing":[],"otherLock":""}\n'
     fi

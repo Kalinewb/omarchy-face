@@ -21,7 +21,7 @@ the four helpers, answering from `dev/fixtures/<name>/`:
 |---|---|
 | `omarchy-face-status` | prints `dev/fixtures/$OMARCHY_FACE_DEV_FIXTURE/status.json`, exit 0 always |
 | `omarchy-face-admin` | answers in the contract's shape, writes nothing outside the fixture directory; `enroll-session` is not scripted yet. Setup's **first install** also lands here in development (`Ask.firstInstallArgv`), so the `pkexec /bin/bash` form never runs against a fixture. `install-engine` and `install-system` start the stand-in build below |
-| `omarchy-face-lock` | answers `{ok}` and deliberately never touches the plugins folder |
+| `omarchy-face-lock` | answers `{ok}` and deliberately never touches the plugins folder. `OMARCHY_FACE_DEV_LOCK_ERROR=<code>` makes the next write verb fail, `OMARCHY_FACE_DEV_LOCK_ENABLED=1` makes `status` report the clone enabled, and every verb is appended to `verbs.log` as `lock:<verb>` — the Settings switch has to be *shown* to call `enable` before `lock-on` and `disable` after a declined prompt |
 | `omarchy-face-identity` | `list` from the fixture; `verify` exits 3 (unavailable) unless `OMARCHY_FACE_DEV_VERIFY=<code>` says otherwise, and `OMARCHY_FACE_DEV_VERIFY_SECONDS=N` makes it take that long first, so a test can watch the Test card while it checks and stop it |
 
 With `OMARCHY_FACE_DEV_BIN` set, the GUI takes every helper from that directory
@@ -78,8 +78,10 @@ unprivileged helpers that ship with the plugin (`plan-engine.md §8.1`):
 | `system/omarchy-face-camera` | which V4L2 node is the infrared one. Runs as anybody, and the status script runs the plugin's own copy before anything is installed. |
 | `system/omarchy-face-{gate,verify}` | phase 5: the two lines `sudo-on` puts in `/etc/pam.d/sudo`. The gate decides whether asking the camera is worth it (exit 0 = skip); the verifier is the only file in this project whose exit 0 authenticates somebody. |
 | `system/omarchy-faced` | phase 6: the socket daemon, and the one listening thing in the project. It is the only root process that opens the camera for a caller holding no privilege, which is why peer credentials and draining are gates on it rather than details. |
-| `system/omarchy-face-lock-verify` | phase 7. Ships in its safe state — answers nothing — because the `system` row installs and compares all seven helpers as a set. |
+| `system/omarchy-face-lock-verify` | phase 7: the socket client the lock wrapper runs. Two exit codes and nothing else — every reason for a no is the same no, because a lock screen is the one place where telling them apart is telling whoever is standing there. |
 | `bin/omarchy-face-status` | the whole read half of the contract. |
+| `bin/omarchy-face-lock` | phase 7: the only thing in this plugin allowed to write `~/.config/omarchy/plugins`, and it does so from exactly one verb (`stage`). |
+| `lock/` | the wrapper **template** — two files, staged byte-for-byte into a separate `graveklar.face-lock` plugin folder. It holds no Omarchy code at all: a `Loader` on an absolute URL runs Omarchy's own lock `Service.qml`. Not scanned as a plugin where it sits, because the registry only looks one level deep (`PluginRegistry.qml` `scan_thirdparty`). |
 
 Every installed file carries two headers, `omarchy-face v2` and
 `omarchy-face-version: X.Y.Z`. The version is a **literal**, bumped by hand when
@@ -460,6 +462,81 @@ Unlike the other offscreen suites this one really does put a card on the screen
 for a second: the card is a layer-shell window and the shipped file cannot be
 instantiated without one. It takes no keyboard focus and its input region is the
 card itself, so nothing is stolen and nothing else is covered.
+
+## F6/G6 — the lock screen
+
+```sh
+./dev/f6-lock.sh              # the verbs, against a throwaway plugins folder
+./dev/g6-lock-offscreen.sh    # the wrapper itself, and its two views
+```
+
+Phase 7 is the one phase whose failure mode is a **live desktop stranded behind a
+lock screen nobody can answer**, so neither suite touches the session it runs in
+and neither can:
+
+- `f6-lock.sh` points `XDG_CONFIG_HOME`, `XDG_RUNTIME_DIR`, `XDG_STATE_HOME` and
+  `HOME` at a temporary directory, and puts stand-ins ahead of `omarchy`,
+  `omarchy-shell`, `omarchy-hyprland-session-locked`, `notify-send` and — the
+  one that matters — **`setsid`**, so `sync`'s detached `omarchy restart shell`
+  is recorded rather than run. There is no `--here` and there will not be.
+- `g6-lock-offscreen.sh` runs a throwaway Quickshell instance at a temporary
+  config directory and **refuses to start while the compositor holds a session
+  lock** — because creating a second stock lock instance while Hyprland holds a
+  lock this shell did not take is exactly the state the stock lock's own
+  `checkStrandedLock` acts on (`plugins/lock/Service.qml:82-100`), and it would
+  take the session lock from a throwaway process.
+
+`g6` has two halves. The first loads the **shipped** `lock/Service.qml` against
+the **real** `/usr/share/omarchy/shell/plugins/lock/Service.qml`: that is E1's
+first run against the real thing (the earlier evidence was a synthetic stock that
+imported no `qs.Commons`, no `PamContext` and no `WlSessionLock`), and it reports
+`compat=ok` with all five public names found. A scratch copy of the real lock with
+`pendingSessionLock` renamed reads `incompatible` and names it; a path that does
+not exist reads `failed`.
+
+The second half drives the wake rule against
+`dev/qml-harness/fake-lock-service.qml`, because none of `plan-merged.md §3` can
+be exercised against the real lock without locking this session. The monitor poll
+and the face check are **properties** of the wrapper rather than literals, so the
+harness hands it a `printf` of monitor JSON and a `bash` that waits and exits —
+which is how "two wakes a second apart start one check" and "a stale result is
+dropped" become ten-second tests with no camera. The fake is deliberately dumb:
+it takes no session lock, draws nothing and authenticates nobody.
+
+`f6` also carries the two "nothing was written" clauses of the gate, measured the
+way the shell measures them: a real `inotifywait -m -r` over the throwaway
+plugins folder across `sync` (when current), `enable` and `disable`. And it
+carries both sides of §9.5 — every verb that writes refuses for a live locker
+*and* for the compositor's flag, while `disable --stranded` (the §9.3a recovery)
+refuses only for the first, because "Hyprland is locked" is exactly what a
+stranded orphan looks like.
+
+`g6` also drives the **real Face service** for the two lock duties that have no
+view: a stand-in `omarchy-shell` that never answers is a wrapper that never
+compiled, and the case waits out the service's own 30 s deadline to see it run
+`disable --stranded`. A second case drops a `failed` status file in front of it
+and asserts `notify-once` was called **once**, although the file is re-read every
+two seconds — "one notification, never one per check".
+
+`lock-on`/`lock-off` are tested in `f3-people-store.sh`, which is the suite with
+a store and a derived lock set in it. They wire nothing: the assertion beside
+them is that `/etc/pam.d` is byte-identical across both. The socket client the
+wrapper runs, `omarchy-face-lock-verify`, is tested in `f5-daemon.sh` against the
+sandboxed daemon — two exit codes, and a name on stdout only when there is one.
+
+### What only a person at a locked screen can prove
+
+Everything above is about code. These are about a laptop, and each one needs the
+session actually locked — **with a way back in prepared first** (a root shell on
+a TTY, or an ssh session from another device):
+
+| | |
+|---|---|
+| the blank is 5 s | that Omarchy's `idleBlankTimer` really fires, and that a key press really flips `dpmsStatus` back |
+| face opens the real lock | `finishUnlock()` on the REAL stock instance, with a real match through the real engine |
+| the live swap | `enable`/`disable` on the running shell: no restart, no plugin reload, the popup stays open, `omarchy-shell lock status` keeps answering |
+| the lid | close → suspend → open: which of `dpmsStatus` or `disabled` fires, if either. The README's wording is chosen from the answer |
+| the stranded case | a broken staged wrapper present at a shell start while Hyprland holds the lock: a password field has to appear on its own within 30 s, with no TTY used |
 
 ## F0
 
