@@ -71,11 +71,65 @@ case "$verb" in
     exit 0
     ;;
   enroll-session)
-    # The scripted session arrives with the recording card (phase 4); until
-    # then this is a session-fatal error on the stream, then exit 1, which is
-    # the one error shape the protocol has (§2.4).
-    printf '{"event":"error","error":"store_corrupt"}\n'
-    exit 1
+    # A scripted session (plan-merged.md §2.4), for driving the recording card
+    # without an engine, a camera or a password dialog. It writes nothing
+    # anywhere: `done` answers `saved` out of the fixture's own people.json, and
+    # every other path answers and exits.
+    #
+    #   OMARCHY_FACE_DEV_READY_DELAY   seconds before `ready` -- the stand-in for
+    #                                  a slow polkit dialog, which is what phase
+    #                                  4's gate is about
+    #   OMARCHY_FACE_DEV_CAPTURE       ok (default) | weak | <capture_failed code>
+    #   OMARCHY_FACE_DEV_SESSION_ERROR a session-fatal code, sent before ready
+    name=${1:-}
+    # A transcript beside the fixture, because the one thing a test cannot see
+    # from the outside is whether the session ENDED by stdin closing (discarded,
+    # exit 0) or by being killed -- which is the difference between the cancel
+    # the contract describes and a signal that cannot reach a root process.
+    session_log() {
+      [[ -n ${OMARCHY_FACE_DEV_STATE:-} ]] || return 0
+      printf '%s\n' "$*" >>"$OMARCHY_FACE_DEV_STATE/session.log"
+    }
+    trap 'session_log killed; exit 143' TERM INT HUP
+    session_log "start $name"
+    if [[ -n ${OMARCHY_FACE_DEV_SESSION_ERROR:-} ]]; then
+      printf '{"event":"error","error":"%s"}\n' "$OMARCHY_FACE_DEV_SESSION_ERROR"
+      exit 1
+    fi
+    sleep "${OMARCHY_FACE_DEV_READY_DELAY:-0}"
+    session_log ready
+    printf '{"event":"ready","person":null}\n'
+    captures=0
+    while IFS= read -r line; do
+      case $line in
+        *'"cmd":"create"'*) ;;
+        *'"cmd":"capture"'*)
+          appearance=$(sed -n 's/.*"appearance":"\([^"]*\)".*/\1/p' <<<"$line")
+          printf '{"event":"capturing"}\n'
+          sleep 0.2
+          case ${OMARCHY_FACE_DEV_CAPTURE:-ok} in
+            ok)
+              captures=$((captures + 1))
+              printf '{"event":"captured","appearance":"%s","certainty":0.28,"threshold":0.35,"weak":false}\n' "$appearance" ;;
+            weak)
+              captures=$((captures + 1))
+              printf '{"event":"captured","appearance":"%s","certainty":0.33,"threshold":0.35,"weak":true}\n' "$appearance" ;;
+            *)
+              printf '{"event":"capture_failed","code":"%s"}\n' "${OMARCHY_FACE_DEV_CAPTURE}" ;;
+          esac
+          ;;
+        *'"cmd":"done"'*)
+          session_log "done captures=$captures"
+          printf '{"event":"saved","person":{"name":"%s","label":"%s","owner":false,"sudo":false,"lock":false,"appearances":[]}}\n' \
+            "$name" "$name"
+          exit 0
+          ;;
+      esac
+    done
+    # stdin closed before `done`: the cancel, and nothing was written (§2.4).
+    session_log discarded
+    printf '{"event":"discarded"}\n'
+    exit 0
     ;;
   *)
     printf '{"error":"unknown_verb","verb":"%s"}\n' "$verb"

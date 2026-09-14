@@ -1,17 +1,67 @@
 {
-  "people": [
-    {"name": "graveklar", "label": "Graveklar", "owner": true, "sudo": true, "lock": false,
-     "appearances": [{"label": "No glasses", "time": 1789400100}, {"label": "Everyday glasses", "time": 1789400200}]},
-    {"name": "anna", "label": "Anna", "owner": false, "sudo": true, "lock": true,
-     "appearances": [{"label": "No glasses", "time": 1789400300}, {"label": "Everyday glasses", "time": 1789400400}, {"label": "Reading glasses", "time": 1789400500}]},
-    {"name": "mia", "label": "Mia", "owner": false, "sudo": false, "lock": false,
-     "appearances": [{"label": "No glasses", "time": 1789400600}]}
-  ],
-  "sudo_faces": 5,
-  "lock_faces": 3,
-  "maxAppearances": 3,
-  "nameRule": "^[a-z][a-z0-9-]{0,23}$",
-  "labelRule": "^[^\\x00-\\x1f\\x7f]{1,32}$",
-  "warning": null,
-  "updated": 1789400600
+ "people": [
+  {
+   "name": "graveklar",
+   "label": "Graveklar",
+   "owner": true,
+   "sudo": true,
+   "lock": false,
+   "appearances": [
+    {
+     "label": "No glasses",
+     "time": 1789400100
+    },
+    {
+     "label": "Everyday glasses",
+     "time": 1789400200
+    }
+   ]
+  },
+  {
+   "name": "anna",
+   "label": "Anna",
+   "owner": false,
+   "sudo": true,
+   "lock": true,
+   "appearances": [
+    {
+     "label": "No glasses",
+     "time": 1789400300
+    },
+    {
+     "label": "Everyday glasses",
+     "time": 1789400400
+    },
+    {
+     "label": "Reading glasses",
+     "time": 1789400500
+    }
+   ]
+  },
+  {
+   "name": "mia",
+   "label": "Mia",
+   "owner": false,
+   "sudo": false,
+   "lock": false,
+   "appearances": [
+    {
+     "label": "No glasses",
+     "time": 1789400600
+    }
+   ]
+  }
+ ],
+ "sudo_faces": 5,
+ "lock_faces": 3,
+ "maxAppearances": 3,
+ "nameRule": "^[a-z][a-z0-9-]{0,23}$",
+ "labelRule": "^[^\\x00-\\x1f\\x7f]{1,32}$",
+ "appearanceLabels": [
+  "No glasses",
+  "Everyday glasses",
+  "Reading glasses"
+ ],
+ "warning": "Sudo now matches against 5 faces. Every extra face is another chance that the wrong one is accepted.",
+ "updated": 1789400600
 }

@@ -27,6 +27,14 @@ Item {
   readonly property string devBin: Quickshell.env("OMARCHY_FACE_DEV_BIN") || ""
   readonly property bool dev: devBin !== ""
 
+  // Development only, and only meaningful with the line above: keep `pkexec` in
+  // front of the stub. The word in argv[0] is what decides how a stream is
+  // cancelled -- isPrompting() below sends no signal and closes stdin instead
+  // (§2 rule 7) -- so "Esc before a capture writes nothing" can only be tested
+  // with it there. dev/g3-people-offscreen.sh puts a stand-in `pkexec` earlier
+  // in PATH to play the dialog.
+  readonly property bool devPkexec: Quickshell.env("OMARCHY_FACE_DEV_PKEXEC") === "1"
+
   readonly property string pluginBin: dev ? devBin : pluginDir + "/bin"
   readonly property string systemBin: dev ? devBin : "/usr/local/bin"
 
@@ -52,12 +60,21 @@ Item {
     return [systemBin + "/omarchy-face-identity"].concat(args || [])
   }
 
+  // The popup and the Face service are two IPC targets, because a bar widget
+  // cannot own a target the service has to keep answering across reloads
+  // (Service.qml). The recording card lives in the service, so "record this
+  // person" travels as one `omarchy-shell` call -- one Process either way, and
+  // the same shape in development, where the stub bin has nothing to do with it.
+  function cardArgv(args) {
+    return ["omarchy-shell", "graveklar.face.card"].concat(args || [])
+  }
+
   // Every store change, permission change, install, wiring and purge
   // (plan-merged.md §2 rule 2). pkexec draws the owner prompt before exec, so
   // the prompt is always the first thing that happens.
   function adminArgv(args) {
     var helper = systemBin + "/omarchy-face-admin"
-    return (dev ? [helper] : ["pkexec", helper]).concat(args || [])
+    return (dev && !devPkexec ? [helper] : ["pkexec", helper]).concat(args || [])
   }
 
   // The first install, and the only call that does not go through our own
