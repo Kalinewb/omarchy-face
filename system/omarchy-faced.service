@@ -1,0 +1,43 @@
+# omarchy-face v2
+# omarchy-face-version: 2.0.0-dev
+#
+# Socket-activated, idle-exiting, and allowed to do exactly two things: open the
+# infrared camera and read the face models (plan-engine.md §6).
+
+[Unit]
+Description=Face verification for callers that cannot hold privilege
+Documentation=https://github.com/Kalinewb/omarchy-face
+Requires=omarchy-faced.socket
+After=omarchy-faced.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/omarchy-faced
+# Socket activated and idle-exiting, so this is not a root process sitting
+# around all day waiting to be interesting to somebody.
+Restart=no
+
+# It reads root-owned models and opens the IR sensor. Both are owner-match, not
+# CAP_DAC_OVERRIDE -- except that /usr/lib/security/howdy is mode 600 with no
+# execute bit, so traversing into it needs CAP_DAC_READ_SEARCH and nothing else.
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+AmbientCapabilities=CAP_DAC_READ_SEARCH
+RestrictSUIDSGID=yes
+ProtectProc=invisible
+DevicePolicy=closed
+DeviceAllow=char-video4linux rw
+ProtectSystem=strict
+ReadWritePaths=/run/omarchy-face
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,29 @@
+#!/bin/bash
+#
+# omarchy-face v2
+# omarchy-face-version: 2.0.0-dev
+#
+# PAM gate for `sudo`: exit 0 means SKIP face, exit 1 means try it
+# (plan-engine.md §4.2).
+#
+# Phase 5 (F4) fills in the nine skip checks and the state.json writes. Until
+# then this file exists for one reason: the seven helpers are installed and
+# compared as a set (§10.1's `system` row), and a set with a hole in it cannot
+# be checked. So it ships in its safe state -- skip, always -- and F4 replaces
+# the body.
+#
+# Nothing wires this into a PAM stack before phase 5's gate: `sudo-on` is the
+# only verb that edits /etc/pam.d/sudo and it does not exist yet. If the lines
+# are copied in by hand anyway, `exit 0` is `success=1 default=ignore`'s skip
+# branch, so `sudo` falls through to the password prompt exactly as it does
+# today.
+
+set -u
+unset IFS BASH_ENV ENV CDPATH
+PATH=/usr/local/bin:/usr/bin
+umask 077
+
+# §4.2: every path ends in an explicit exit. A helper that falls off the end
+# returns whatever the last command happened to return, and in this file that
+# status is a decision about an authentication.
+exit 0

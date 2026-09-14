@@ -1,0 +1,29 @@
+#!/bin/bash
+#
+# omarchy-face v2
+# omarchy-face-version: 2.0.0-dev
+#
+# The verification daemon (plan-engine.md §6): socket-activated, root with only
+# CAP_DAC_READ_SEARCH, answering VERIFY-PERSON and VERIFY-LOCK for callers that
+# cannot hold privilege.
+#
+# Phase 6 (F5) writes it. It ships now because the socket unit is installed and
+# enabled by the first install (§5.1) and the `system` row counts seven helpers
+# (§10.1) -- an ExecStart pointing at nothing would make the unit fail on the
+# first connection with "No such file or directory", which reads as a broken
+# install rather than an unfinished one.
+#
+# Until F5 it accepts the activation and exits without reading the connection.
+# A client gets EOF, which every client in this plan treats as "unavailable":
+# omarchy-face-identity answers exit 3 and the lock wrapper fails its attempt
+# quietly. Nothing here opens the camera or reads a model.
+
+set -u
+unset IFS BASH_ENV ENV CDPATH
+PATH=/usr/local/bin:/usr/bin
+umask 077
+
+logger -t omarchy-face -p daemon.info -- \
+  "omarchy-faced: not implemented before phase 6; closing the connection" 2>/dev/null || true
+
+exit 0

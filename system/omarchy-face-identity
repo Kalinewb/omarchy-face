@@ -1,0 +1,83 @@
+#!/usr/bin/python3 -I
+#
+# omarchy-face v2
+# omarchy-face-version: 2.0.0-dev
+#
+# The Profiles contract, and nothing else (plan-engine.md §6.3, §11.3):
+#
+#   omarchy-face-identity list            people's names, one per line; exit 0
+#                                         (exit 3, no output, when Face is not set up)
+#   omarchy-face-identity verify <name>   exit 0 present | 1 not present/failed
+#                                         | 2 bad or unknown name | 3 unavailable
+#                                         | 4 rate limited or camera busy
+#
+# Both READMEs publish that table verbatim, so nothing else may ever be added
+# here: the whole surface of this file is the contract.
+#
+# `-I` (isolated: implies -E -s and drops the script's directory from sys.path)
+# matters because this runs as the user. Without it PYTHONPATH, PYTHONSTARTUP
+# and a socket.py dropped next to the script would all be honoured.
+#
+# Phase 6 (F5) adds the omarchy-faced socket client that `verify` needs. Until
+# then `list` is real -- people.json is the world-readable summary it reads
+# (§11.4) -- and `verify` answers 3, unavailable, for any name it recognises.
+# It never answers 0 before there is a daemon to ask.
+
+import json
+import re
+import sys
+
+PEOPLE = "/var/lib/omarchy-face/people.json"
+NAME_RULE = re.compile(r"^[a-z][a-z0-9-]{0,23}$")
+
+# The exit codes, named, because every one of them is a documented answer.
+PRESENT, ABSENT, BAD_NAME, UNAVAILABLE, TRY_AGAIN = 0, 1, 2, 3, 4
+
+
+def people():
+    """Names from the public summary, or None when Face is not set up."""
+    try:
+        with open(PEOPLE, "r") as handle:
+            document = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    names = []
+    for person in document.get("people", []):
+        name = person.get("name", "")
+        if isinstance(name, str) and NAME_RULE.match(name):
+            names.append(name)
+    return names
+
+
+def main(argv):
+    if len(argv) == 1 and argv[0] == "list":
+        names = people()
+        if names is None:
+            # Not set up is not an error worth printing: Profiles asks this to
+            # decide whether to offer face at all.
+            return UNAVAILABLE
+        for name in names:
+            print(name)
+        return PRESENT
+
+    if len(argv) == 2 and argv[0] == "verify":
+        name = argv[1]
+        if not NAME_RULE.match(name):
+            return BAD_NAME
+        names = people()
+        if names is None:
+            return UNAVAILABLE
+        if name not in names:
+            return BAD_NAME
+        # F5 opens /run/omarchy-face/verify.sock here. A missing daemon is
+        # "cannot check right now", never "not that person": the difference is
+        # what stops Profiles reporting a stranger when the socket is down.
+        return UNAVAILABLE
+
+    print("usage: omarchy-face-identity list | verify <name>", file=sys.stderr)
+    return BAD_NAME
+
+
+# Every path ends in an explicit exit (plan-engine.md §4.2), including the one
+# where something above raised.
+sys.exit(main(sys.argv[1:]))

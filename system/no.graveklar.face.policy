@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  omarchy-face v2
+  omarchy-face-version: 2.0.0-dev
+
+  One action for the whole write surface (plan-engine.md §8.2). Everything that
+  changes who can unlock this machine goes through omarchy-face-admin under it.
+
+  auth_self and NOT auth_self_keep: every store change asks again. A kept
+  authorisation would let a page on screen add a second face to a Sudo person on
+  the strength of a password typed for something else.
+
+  Face is never wired into /etc/pam.d/polkit-1 (§4.2 check 1 enforces it in the
+  gate as well), so this prompt takes a password or a fingerprint and never a
+  face: a face cannot grant itself Sudo.
+
+  There is deliberately no no-prompt pkexec path. Identity and lock checks go
+  through omarchy-faced, which decides from peer credentials.
+-->
+<policyconfig>
+  <vendor>omarchy-face</vendor>
+  <vendor_url>https://github.com/Kalinewb/omarchy-face</vendor_url>
+
+  <action id="no.graveklar.face.owner">
+    <description>Manage face unlock</description>
+    <message>Authentication is required to change who can unlock with a face</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_self</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/omarchy-face-admin</annotate>
+  </action>
+</policyconfig>

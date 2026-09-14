@@ -1,0 +1,576 @@
+#!/bin/bash
+#
+# omarchy-face v2
+# omarchy-face-version: 2.0.0-dev
+#
+# Every privileged thing Face does, behind one polkit action
+# (plan-engine.md §8.2, plan-merged.md §2.3).
+#
+#   pkexec /usr/local/bin/omarchy-face-admin <verb> [args]
+#
+# Contract, and it is the same for every verb here:
+#   one JSON document on stdout, prose on stderr
+#   exit 0 ok · 1 {"error":code,…} · 3 busy (store flock or install job)
+#   126/127 come from pkexec itself and mean the owner declined
+#
+# Phase 2 (F1) implements the three verbs that exist before there is a store or
+# an engine: install-system, purge and purge-legacy. The rest answer
+# not_implemented rather than pretending: a verb that returns {"ok":true} for
+# work it did not do is worse than one that says so.
+#
+# WHO MAY RUN THIS. The polkit action is auth_self, so on a machine with more
+# than one login *any* active user can authenticate as themselves and get this
+# file running as root. That is only safe because of the caller check below:
+# the uid pkexec reports must be the account Face was set up for. Without it,
+# a second user could point install-system at a plugin folder of their own and
+# have root install their scripts into /usr/local/bin.
+
+set -uo pipefail
+unset IFS BASH_ENV ENV CDPATH
+PATH=/usr/local/bin:/usr/bin
+umask 022
+
+CONFIG_DIR=/etc/omarchy-face
+CONFIG_FILE=$CONFIG_DIR/config
+STORE_DIR=/var/lib/omarchy-face
+RUN_DIR=/run/omarchy-face
+POLICY=/usr/share/polkit-1/actions/no.graveklar.face.policy
+UNIT_DIR=/etc/systemd/system
+MODELS=/usr/lib/security/howdy/models
+BUILD_STATE=/var/lib/private/omarchy-face-build
+INSTALL_UNIT=omarchy-face-install.service
+
+# The installed set (plan-engine.md §8.1). Source name : destination : mode.
+# One table, used by install, by the version check and by purge, so the three
+# can never disagree about what "the system half" is.
+SYSTEM_FILES=(
+  "omarchy-face-admin:/usr/local/bin/omarchy-face-admin:0755"
+  "omarchy-face-gate:/usr/local/bin/omarchy-face-gate:0755"
+  "omarchy-face-verify:/usr/local/bin/omarchy-face-verify:0755"
+  "omarchy-faced:/usr/local/bin/omarchy-faced:0755"
+  "omarchy-face-identity:/usr/local/bin/omarchy-face-identity:0755"
+  "omarchy-face-lock-verify:/usr/local/bin/omarchy-face-lock-verify:0755"
+  "omarchy-face-camera:/usr/local/bin/omarchy-face-camera:0755"
+  "omarchy-faced.socket:$UNIT_DIR/omarchy-faced.socket:0644"
+  "omarchy-faced.service:$UNIT_DIR/omarchy-faced.service:0644"
+  "no.graveklar.face.policy:$POLICY:0644"
+)
+
+# --- output ------------------------------------------------------------------
+
+# JSON by hand. This file runs as root from a polkit action; giving it a runtime
+# dependency on jq would mean a missing package turns every verb into a parse
+# error in the GUI.
+json_string() {
+  local value=$1
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=${value//$'\n'/ }
+  value=$(printf '%s' "$value" | tr -d '\000-\037')
+  printf '"%s"' "$value"
+}
+
+json_array() {
+  local first=1 item
+  printf '['
+  for item in "$@"; do
+    ((first)) || printf ','
+    first=0
+    json_string "$item"
+  done
+  printf ']'
+}
+
+audit() {
+  logger -t omarchy-face -p auth.notice -- "$*" 2>/dev/null || true
+}
+
+die() { # die <code> [exit status]
+  printf '{"error":%s}\n' "$(json_string "$1")"
+  exit "${2:-1}"
+}
+
+# --- config ------------------------------------------------------------------
+
+# Read with sed, never sourced: /etc/omarchy-face/config is root-owned, but
+# `source`ing a key=value file is a habit that stops being safe the moment
+# somebody adds a path to it (plan-engine.md §4.2).
+config_get() {
+  local key=$1 default=${2:-} value
+  [[ -r $CONFIG_FILE ]] || { printf '%s' "$default"; return; }
+  value=$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$CONFIG_FILE" 2>/dev/null | tail -1)
+  value=${value%%#*}
+  value=${value%"${value##*[![:space:]]}"}
+  [[ -n $value ]] || value=$default
+  printf '%s' "$value"
+}
+
+# --- the caller --------------------------------------------------------------
+
+[[ $EUID -eq 0 ]] || die "not_root"
+
+verb=${1:-}
+[[ -n $verb ]] || die "no_verb"
+shift
+
+# PKEXEC_UID is set by pkexec and cannot be forged by the caller: it is the uid
+# polkit authenticated. Absent means we were started by something that was
+# already root (the install script, a systemd unit, a root shell), which can do
+# everything here anyway -- there is no privilege to protect in that direction.
+#
+# Present means the auth_self dialog just handed root to whoever answered it, so
+# it has to be the one account Face manages. A second login on this machine
+# authenticating as themselves gets `not_owner`, not root.
+caller_uid=${PKEXEC_UID:-}
+account=$(config_get account)
+
+assert_owner() {
+  [[ -n $caller_uid ]] || return 0
+  [[ -n $account ]] || die "not_installed"
+  local account_uid
+  account_uid=$(id -u -- "$account" 2>/dev/null) || die "unknown_account"
+  [[ $caller_uid == "$account_uid" ]] || die "not_owner"
+}
+
+# Removal has to work on a machine whose config is already gone -- a purge that
+# was interrupted after step 3, or a half-finished install. With no config there
+# is no account to be the owner of, and nothing left that is worth refusing to
+# take away.
+assert_owner_unless_uninstalled() {
+  [[ -n $account ]] || return 0
+  assert_owner
+}
+
+# --- shared install machinery ------------------------------------------------
+
+snapshot_dir=""
+cleanup_snapshot() {
+  [[ -n $snapshot_dir && -d $snapshot_dir ]] && rm -rf -- "$snapshot_dir"
+  snapshot_dir=""
+}
+trap cleanup_snapshot EXIT
+
+# The plugin folder is user-writable, so reading a header out of it and copying
+# the same path afterwards is a check/copy race: a process running as the owner
+# can swap the file between the two reads (plan-engine.md §5.1, round-3
+# hardening). So: copy first, into a directory only root can have made, and from
+# that point never look at the plugin folder again. What was checked is what
+# gets installed.
+# Sets $snapshot_dir. Every function below that can `die` sets a global instead
+# of printing its answer, because a $(…) around one of them runs it in a
+# subshell: `die` would exit that subshell, its JSON would land in the variable
+# being assigned, and the caller would carry on with an error document where it
+# expected a path.
+take_snapshot() { # take_snapshot <plugin dir>
+  local plugin_dir=$1
+  [[ -d $plugin_dir/system ]] || die "plugin_missing"
+  snapshot_dir=$(mktemp -d /run/omarchy-face-install.XXXXXX) || die "snapshot_failed"
+  chmod 0700 "$snapshot_dir" || die "snapshot_failed"
+  cp -a --no-dereference "$plugin_dir/system/." "$snapshot_dir/" 2>/dev/null || die "snapshot_failed"
+}
+
+# Everything in the snapshot must be a plain file. A symlink would have been
+# followed out of the snapshot when it was installed -- back into the folder we
+# just stopped trusting, or anywhere else -- and a hard link means the same
+# inode is still reachable and writable from outside it.
+verify_snapshot_shape() {
+  local tmp=$1 bad
+  bad=$(find "$tmp" -mindepth 1 \( -type l -o -links +1 -o ! -type f \) -print -quit 2>/dev/null)
+  [[ -z $bad ]] || die "snapshot_unsafe"
+}
+
+file_version() {
+  # The version header, from the top of the file only. `#` in a script and two
+  # spaces inside the policy's XML comment, hence the loose prefix.
+  head -40 "$1" 2>/dev/null |
+    sed -n 's/^[^[:alnum:]]*omarchy-face-version:[[:space:]]*\([0-9A-Za-z.+-]*\).*/\1/p' | head -1
+}
+
+has_v2_marker() {
+  head -40 "$1" 2>/dev/null | grep -q 'omarchy-face v2'
+}
+
+# One version for the whole set: the files are installed together and compared
+# together, so a snapshot whose parts disagree is a broken release, not a state
+# to install and then puzzle over.
+# Sets $new_version.
+snapshot_version() {
+  local tmp=$1 entry source version first=""
+  for entry in "${SYSTEM_FILES[@]}"; do
+    source=$tmp/${entry%%:*}
+    [[ -f $source ]] || die "snapshot_incomplete"
+    has_v2_marker "$source" || die "snapshot_unmarked"
+    version=$(file_version "$source")
+    [[ -n $version ]] || die "snapshot_unversioned"
+    [[ -n $first ]] || first=$version
+    [[ $version == "$first" ]] || die "snapshot_mixed_versions"
+  done
+  new_version=$first
+}
+
+installed_version() {
+  local entry dest version first=""
+  for entry in "${SYSTEM_FILES[@]}"; do
+    dest=${entry#*:}; dest=${dest%:*}
+    [[ -f $dest ]] || { printf ''; return 1; }
+    version=$(file_version "$dest")
+    [[ -n $version ]] || { printf ''; return 1; }
+    [[ -n $first ]] || first=$version
+    [[ $version == "$first" ]] || { printf ''; return 1; }
+  done
+  printf '%s' "$first"
+}
+
+# `diff -q`, not `cmp -r`: cmp has no recursive mode at all, and diff's exit
+# codes (0 same, 1 different, 2 error) are the three answers this needs.
+snapshot_differs() {
+  local tmp=$1 entry source dest
+  for entry in "${SYSTEM_FILES[@]}"; do
+    source=$tmp/${entry%%:*}
+    dest=${entry#*:}; dest=${dest%:*}
+    diff -q "$source" "$dest" >/dev/null 2>&1 || return 0
+  done
+  return 1
+}
+
+version_is_dev() { [[ $1 == *-dev ]]; }
+
+# Is $1 strictly newer than $2? sort -V puts 2.0.0-dev before 2.0.0, which is
+# the ordering a pre-release wants.
+version_newer() {
+  [[ $1 != "$2" ]] || return 1
+  [[ $(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1) == "$1" ]]
+}
+
+# Fills the global `changed`. Not a subshell and not a pipeline on purpose: a
+# `die` inside a $(…) would exit that subshell and print its JSON into the
+# caller's variable, and the install would carry on as though nothing had gone
+# wrong.
+changed=()
+install_from_snapshot() { # install_from_snapshot <snapshot dir>
+  local tmp=$1 entry source dest mode dir
+  changed=()
+  for entry in "${SYSTEM_FILES[@]}"; do
+    source=$tmp/${entry%%:*}
+    dest=${entry#*:}; dest=${dest%:*}
+    mode=${entry##*:}
+    dir=$(dirname -- "$dest")
+    [[ -d $dir ]] || install -d -o root -g root -m 0755 "$dir" || die "install_failed"
+    if ! diff -q "$source" "$dest" >/dev/null 2>&1; then
+      changed+=("${entry%%:*}")
+    fi
+    # install(1) writes a new inode and renames it into place, so a helper that
+    # is executing right now (this file, when it updates itself) keeps the copy
+    # it started with.
+    install -o root -g root -m "$mode" "$source" "$dest" || die "install_failed"
+  done
+}
+
+# The plugin directory of the account, never a path the caller chose. Both
+# callers land here: install-system derives it from the config, and the first
+# install passes the one the GUI was loaded from -- checked the same way, so a
+# folder belonging to somebody else is refused in both directions.
+check_plugin_dir() { # check_plugin_dir <dir> <account>
+  local dir=$1 who=$2 owner_uid account_uid
+  [[ $dir == /* ]] || die "plugin_missing"
+  [[ -d $dir/system ]] || die "plugin_missing"
+  account_uid=$(id -u -- "$who" 2>/dev/null) || die "unknown_account"
+  owner_uid=$(stat -c %u "$dir/system" 2>/dev/null) || die "plugin_missing"
+  # root-owned is fine (a system-wide install); the account's own is the normal
+  # case. Anything else is another user's directory, and root must not install
+  # scripts out of it.
+  [[ $owner_uid == 0 || $owner_uid == "$account_uid" ]] || die "plugin_not_owned"
+}
+
+# Sets $plugin_dir.
+plugin_dir_for_account() { # plugin_dir_for_account <account>
+  local who=$1 home
+  home=$(getent passwd "$who" | cut -d: -f6)
+  [[ -n $home ]] || die "unknown_account"
+  plugin_dir=$home/.config/omarchy/plugins/graveklar.face
+}
+
+# Appends to the global $warnings. systemd is not always reachable -- an install
+# inside a container, or a machine mid-boot -- and a socket that could not be
+# enabled is a warning to carry in the document, not a reason to leave the files
+# half installed.
+warnings=()
+systemctl_step() { # systemctl_step <args…>
+  systemctl "$@" >/dev/null 2>&1 || warnings+=("systemctl $* failed")
+}
+
+# --- verbs -------------------------------------------------------------------
+
+case $verb in
+
+  install-system)
+    # Two entry points, one procedure.
+    #
+    #   install-system                      the update path (plan-engine.md §5.1)
+    #   install-system --first-install DIR ACCOUNT
+    #                                       the bootstrap, called by system/install.sh
+    #
+    # --first-install is refused when PKEXEC_UID is set, so it cannot be reached
+    # through Face's own auth_self action. Otherwise a second user on this
+    # machine could name their own directory as the plugin folder and have root
+    # install its contents. The only way in is from something that is already
+    # root -- which is install.sh, running under polkit's generic (auth_admin)
+    # exec action.
+    first_install=0
+    plugin_dir=""
+    if [[ ${1:-} == --first-install ]]; then
+      [[ -z $caller_uid ]] || die "not_owner"
+      [[ ! -e $CONFIG_FILE ]] || die "already_installed"
+      first_install=1
+      plugin_dir=${2:-}
+      account=${3:-}
+      [[ -n $plugin_dir && -n $account ]] || die "bad_arguments"
+      [[ $account != root ]] || die "unknown_account"
+      id -u -- "$account" >/dev/null 2>&1 || die "unknown_account"
+    else
+      assert_owner
+      [[ -n $account ]] || die "not_installed"
+      plugin_dir_for_account "$account"
+    fi
+
+    check_plugin_dir "$plugin_dir" "$account"
+
+    take_snapshot "$plugin_dir"
+    tmp=$snapshot_dir
+    verify_snapshot_shape "$tmp"
+    snapshot_version "$tmp"
+
+    if ((!first_install)) && old_version=$(installed_version); then
+      if [[ $old_version == "$new_version" ]]; then
+        if snapshot_differs "$tmp" && ! version_is_dev "$new_version"; then
+          # Same released version, different bytes. Somebody edited either the
+          # plugin copy or the installed one, and there is no way to tell which
+          # from here -- so this is the one repair path that refuses rather than
+          # asking the owner to approve it (risk 7, §10.1: the row is `broken`
+          # with no Fix, and the answer is to reinstall the plugin).
+          die "version_mismatch"
+        fi
+      elif ! version_newer "$new_version" "$old_version" && ! version_is_dev "$new_version"; then
+        # The plugin is older than what is installed. Not a repair, and the
+        # Setup row never offers it; refusing keeps a stale checkout from
+        # quietly downgrading the root-owned half.
+        die "version_mismatch"
+      fi
+    fi
+
+    install_from_snapshot "$tmp"
+    cleanup_snapshot
+
+    if ((first_install)); then
+      install -d -o root -g root -m 0755 "$CONFIG_DIR" || die "install_failed"
+      # sudo and lock start off. Nothing is wired until somebody asks for it,
+      # and phase 5's gate is the first time sudo may be.
+      umask 022
+      printf 'account=%s\nsudo=false\nlock=false\n' "$account" >"$CONFIG_FILE.tmp" || die "install_failed"
+      chmod 0644 "$CONFIG_FILE.tmp"
+      chown root:root "$CONFIG_FILE.tmp"
+      mv -f "$CONFIG_FILE.tmp" "$CONFIG_FILE" || die "install_failed"
+      audit "system files installed for $account by uid ${caller_uid:-0} (version $new_version)"
+    else
+      audit "system files updated to $new_version by uid ${caller_uid:-0} (${#changed[@]} changed)"
+    fi
+
+    systemctl_step daemon-reload
+    systemctl_step enable --now omarchy-faced.socket
+
+    # F2 (phase 3) starts the engine build here, as a transient root unit that
+    # outlives this process and the panel that asked for it:
+    #
+    #   systemd-run --unit=omarchy-face-install --collect --property=Type=exec \
+    #               /usr/local/bin/omarchy-face-admin build-engine
+    #
+    # It is deliberately not stubbed: "started":false is true today, and a
+    # first install that claimed to have started a build would leave the Setup
+    # view waiting for progress that never arrives.
+    printf '{"ok":true,"version":%s,"changed":%s,"warnings":%s,"started":false}\n' \
+      "$(json_string "$new_version")" "$(json_array "${changed[@]}")" "$(json_array "${warnings[@]}")"
+    exit 0
+    ;;
+
+  purge)
+    # Remove the system half, in a fixed order, every step tolerating its target
+    # being absent (plan-engine.md §10.2 step 2). A half-installed machine must
+    # purge as cleanly as a finished one.
+    keep_packages=0
+    [[ ${1:-} == --keep-packages ]] && keep_packages=1
+    assert_owner_unless_uninstalled
+
+    # A build writing into /var/lib while this deletes it is the one way purge
+    # can leave debris it did not choose to leave.
+    if systemctl is-active --quiet "$INSTALL_UNIT" 2>/dev/null; then
+      die "install_running" 3
+    fi
+
+    audit "purge requested by uid ${caller_uid:-0}"
+    incomplete=()
+
+    # 1. PAM first. A stack pointing at helpers that have just been deleted is
+    #    the one outcome of a half-finished purge that could actually hurt.
+    #
+    #    The block is only ever removed, never rewritten: a file without our
+    #    marker is not touched at all, not even copied, so `purge` on a machine
+    #    where sudo was never wired leaves /etc/pam.d byte-for-byte as it was.
+    for pam_file in /etc/pam.d/*; do
+      [[ -f $pam_file ]] || continue
+      grep -q '^# omarchy-face begin' "$pam_file" 2>/dev/null || continue
+      tmp_pam=$(mktemp "$(dirname -- "$pam_file")/.omarchy-face.XXXXXX") || { incomplete+=("$pam_file"); continue; }
+      cp -p "$pam_file" "$tmp_pam" 2>/dev/null || { rm -f "$tmp_pam"; incomplete+=("$pam_file"); continue; }
+      sed -i '/^# omarchy-face begin$/,/^# omarchy-face end$/d' "$tmp_pam"
+      if grep -q 'omarchy-face' "$tmp_pam"; then
+        # A line outside the marked block: leave the file alone and say so,
+        # rather than guessing at somebody's hand edit.
+        rm -f "$tmp_pam"
+        incomplete+=("$pam_file")
+        continue
+      fi
+      chmod --reference="$pam_file" "$tmp_pam" 2>/dev/null
+      chown --reference="$pam_file" "$tmp_pam" 2>/dev/null
+      mv -f "$tmp_pam" "$pam_file" || incomplete+=("$pam_file")
+      audit "removed the face block from $pam_file"
+    done
+
+    # 2. The daemon, before the files it runs.
+    systemctl disable --now omarchy-faced.socket >/dev/null 2>&1
+    systemctl stop omarchy-faced.service >/dev/null 2>&1
+    rm -f "$UNIT_DIR/omarchy-faced.socket" "$UNIT_DIR/omarchy-faced.service"
+    systemctl daemon-reload >/dev/null 2>&1
+
+    # 3. Models, then state. The models are derived files inside howdy's own
+    #    directory, so they go by name rather than by removing the directory.
+    rm -f "$MODELS"/omarchy-face.*.dat 2>/dev/null
+    rm -rf "$STORE_DIR" "$RUN_DIR" "$CONFIG_DIR" "$BUILD_STATE"
+
+    # 4. Packages. Scope says remove everything; --keep-packages is the Remove
+    #    view's "saves a rebuild" tick.
+    removed_packages=()
+    if ((!keep_packages)); then
+      for package in howdy python-dlib; do
+        pacman -Q "$package" >/dev/null 2>&1 || continue
+        if pacman -Rns --noconfirm "$package" >/dev/null 2>&1; then
+          removed_packages+=("$package")
+        else
+          incomplete+=("$package")
+        fi
+      done
+    fi
+
+    # 5. The policy first, then the helpers, this file last: bash holds an open
+    #    descriptor on the script it is running, so unlinking the name is safe,
+    #    but only once nothing else still needs to be run.
+    rm -f "$POLICY"
+    for entry in "${SYSTEM_FILES[@]}"; do
+      dest=${entry#*:}; dest=${dest%:*}
+      [[ $dest == /usr/local/bin/omarchy-face-admin ]] && continue
+      rm -f "$dest"
+    done
+    rm -f /usr/local/bin/omarchy-face-admin
+
+    # What is left, checked rather than assumed. The GUI stops before removing
+    # the plugin when this is not empty (plan-gui.md §7.1).
+    for entry in "${SYSTEM_FILES[@]}"; do
+      dest=${entry#*:}; dest=${dest%:*}
+      [[ -e $dest ]] && incomplete+=("$dest")
+    done
+    for leftover in "$STORE_DIR" "$RUN_DIR" "$CONFIG_DIR" "$BUILD_STATE"; do
+      [[ -e $leftover ]] && incomplete+=("$leftover")
+    done
+    compgen -G "$MODELS/omarchy-face.*.dat" >/dev/null && incomplete+=("$MODELS/omarchy-face.*.dat")
+
+    audit "purge finished by uid ${caller_uid:-0}; ${#incomplete[@]} left"
+    printf '{"ok":true,"incomplete":%s,"packages":%s}\n' \
+      "$(json_array "${incomplete[@]}")" "$(json_array "${removed_packages[@]}")"
+    exit 0
+    ;;
+
+  purge-legacy)
+    # The old install's leavings (plan-engine.md §2, §10.1 row `legacy`). Only
+    # artefacts the rewrite never creates, plus files that share a name with one
+    # of ours and lack the `omarchy-face v2` marker.
+    assert_owner_unless_uninstalled
+    audit "purge-legacy requested by uid ${caller_uid:-0}"
+    removed=()
+
+    # Old-only helpers: names this rewrite has no file for.
+    for old in face face-engine-howdy face-notify face-set-idle-lock face-uninstall \
+               hw-ir-camera remove-security-face remove-security-face-lock \
+               security-probe setup-security-face setup-security-face-lock; do
+      [[ -e /usr/local/bin/omarchy-$old ]] || continue
+      rm -f "/usr/local/bin/omarchy-$old" && removed+=("/usr/local/bin/omarchy-$old")
+    done
+
+    # Shared names, old contents. An unmarked file at one of our paths is the
+    # old version of that helper; ours all carry the marker (§8.1).
+    for entry in "${SYSTEM_FILES[@]}"; do
+      dest=${entry#*:}; dest=${dest%:*}
+      [[ -f $dest ]] || continue
+      has_v2_marker "$dest" && continue
+      rm -f "$dest" && removed+=("$dest")
+    done
+
+    # The old polkit action lived in the same file name as ours, so the marker
+    # check above catches it; this catches a file that carries the marker but
+    # still declares the old action id.
+    if [[ -f $POLICY ]] && grep -q 'no.graveklar.face.admin' "$POLICY"; then
+      rm -f "$POLICY" && removed+=("$POLICY")
+    fi
+
+    # PAM: the old lock stack, the old backups, and face lines anywhere they do
+    # not belong. A marked block is `purge`'s business, not this verb's.
+    [[ -e /etc/pam.d/omarchy-lock-face ]] && rm -f /etc/pam.d/omarchy-lock-face &&
+      removed+=("/etc/pam.d/omarchy-lock-face")
+    for backup in /etc/pam.d/*.omarchy-face.bak; do
+      [[ -e $backup ]] || continue
+      rm -f "$backup" && removed+=("$backup")
+    done
+
+    # The howdy polkit drop-in, which gave polkit's agent helper camera and
+    # uinput access for a design that no longer puts face in polkit (E9).
+    drop_in=/usr/lib/systemd/system/polkit-agent-helper@.service.d/10-howdy.conf
+    if [[ -e $drop_in ]]; then
+      rm -f "$drop_in" && removed+=("$drop_in")
+      rmdir /usr/lib/systemd/system/polkit-agent-helper@.service.d 2>/dev/null
+      systemctl daemon-reload >/dev/null 2>&1
+    fi
+
+    # Old model files and the old summary. The new store writes
+    # omarchy-face.<set>.dat and never these.
+    for model in "$MODELS"/identity-*.dat; do
+      [[ -e $model ]] || continue
+      rm -f "$model" && removed+=("$model")
+    done
+    if [[ -n $account && -e $MODELS/$account.dat ]]; then
+      rm -f "$MODELS/$account.dat" && removed+=("$MODELS/$account.dat")
+    fi
+    [[ -e $STORE_DIR/models.json ]] && rm -f "$STORE_DIR/models.json" &&
+      removed+=("$STORE_DIR/models.json")
+
+    # Deliberately NOT removed here: the menu entries in the owner's
+    # omarchy-menu.jsonc and any `added by omarchy-face` lock clone. Both live
+    # under ~/.config/omarchy, both are the user's own files, and a write to the
+    # plugins folder from a root process would reload every bar widget and close
+    # the popup that asked for this (E13). The status row reports them and the
+    # README says to delete them.
+    audit "purge-legacy removed ${#removed[@]} artefacts"
+    printf '{"ok":true,"removed":%s}\n' "$(json_array "${removed[@]}")"
+    exit 0
+    ;;
+
+  enroll-session | set-label | set-permission | remove-appearance | remove-person | \
+  sudo-on | sudo-off | lock-on | lock-off | regenerate | install-engine | build-engine)
+    # Phases 3 to 5 (plan-engine.md §1). Answering in the contract's error shape
+    # rather than with prose keeps the GUI's error path honest: whatever asked
+    # for this gets {"error":…} and exit 1, exactly as it will if the real verb
+    # ever fails.
+    printf '{"error":"not_implemented","verb":%s}\n' "$(json_string "$verb")"
+    exit 1
+    ;;
+
+  *)
+    die "unknown_verb"
+    ;;
+esac

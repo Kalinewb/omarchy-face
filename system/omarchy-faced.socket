@@ -1,0 +1,28 @@
+# omarchy-face v2
+# omarchy-face-version: 2.0.0-dev
+#
+# The one way an unprivileged caller reaches a face check (plan-engine.md §6).
+
+[Unit]
+Description=Face verification socket for unprivileged callers
+Documentation=https://github.com/Kalinewb/omarchy-face
+
+[Socket]
+ListenStream=/run/omarchy-face/verify.sock
+SocketMode=0666
+# Reachable by anyone, because the daemon decides from the kernel's peer
+# credentials (SO_PEERCRED, §6.2) rather than from file permissions: "only about
+# your own account" is not something a mode bit can say.
+Accept=no
+
+# /run/omarchy-face is the state directory of the whole system half -- the
+# camera lock, the attempt markers, state.json and the build's progress files
+# all live there (§3.2), written by helpers that are not this unit. So it is
+# created here and kept when the socket stops, rather than vanishing under the
+# PAM helpers the first time the daemon goes idle.
+RuntimeDirectory=omarchy-face
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+
+[Install]
+WantedBy=sockets.target

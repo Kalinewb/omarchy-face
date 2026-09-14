@@ -1,0 +1,467 @@
+#!/bin/bash
+#
+# omarchy-face v2
+# omarchy-face-version: 2.0.0-dev
+#
+# The read half of the contract (plan-merged.md §2.2, plan-engine.md §10.1,
+# §11.1): one JSON document describing everything the GUI renders.
+#
+#   <plugin>/bin/omarchy-face-status --json
+#
+# Three rules it never breaks (§2 rules 1 and 6):
+#
+#   it never prompts, never opens the camera, never needs root
+#   it exits 0 -- always, on every machine, in every state
+#   a check it cannot make is `unknown`, which is never rendered as healthy
+#
+# It ships inside the plugin rather than in /usr/local/bin because it is only
+# useful while the GUI exists (§8.1), and because it has to be able to answer
+# "nothing is installed" on a machine where nothing is installed.
+#
+# Phase 2 (F1) makes `legacy`, `camera` and `system` real, and answers the other
+# rows from whatever exists on disk -- there is no people store, engine or lock
+# wrapper before phases 3 to 7, so those rows report their absence rather than
+# guessing. What each of them will NOT do before its phase is offer a Fix: a
+# `fixable` row whose verb answers not_implemented is a button that lies.
+
+set -uo pipefail
+unset IFS
+umask 077
+
+PLUGIN_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+SYSTEM_SRC=$PLUGIN_DIR/system
+MANIFEST=$PLUGIN_DIR/manifest.json
+PLUGINS_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins
+
+CONFIG_FILE=/etc/omarchy-face/config
+STORE_DIR=/var/lib/omarchy-face
+PEOPLE_FILE=$STORE_DIR/people.json
+ENGINE_FILE=$STORE_DIR/engine.json
+RUN_DIR=/run/omarchy-face
+INSTALL_FILE=$RUN_DIR/install.json
+POLICY=/usr/share/polkit-1/actions/no.graveklar.face.policy
+UNIT_DIR=/etc/systemd/system
+
+# source name : destination : mode, the same table omarchy-face-admin installs
+# from (plan-engine.md §8.1). The `system` row is the assertion that the two
+# sides of that table agree.
+SYSTEM_FILES=(
+  "omarchy-face-admin:/usr/local/bin/omarchy-face-admin:755"
+  "omarchy-face-gate:/usr/local/bin/omarchy-face-gate:755"
+  "omarchy-face-verify:/usr/local/bin/omarchy-face-verify:755"
+  "omarchy-faced:/usr/local/bin/omarchy-faced:755"
+  "omarchy-face-identity:/usr/local/bin/omarchy-face-identity:755"
+  "omarchy-face-lock-verify:/usr/local/bin/omarchy-face-lock-verify:755"
+  "omarchy-face-camera:/usr/local/bin/omarchy-face-camera:755"
+  "omarchy-faced.socket:$UNIT_DIR/omarchy-faced.socket:644"
+  "omarchy-faced.service:$UNIT_DIR/omarchy-faced.service:644"
+  "no.graveklar.face.policy:$POLICY:644"
+)
+HELPER_COUNT=7
+
+case ${1:-} in
+  --json | "") ;;
+  *)
+    echo "usage: omarchy-face-status --json" >&2
+    exit 2
+    ;;
+esac
+
+# jq is how this document is built, because every string in it comes from a
+# device name, a config value or a file path, and hand-rolled quoting is where
+# that kind of script breaks. Without it the honest answer is one `unknown` row.
+if ! command -v jq >/dev/null 2>&1; then
+  printf '%s\n' '{"rows":[{"id":"system","label":"Face'"'"'s system files","state":"unknown","detail":"jq is not installed, so Face cannot read its own status","fixable":false,"fix":""}],"camera":{"ir":null,"irSize":null,"rgb":null},"config":{"account":"","sudo":false,"lock":false},"engine":{"installed":false,"howdy":"","threshold":0},"install":{"state":"idle","step":"","steps":["deps","fetch","build","install","configure","done"],"startedAt":0,"updatedAt":0,"error":"","notes":[]},"lock":{"enabled":false,"compat":"n/a","missing":[],"otherLock":""},"removal":{"people":[],"pam":[],"lockWrapper":false,"helpers":0,"daemon":false,"policy":false,"packages":[]}}'
+  exit 0
+fi
+
+rows='[]'
+add_row() { # add_row <id> <label> <state> <detail> <fixable true|false> <fix>
+  rows=$(jq -c --arg id "$1" --arg label "$2" --arg state "$3" --arg detail "$4" \
+    --argjson fixable "$5" --arg fix "$6" \
+    '. + [{id:$id,label:$label,state:$state,detail:$detail,fixable:$fixable,fix:$fix}]' \
+    <<<"$rows")
+}
+
+# ", " between items, without borrowing IFS to do it: "${array[*]}" joins with
+# the FIRST character of IFS only, so the obvious IFS=', ' spelling silently
+# drops the space.
+join_comma() {
+  local out="" item
+  for item in "$@"; do out+="${out:+, }$item"; done
+  printf '%s' "$out"
+}
+
+json_list() { # json_list <item…> -> JSON array
+  printf '%s\n' "$@" | jq -Rc 'select(length > 0)' | jq -sc '.'
+}
+
+config_get() {
+  local key=$1 default=${2:-} value
+  [[ -r $CONFIG_FILE ]] || { printf '%s' "$default"; return; }
+  value=$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$CONFIG_FILE" 2>/dev/null | tail -1)
+  value=${value%%#*}
+  value=${value%"${value##*[![:space:]]}"}
+  [[ -n $value ]] || value=$default
+  printf '%s' "$value"
+}
+
+file_version() {
+  head -40 "$1" 2>/dev/null |
+    sed -n 's/^[^[:alnum:]]*omarchy-face-version:[[:space:]]*\([0-9A-Za-z.+-]*\).*/\1/p' | head -1
+}
+
+has_v2_marker() {
+  head -40 "$1" 2>/dev/null | grep -q 'omarchy-face v2'
+}
+
+plugin_version=$(jq -r '.version // ""' "$MANIFEST" 2>/dev/null)
+account=$(config_get account)
+config_sudo=$(config_get sudo false)
+config_lock=$(config_get lock false)
+[[ $config_sudo == true ]] || config_sudo=false
+[[ $config_lock == true ]] || config_lock=false
+
+# --- row: legacy -------------------------------------------------------------
+#
+# Only what the rewrite never creates, plus files that share a name with one of
+# ours and lack the `omarchy-face v2` marker (plan-engine.md §2, §10.1).
+# Everything here is readable without privilege; the one thing that is not is
+# howdy's models directory (0700), so old identity-*.dat files are removed by
+# `purge-legacy` without ever having been reported here.
+
+legacy=()
+legacy_fixable=false
+
+for old in face face-engine-howdy face-notify face-set-idle-lock face-uninstall \
+           hw-ir-camera remove-security-face remove-security-face-lock \
+           security-probe setup-security-face setup-security-face-lock; do
+  [[ -e /usr/local/bin/omarchy-$old ]] && { legacy+=("omarchy-$old"); legacy_fixable=true; }
+done
+
+for entry in "${SYSTEM_FILES[@]}"; do
+  dest=${entry#*:}; dest=${dest%:*}
+  [[ -f $dest ]] || continue
+  has_v2_marker "$dest" && continue
+  legacy+=("${dest##*/} (from the old version)")
+  legacy_fixable=true
+done
+
+[[ -f $POLICY ]] && grep -q 'no.graveklar.face.admin' "$POLICY" 2>/dev/null &&
+  { legacy+=("the old polkit action"); legacy_fixable=true; }
+
+[[ -e /etc/pam.d/omarchy-lock-face ]] && { legacy+=("/etc/pam.d/omarchy-lock-face"); legacy_fixable=true; }
+
+for backup in /etc/pam.d/*.omarchy-face.bak; do
+  [[ -e $backup ]] || continue
+  legacy+=("$backup")
+  legacy_fixable=true
+done
+
+[[ -e /usr/lib/systemd/system/polkit-agent-helper@.service.d/10-howdy.conf ]] &&
+  { legacy+=("howdy's polkit drop-in"); legacy_fixable=true; }
+
+[[ -e $STORE_DIR/models.json ]] && { legacy+=("the old models.json"); legacy_fixable=true; }
+
+# User-side leavings. `purge-legacy` deliberately does not touch these -- they
+# are the owner's own files under ~/.config/omarchy, and a root process writing
+# the plugins folder would reload every bar widget and close the popup that
+# asked (E13). So they are reported without making the row fixable on their own.
+menu_file=${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/extensions/omarchy-menu.jsonc
+[[ -f $menu_file ]] && grep -q 'security.face' "$menu_file" 2>/dev/null &&
+  legacy+=("face entries in the Omarchy menu (remove by hand)")
+if compgen -G "$PLUGINS_DIR/*/Service.qml" >/dev/null; then
+  while IFS= read -r clone; do
+    [[ -n $clone ]] || continue
+    legacy+=("a patched lock clone in ${clone%/Service.qml}")
+  done < <(grep -rl 'added by omarchy-face' "$PLUGINS_DIR"/*/Service.qml 2>/dev/null)
+fi
+
+if ((${#legacy[@]} == 0)); then
+  add_row legacy "Old install" ok "nothing left from the old version" false ""
+else
+  add_row legacy "Old install" broken "still on this machine: $(join_comma "${legacy[@]}")" \
+    "$legacy_fixable" "$([[ $legacy_fixable == true ]] && echo purge-legacy || echo "")"
+fi
+
+# --- row: camera -------------------------------------------------------------
+#
+# The helper answers from sysfs, so this works before anything is installed: the
+# plugin's own copy is byte-identical to the installed one, and running it from
+# the plugin is what lets Setup say "no infrared camera" on a machine that has
+# never had Face on it.
+
+camera_bin=/usr/local/bin/omarchy-face-camera
+[[ -x $camera_bin ]] || camera_bin=$SYSTEM_SRC/omarchy-face-camera
+camera_json='{"ir":null,"irNode":null,"irSize":null,"name":null,"rgb":null}'
+camera_ok=false
+out=""
+if [[ -x $camera_bin ]]; then
+  if out=$("$camera_bin" --describe 2>/dev/null); then
+    camera_ok=true
+  fi
+  # --describe prints its document either way; the exit code is the verdict.
+  jq -e . >/dev/null 2>&1 <<<"$out" && camera_json=$out
+fi
+
+camera_name=$(jq -r '.name // ""' <<<"$camera_json")
+camera_size=$(jq -r '.irSize // ""' <<<"$camera_json")
+
+if [[ $camera_ok == true ]]; then
+  add_row camera "Infrared camera" ok \
+    "${camera_name:-infrared camera}${camera_size:+, $camera_size} infrared" false ""
+else
+  add_row camera "Infrared camera" needs_action \
+    "no infrared camera — Face cannot work on this machine" false ""
+fi
+
+# --- row: system -------------------------------------------------------------
+#
+# The three cases of plan-engine.md §10.1 and plan-gui.md §4 row 3: not
+# installed, plugin newer than installed, and same version with different bytes
+# (which is `broken` with NO fix, so a same-user edit of the plugin copy never
+# becomes an owner prompt -- risk 7).
+
+present=0
+system_problems=()
+installed_versions=()
+
+for entry in "${SYSTEM_FILES[@]}"; do
+  name=${entry%%:*}
+  dest=${entry#*:}; dest=${dest%:*}
+  mode=${entry##*:}
+  source=$SYSTEM_SRC/$name
+  if [[ ! -e $dest ]]; then
+    system_problems+=("$dest is missing")
+    continue
+  fi
+  present=$((present + 1))
+  stat_out=$(stat -c '%U %G %a' "$dest" 2>/dev/null) || stat_out=""
+  [[ $stat_out == "root root $mode" ]] ||
+    system_problems+=("${dest##*/} is $stat_out, not root root $mode")
+  installed_versions+=("$(file_version "$dest")")
+  if [[ -e $source ]]; then
+    # diff -q, never cmp -r: cmp has no recursive mode, and diff's 0/1/2 exit
+    # codes are exactly "same", "different" and "could not tell".
+    diff -q "$source" "$dest" >/dev/null 2>&1 || system_problems+=("${dest##*/} differs from the plugin's copy")
+  else
+    system_problems+=("the plugin has no copy of ${dest##*/}")
+  fi
+done
+
+installed_version=""
+mixed_versions=false
+for version in ${installed_versions[@]+"${installed_versions[@]}"}; do
+  [[ -n $installed_version ]] || installed_version=$version
+  [[ $version == "$installed_version" ]] || mixed_versions=true
+done
+
+socket_enabled=false
+systemctl is-enabled --quiet omarchy-faced.socket 2>/dev/null && socket_enabled=true
+policy_ok=false
+[[ -f $POLICY ]] && grep -q 'org.freedesktop.policykit.exec.path' "$POLICY" 2>/dev/null && policy_ok=true
+config_ok=false
+[[ -n $account && $account == "${USER:-$(id -un)}" ]] && config_ok=true
+
+if ((present == 0)) && [[ ! -e $CONFIG_FILE ]]; then
+  add_row system "Face's system files" needs_action "not installed" true install-first
+elif ((present < ${#SYSTEM_FILES[@]})) || [[ $mixed_versions == true ]]; then
+  add_row system "Face's system files" broken \
+    "a half-installed system half: $(join_comma "${system_problems[@]}")" true install-system
+elif [[ -n $plugin_version && -n $installed_version && $installed_version != "$plugin_version" ]]; then
+  if [[ $(printf '%s\n%s\n' "$plugin_version" "$installed_version" | sort -V | tail -1) == "$plugin_version" ]]; then
+    add_row system "Face's system files" needs_action \
+      "the plugin ($plugin_version) is newer than the installed system files ($installed_version)" \
+      true install-system
+  else
+    add_row system "Face's system files" broken \
+      "the installed system files ($installed_version) are newer than this plugin ($plugin_version) — reinstall the plugin" \
+      false ""
+  fi
+elif ((${#system_problems[@]} > 0)); then
+  # Same version, and something still differs. On a development version that is
+  # ordinary -- the checkout changes without the version moving -- and on a
+  # release it is the one state with no Fix at all (§10.1).
+  if [[ $plugin_version == *-dev ]]; then
+    add_row system "Face's system files" needs_action \
+      "this development build differs from the installed system files: $(join_comma "${system_problems[@]}")" \
+      true install-system
+  else
+    add_row system "Face's system files" broken \
+      "system files do not match this plugin version — reinstall the plugin ($(join_comma "${system_problems[@]}"))" \
+      false ""
+  fi
+elif [[ $socket_enabled != true || $policy_ok != true || $config_ok != true ]]; then
+  detail=()
+  [[ $socket_enabled == true ]] || detail+=("the verification socket is not enabled")
+  [[ $policy_ok == true ]] || detail+=("the polkit action is missing its exec.path")
+  if [[ $config_ok != true ]]; then
+    [[ -n $account ]] && detail+=("Face is set up for $account, not ${USER:-$(id -un)}") ||
+      detail+=("there is no /etc/omarchy-face/config")
+  fi
+  # A config naming another account is not repairable by reinstalling: it is a
+  # machine set up for somebody else, and the answer is Remove, not a Fix.
+  if [[ -n $account && $config_ok != true ]]; then
+    add_row system "Face's system files" broken "$(join_comma "${detail[@]}")" false ""
+  else
+    add_row system "Face's system files" broken "$(join_comma "${detail[@]}")" true install-system
+  fi
+else
+  add_row system "Face's system files" ok "installed, version $installed_version" false ""
+fi
+
+# --- rows the later phases fill in ------------------------------------------
+#
+# Each is answered from what is on disk, which before its phase is nothing. None
+# of them offers a Fix yet: the verbs behind them answer not_implemented until
+# F2 (engine), F3 (people), F4 (sudo) and F6 (lock).
+
+engine_installed=false
+howdy_version=""
+if howdy_version=$(pacman -Q howdy 2>/dev/null | awk '{print $2}') && [[ -n $howdy_version ]]; then
+  pacman -Q python-dlib >/dev/null 2>&1 && engine_installed=true
+fi
+[[ $engine_installed == true ]] || howdy_version=""
+
+threshold=0
+if [[ -r $ENGINE_FILE ]]; then
+  threshold=$(jq -r '.threshold // 0' "$ENGINE_FILE" 2>/dev/null) || threshold=0
+fi
+
+install_doc='{"state":"idle","step":"","steps":["deps","fetch","build","install","configure","done"],"startedAt":0,"updatedAt":0,"error":"","notes":[]}'
+if [[ -r $INSTALL_FILE ]] && jq -e . "$INSTALL_FILE" >/dev/null 2>&1; then
+  install_doc=$(jq -c . "$INSTALL_FILE")
+fi
+install_state=$(jq -r '.state // "idle"' <<<"$install_doc")
+
+if [[ $engine_installed == true ]]; then
+  if [[ -r $ENGINE_FILE ]]; then
+    add_row engine "Face engine" ok "howdy $howdy_version" false ""
+  else
+    add_row engine "Face engine" broken "howdy is installed but has not been configured for this camera" false ""
+  fi
+else
+  add_row engine "Face engine" needs_action "the face engine is not built yet" false ""
+fi
+
+case $install_state in
+  running) add_row install-job "Engine build" unknown "building" false "" ;;
+  failed)  add_row install-job "Engine build" broken "$(jq -r '.error // "the build failed"' <<<"$install_doc")" false "" ;;
+  *)       add_row install-job "Engine build" ok "" false "" ;;
+esac
+
+people_doc=""
+sudo_faces=0
+owner_appearances=0
+if [[ -r $PEOPLE_FILE ]] && jq -e . "$PEOPLE_FILE" >/dev/null 2>&1; then
+  people_doc=$(jq -c . "$PEOPLE_FILE")
+  sudo_faces=$(jq -r '.sudo_faces // 0' <<<"$people_doc")
+  owner_appearances=$(jq -r '[.people[]? | select(.owner == true) | (.appearances | length)] | add // 0' <<<"$people_doc")
+fi
+
+if ((owner_appearances > 0)); then
+  add_row people "People" ok "$(jq -r '.people | length' <<<"$people_doc") on this machine" false ""
+else
+  add_row people "People" needs_action "record your face first" false ""
+fi
+
+pam_files=()
+for pam_file in /etc/pam.d/*; do
+  [[ -f $pam_file ]] || continue
+  grep -q '^# omarchy-face begin' "$pam_file" 2>/dev/null && pam_files+=("$pam_file")
+done
+sudo_blocks=$(grep -c '^# omarchy-face begin' /etc/pam.d/sudo 2>/dev/null) || sudo_blocks=0
+
+if [[ $config_sudo == true && $sudo_blocks == 1 ]] && ((sudo_faces > 0)); then
+  add_row sudo "Face for sudo" ok "$sudo_faces face(s) can approve sudo" false ""
+elif [[ $config_sudo != true && $sudo_blocks == 0 ]]; then
+  add_row sudo "Face for sudo" needs_action "off" false ""
+else
+  add_row sudo "Face for sudo" broken \
+    "the sudo stack and the config disagree ($sudo_blocks marked block(s), sudo=$config_sudo, $sudo_faces face(s))" \
+    false ""
+fi
+
+if grep -q 'omarchy-face' /etc/pam.d/polkit-1 2>/dev/null; then
+  add_row polkit-1 "polkit" broken \
+    "a face line in /etc/pam.d/polkit-1 — Face must never authenticate polkit" true purge-legacy
+else
+  add_row polkit-1 "polkit" ok "no face line in /etc/pam.d/polkit-1" false ""
+fi
+
+# The lock row renders when the feature is on, OR the wrapper is not staged, OR
+# the wrapper said `failed` (§10.1: the two repairable failures both leave
+# config lock=false, so keying on that alone hides the row with its own fix on
+# it). F6 adds `omarchy-face-lock status --json`; until the wrapper exists at
+# all, "not staged" is the whole truth.
+lock_staged=false
+[[ -d $PLUGINS_DIR/graveklar.face-lock ]] && lock_staged=true
+if [[ $lock_staged == true ]]; then
+  add_row lock "Lock screen" unknown "the lock screen wrapper arrives in a later version" false ""
+else
+  add_row lock "Lock screen" needs_action "not set up" false ""
+fi
+
+# With no infrared camera nothing else can be made true, so the engine hides
+# every other row rather than handing the GUI a list of things to fix that would
+# not help (plan-engine.md §10.1, camera row). `legacy` survives the cut when it
+# has something to say: removing the old install is worth doing on a machine
+# Face will never run on.
+if [[ $camera_ok != true ]]; then
+  rows=$(jq -c '[.[] | select(.id == "camera" or (.id == "legacy" and .state != "ok"))]' <<<"$rows")
+fi
+
+# --- the objects -------------------------------------------------------------
+
+helpers_present=0
+for entry in "${SYSTEM_FILES[@]:0:$HELPER_COUNT}"; do
+  dest=${entry#*:}; dest=${dest%:*}
+  [[ -e $dest ]] && helpers_present=$((helpers_present + 1))
+done
+
+daemon_present=false
+[[ -e $UNIT_DIR/omarchy-faced.socket ]] && daemon_present=true
+policy_present=false
+[[ -e $POLICY ]] && policy_present=true
+
+packages=()
+for package in howdy python-dlib; do
+  pacman -Q "$package" >/dev/null 2>&1 && packages+=("$package")
+done
+
+removal_people='[]'
+[[ -n $people_doc ]] &&
+  removal_people=$(jq -c '[.people[]? | {name: .name, appearances: (.appearances | length)}]' <<<"$people_doc")
+
+lock_wrapper=false
+[[ $lock_staged == true ]] && lock_wrapper=true
+
+jq -nc \
+  --argjson rows "$rows" \
+  --argjson camera "$camera_json" \
+  --arg account "$account" \
+  --argjson sudo "$config_sudo" \
+  --argjson lock "$config_lock" \
+  --argjson engineInstalled "$engine_installed" \
+  --arg howdy "$howdy_version" \
+  --argjson threshold "${threshold:-0}" \
+  --argjson install "$install_doc" \
+  --argjson removalPeople "$removal_people" \
+  --argjson pam "$(json_list ${pam_files[@]+"${pam_files[@]}"})" \
+  --argjson lockWrapper "$lock_wrapper" \
+  --argjson helpers "$helpers_present" \
+  --argjson daemon "$daemon_present" \
+  --argjson policy "$policy_present" \
+  --argjson packages "$(json_list ${packages[@]+"${packages[@]}"})" \
+  '{
+     rows: $rows,
+     camera: {ir: $camera.ir, irSize: $camera.irSize, rgb: $camera.rgb},
+     config: {account: $account, sudo: $sudo, lock: $lock},
+     engine: {installed: $engineInstalled, howdy: $howdy, threshold: $threshold},
+     install: $install,
+     lock: {enabled: false, compat: "n/a", missing: [], otherLock: ""},
+     removal: {people: $removalPeople, pam: $pam, lockWrapper: $lockWrapper,
+               helpers: $helpers, daemon: $daemon, policy: $policy, packages: $packages}
+   }'
+
+exit 0

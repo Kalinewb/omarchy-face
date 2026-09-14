@@ -1,0 +1,24 @@
+#!/bin/bash
+#
+# omarchy-face v2
+# omarchy-face-version: 2.0.0-dev
+#
+# PAM verifier for `sudo`: exit 0 AUTHENTICATES (plan-engine.md §4.3).
+#
+# Phase 5 (F4) writes the real one -- camera flock, state.json, compare.py,
+# attribution in the journal. It ships now because the `system` row installs and
+# compares all seven helpers as a set (§10.1), and it ships in the only state a
+# half-written verifier may ever have: one that never authenticates anybody.
+#
+# `auth sufficient` on a failing verifier is ignored and PAM continues to
+# system-auth, so the worst case of this file being reached is a password
+# prompt -- which is also its best case until F4.
+
+set -u
+unset IFS BASH_ENV ENV CDPATH
+PATH=/usr/local/bin:/usr/bin
+umask 077
+
+# §4.2: the verifier's unevaluable paths exit 1, never 0, so an unexpected shape
+# is never an authentication. Right now every path is unevaluable.
+exit 1

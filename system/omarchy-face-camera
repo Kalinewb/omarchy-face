@@ -1,0 +1,222 @@
+#!/bin/bash
+#
+# omarchy-face v2
+# omarchy-face-version: 2.0.0-dev
+#
+# Which camera is the infrared one (plan-engine.md §8.1).
+#
+# Two callers with two different needs: the sudo gate asks `--ir-node` on every
+# authentication and wants one line or a failure, and `omarchy-face-status` asks
+# `--describe` and wants the §2.2 `camera` object. Both answer from sysfs and
+# v4l2-ctl; neither ever opens a stream, so this is safe to run while the engine
+# holds the sensor.
+#
+# It runs as any uid: reading /sys/class/video4linux and enumerating formats
+# needs no privilege, and the GUI calls it before anything has been installed --
+# from the plugin's own system/ copy, which is byte-identical to the installed
+# one (§10.1).
+
+set -uo pipefail
+unset IFS BASH_ENV ENV CDPATH
+PATH=/usr/local/bin:/usr/bin
+umask 077
+
+SYSFS=${OMARCHY_V4L_SYSFS_PATH:-/sys/class/video4linux}
+
+usage() {
+  cat <<'USAGE'
+Usage: omarchy-face-camera [--ir-node|--rgb-node|--describe]
+
+  --ir-node    print the infrared capture node, e.g. /dev/video2; exit 1 if none
+  --rgb-node   print the ordinary camera's node -- what a preview should show
+  --describe   print {"ir","irSize","rgb"} as JSON; exit 1 when there is no
+               infrared sensor (the JSON still carries whatever was found)
+USAGE
+}
+
+# An IR sensor names itself one of a handful of ways. Match on word boundaries:
+# "Air Camera" contains the letters and is not one; "HP IR Camera" is.
+name_looks_ir() {
+  local name=${1,,}
+  [[ $name =~ (^|[^[:alnum:]])(ir|infra-?red)([^[:alnum:]]|$) ]]
+}
+
+# UVC exposes each interface twice: index 0 is the capture node and index 1 the
+# metadata node, both carrying the same name. Only the first yields frames, and
+# handing the engine the other one gives a camera that never answers.
+is_capture_node() {
+  local idx
+  [[ -r $1/index ]] || return 0
+  idx=$(<"$1/index")
+  [[ $idx == 0 ]]
+}
+
+# An IR sensor offers 8-bit greyscale and nothing else; a colour webcam always
+# offers YUYV or MJPG. This is the only signal that does not depend on the
+# vendor having named the device honestly -- plenty of laptops call both sensors
+# "Integrated Camera" and leave you to work it out.
+formats_look_ir() {
+  local node=$1 formats
+  command -v v4l2-ctl >/dev/null 2>&1 || return 1
+  formats=$(v4l2-ctl -d "$node" --list-formats-ext 2>/dev/null) || return 1
+  [[ $formats == *"'GREY'"* || $formats == *"'Y8 '"* ]] || return 1
+  [[ $formats != *"'YUYV'"* && $formats != *"'MJPG'"* ]]
+}
+
+find_ir_node() {
+  local dev node
+
+  # Pass 1: the device names itself. Trusted on its own -- a sensor that says IR
+  # and also reports a colour format is still the IR one, so the format probe
+  # does not get a veto here.
+  for dev in "$SYSFS"/video*; do
+    [[ -r $dev/name ]] || continue
+    node=/dev/${dev##*/}
+    [[ -c $node ]] || continue
+    is_capture_node "$dev" || continue
+    name_looks_ir "$(<"$dev/name")" || continue
+    printf '%s\n' "$node"
+    return 0
+  done
+
+  # Pass 2: the name gives nothing away, so go by what the sensor can produce.
+  for dev in "$SYSFS"/video*; do
+    node=/dev/${dev##*/}
+    [[ -c $node ]] || continue
+    is_capture_node "$dev" || continue
+    formats_look_ir "$node" || continue
+    printf '%s\n' "$node"
+    return 0
+  done
+
+  return 1
+}
+
+# The camera a person should be shown is not the one doing the authenticating.
+# An IR frame is a flat grey mask and looks broken on screen, and the IR sensor
+# can only be streamed by one process at a time -- while the engine holds it, a
+# preview cannot have it. A laptop with an IR camera has an ordinary one beside
+# it on its own V4L2 device, free the whole time.
+find_rgb_node() {
+  local ir dev node formats
+  ir=$(find_ir_node 2>/dev/null)
+
+  for dev in "$SYSFS"/video*; do
+    [[ -r $dev/name ]] || continue
+    node=/dev/${dev##*/}
+    [[ -c $node ]] || continue
+    [[ $node == "$ir" ]] && continue
+    is_capture_node "$dev" || continue
+    name_looks_ir "$(<"$dev/name")" && continue
+    # A metadata node passes every test above and yields no picture, so require
+    # a format a preview can actually display.
+    if command -v v4l2-ctl >/dev/null 2>&1; then
+      formats=$(v4l2-ctl -d "$node" --list-formats-ext 2>/dev/null)
+      [[ $formats == *"'YUYV'"* || $formats == *"'MJPG'"* ]] || continue
+    fi
+    printf '%s\n' "$node"
+    return 0
+  done
+
+  return 1
+}
+
+# /dev/videoN is assigned in probe order and moves when another camera appears.
+# by-path is keyed to the physical port, so it survives a reboot and is what
+# gets written into howdy's config. by-id covers only the first interface of a
+# multi-interface camera -- which is the colour sensor, not the IR one -- so it
+# is a fallback, never the first choice.
+stable_path_for() {
+  local node=$1 link
+  node=$(readlink -f "$node")
+
+  for link in /dev/v4l/by-path/*; do
+    [[ -e $link ]] || continue
+    # The same port is spelled twice, -usb- and -usbv2-. Keep one.
+    [[ $link == *-usbv2-* ]] && continue
+    [[ $(readlink -f "$link") == "$node" ]] || continue
+    printf '%s\n' "$link"
+    return 0
+  done
+
+  for link in /dev/v4l/by-id/*; do
+    [[ -e $link ]] || continue
+    [[ $(readlink -f "$link") == "$node" ]] || continue
+    printf '%s\n' "$link"
+    return 0
+  done
+
+  printf '%s\n' "$node"
+}
+
+frame_size_for() {
+  local node=$1 size
+  command -v v4l2-ctl >/dev/null 2>&1 || return 1
+  size=$(v4l2-ctl -d "$node" --list-formats-ext 2>/dev/null |
+    sed -n 's/.*Size: Discrete \([0-9]\+x[0-9]\+\).*/\1/p' |
+    sort -t x -k1,1n -k2,2n | tail -1)
+  [[ -n $size ]] || return 1
+  printf '%s\n' "$size"
+}
+
+name_for() {
+  local dev=$SYSFS/${1##*/}/name
+  [[ -r $dev ]] || return 1
+  # A device name is a vendor string: it can hold anything, and it is about to
+  # be pasted into JSON. Strip control characters here rather than trusting the
+  # quoting downstream.
+  tr -d '\000-\037' <"$dev" | head -1
+}
+
+# JSON by hand, not by jq: this file is also the one the PAM gate runs on every
+# authentication, and it must answer on a machine where the face packages --
+# and anything else the install pulls in -- are not there yet.
+json_string() {
+  local value=$1
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  printf '"%s"' "$value"
+}
+
+json_or_null() {
+  [[ -n $1 ]] || { printf 'null'; return; }
+  json_string "$1"
+}
+
+case ${1:-} in
+  --ir-node)
+    find_ir_node
+    ;;
+  --rgb-node)
+    find_rgb_node
+    ;;
+  --describe)
+    ir_node=$(find_ir_node) || ir_node=""
+    rgb_node=$(find_rgb_node) || rgb_node=""
+    ir_path=""
+    ir_size=""
+    ir_name=""
+    if [[ -n $ir_node ]]; then
+      ir_path=$(stable_path_for "$ir_node")
+      ir_size=$(frame_size_for "$ir_node") || ir_size=""
+      ir_name=$(name_for "$ir_node") || ir_name=""
+    fi
+    printf '{"ir":%s,"irNode":%s,"irSize":%s,"name":%s,"rgb":%s}\n' \
+      "$(json_or_null "$ir_path")" "$(json_or_null "$ir_node")" \
+      "$(json_or_null "$ir_size")" "$(json_or_null "$ir_name")" \
+      "$(json_or_null "$rgb_node")"
+    # The document is printed either way -- the status row needs to know what
+    # the machine does have -- but the exit code still says "no infrared here",
+    # because that is what the gate and the camera row switch on.
+    [[ -n $ir_node ]] || exit 1
+    ;;
+  -h | --help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
+
+exit 0

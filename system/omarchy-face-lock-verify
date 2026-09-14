@@ -1,0 +1,19 @@
+#!/bin/bash
+#
+# omarchy-face v2
+# omarchy-face-version: 2.0.0-dev
+#
+# "Is anyone with Lock screen in front of the camera?" -- VERIFY-LOCK, for the
+# lock wrapper and nothing else (plan-engine.md §6.3).
+#
+# Exit 0 opens a lock screen. Phase 7 (F6) writes the socket client; until then
+# the answer is no, which is the answer that keeps a password field in front of
+# whoever is sitting there. Nothing calls it yet either: the wrapper is staged
+# by F6.
+
+set -u
+unset IFS BASH_ENV ENV CDPATH
+PATH=/usr/local/bin:/usr/bin
+umask 077
+
+exit 1
