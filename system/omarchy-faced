@@ -473,15 +473,22 @@ def stop(child):
 # use with the lock already released -- the one arrangement that can make the
 # sudo verifier's `flock -n` say "free" about a busy sensor.
 RUNNING = None
+# ...and what it was for, so the TERM handler can finish the state document it
+# would otherwise leave half written.
+RUNNING_SERVICE = ""
 
 
-def compare(model, connection):
+def compare(model, connection, lock):
     """Run one check. Returns (status, output, cancelled).
 
-    The camera lock fd is NOT inherited (close_fds, the default): this process
-    holds the lock for the whole call and releases it only once the child is
-    reaped, which is the same guarantee the sudo verifier gets by passing its fd
-    down, without a lock that can outlive the thing that took it.
+    **The camera lock fd is handed to the engine**, exactly as the sudo verifier
+    hands its fd 9 down (§4.3). The engine never touches it; holding it open is
+    the point. Without that, a compare.py wedged in an uninterruptible V4L ioctl
+    -- the one state no signal can end -- would survive this daemon closing its
+    own copy, and the lock would read FREE while the sensor was still open. The
+    next caller would then be told the camera was available and get nothing, and
+    so would sudo. With it, the lock lives exactly as long as something is
+    holding the camera, which is what "one camera user" has to mean.
     """
     global RUNNING
     argv = ["/usr/bin/timeout", "-k", "2", str(COMPARE_SECONDS),
@@ -489,7 +496,7 @@ def compare(model, connection):
     try:
         child = subprocess.Popen(argv, env=CLEAN_ENV, stdin=subprocess.DEVNULL,
                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                 start_new_session=True)
+                                 start_new_session=True, pass_fds=(lock,))
     except OSError:
         return (None, "", False)
     RUNNING = child
@@ -579,6 +586,16 @@ def check(verb, model, service, expected, uid, connection):
         debug("%s refused: no infrared camera" % verb)
         return "NO " + NO_CAMERA
 
+    # Is anybody still asking? Between the request and here a Profiles `set` can
+    # already have been cancelled (its TERM arrives the moment somebody starts
+    # typing a password), and the next two steps are the expensive ones: they
+    # open the sensor and fork. Asked again below, after the wait for the lock,
+    # because that wait is up to two seconds long.
+    if client_gone(connection):
+        rate_finish(uid)
+        debug("%s cancelled before the camera was opened" % verb)
+        return "NO " + ERROR
+
     try:
         handle = camera_open()
     except OSError:
@@ -586,16 +603,32 @@ def check(verb, model, service, expected, uid, connection):
         warn("%s could not open the camera lock" % verb)
         return "NO " + ERROR
 
+    closed = False
     try:
         if not camera_take(handle, connection):
             rate_finish(uid)
             debug("%s refused: the camera is busy" % verb)
             return "NO " + CAMERA_BUSY
 
+        if client_gone(connection):
+            rate_finish(uid)
+            debug("%s cancelled while the camera was being taken" % verb)
+            return "NO " + ERROR
+
         state_write("start", service, expected, "looking")
-        status, output, cancelled = compare(model, connection)
-    finally:
+        global RUNNING_SERVICE
+        RUNNING_SERVICE = service
+        status, output, cancelled = compare(model, connection, handle)
+        RUNNING_SERVICE = ""
+        # The lock fd went to the engine as well (compare()'s `pass_fds`), so
+        # letting go of this copy is not letting go of the camera: whatever is
+        # still alive down there holds it until it dies. Closing it here rather
+        # than in the `finally` keeps that ownership explicit.
         os.close(handle)
+        closed = True
+    finally:
+        if not closed:
+            os.close(handle)
     rate_finish(uid)
 
     if cancelled:
@@ -630,7 +663,13 @@ def check(verb, model, service, expected, uid, connection):
         return "OK"
 
     state_write("failed", service, "", "engine exit %s" % status)
-    if status == 11:
+    # howdy's own codes first (11 gave up, 12 could not see), then the two that
+    # mean the backstop fired: `timeout` exits 124 when it had to signal the
+    # engine and 128+9 when the `-k` kill was needed, and 128+15 is this
+    # daemon's own deadline. None of them is "that is not the person" -- the
+    # question was never answered -- and reporting them as `no_match` would put
+    # "Did not recognise Anna" on a card about a camera that hung.
+    if status in (11, 124, 137, 143):
         return "NO " + TIMEOUT
     if status == 12:
         return "NO " + TOO_DARK
@@ -645,6 +684,8 @@ def check(verb, model, service, expected, uid, connection):
 # the disk Face uses.
 REFUSAL_SAID = {}
 REFUSAL_INTERVAL = 60.0
+# The key for "the config, not a caller". A string, so no uid can ever be it.
+CONFIG_KEY = "config"
 
 
 def refusal_worth_saying(uid):
@@ -678,8 +719,14 @@ def handle(connection):
     uid = account_uid(account)
     if uid is None:
         # Face is not set up, or its config names an account this machine does
-        # not have. Nothing to check against, so nothing is answered.
-        warn("no usable account in %s" % CONFIG_FILE)
+        # not have. Nothing to check against, so nothing is answered -- and this
+        # is a per-connection refusal like the one below, so it is throttled
+        # like one: a socket left enabled over a deleted config would otherwise
+        # write a journal line for every knock. CONFIG_KEY is not a uid and
+        # cannot collide with one.
+        if refusal_worth_saying(CONFIG_KEY):
+            warn("no usable account in %s: answering nothing until it is fixed"
+                 % CONFIG_FILE)
         return ("NO " + ERROR, False)
     if peer_uid != uid:
         if refusal_worth_saying(peer_uid):
@@ -818,6 +865,11 @@ def on_term(_number, _frame):
     # camera lock with the sensor still in use.
     if RUNNING is not None and RUNNING.poll() is None:
         stop(RUNNING)
+        # And then finish the sentence. `start` was written when the check
+        # began; a daemon that goes away without replacing it leaves the
+        # indicator spinning "Look at the camera" until its own 12 s safety
+        # timer, for a check that ended the moment systemd said stop.
+        state_write("skipped", RUNNING_SERVICE or "identity", "", "daemon stopped")
     # Then raise rather than exit: an exception unwinds through main()'s
     # `finally`, which is where the drain is. A bare os._exit here would be
     # exactly the undrained exit path the top of this file is about.

@@ -32,9 +32,29 @@ import qs.Ui
 Item {
   id: root
 
-  // The recording card and the Test card own the same piece of screen and say
-  // more than this does, so it stands down while either is up (§6.2).
+  // The recording card owns the same piece of screen and says more than this
+  // does, so this stands down entirely while one is up (§6.2). A recording
+  // session is a person looking into the lens on purpose, with a root process
+  // authorised and waiting; there is no useful second card to draw beside it.
   property bool suppressed: false
+
+  // The Test card is different, and the difference is a security one rather
+  // than a layout one. It suppresses **only identity checks** -- the ones it is
+  // itself the cause of, where drawing both would be the same event reported
+  // twice. A `sudo` that arrives while a test is on screen is NOT suppressed:
+  //
+  //   any process running as this account can raise a Test card over IPC, and a
+  //   blanket suppression would hand it a window of its own choosing in which
+  //   `sudo -n` draws nothing on screen. That is not a new capability -- face
+  //   for sudo is a passive factor and the README says so -- but it is exactly
+  //   the mitigation phase 5 added, switched off by the attacker.
+  //
+  // So sudo wins the screen, and the Test card is the one that gets out of the
+  // way (Service.qml binds its `standDown` to this card being up).
+  property bool suppressedIdentity: false
+
+  readonly property bool suppressedNow: root.suppressed
+    || (root.suppressedIdentity && root.service === "identity")
 
   // …but it does not stay quiet about it. Any process running as this account can
   // open a recording card over IPC, and a person looking into the lens for a
@@ -134,7 +154,7 @@ Item {
 
     // Suppressed, but not silent (see suppressedNotice above). Only for the
     // states that mean something happened; `skipped` is nothing to report.
-    if (root.suppressed && root.authState !== "skipped") {
+    if (root.suppressedNow && root.authState !== "skipped") {
       root.suppressedNotice = (root.service === "sudo" ? "sudo" : "A face check")
         + (root.requesterCommand !== "" ? " · " + root.requesterCommand : "")
         + " asked while this was open"
@@ -202,7 +222,7 @@ Item {
     return builtin.length > 0 ? builtin : Quickshell.screens
   }
 
-  readonly property bool visibleNow: root.showing && !root.suppressed
+  readonly property bool visibleNow: root.showing && !root.suppressedNow
 
   Variants {
     // No window at all while nothing is happening: this service is keepLoaded

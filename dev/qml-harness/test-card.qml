@@ -74,9 +74,16 @@ ShellRoot {
     // camera", and the indicator has stood down behind it.
     Timer {
       id: checking
-      interval: 600
+      // The `sudo-during` case has a state document arriving from outside while
+      // the card is up, and the indicator polls for it every 200 ms; the extra
+      // second is for that to land rather than for anything the card does.
+      interval: rootObj.caseName === "sudo-during" ? 1600 : 600
       onTriggered: {
         rootObj.report("checking")
+        if (rootObj.caseName === "sudo-during") {
+          Qt.exit(0)
+          return
+        }
         if (rootObj.caseName === "cancel") {
           // What the Stop button does, through the same IPC verb the popup's
           // Esc would use.

@@ -59,6 +59,10 @@ SystemCallFilter=@system-service
 # `failed` (see omarchy-faced's header). An EPERM comes back as an OSError, the
 # request answers `NO error`, and the next one still works.
 SystemCallErrorNumber=EPERM
+# The cost of EPERM is that a violation is quiet -- a request answers `NO error`
+# and nothing says why. This logs every call outside the set, so the journal
+# names it without the filter having to kill anything to be noticed.
+SystemCallLog=~@system-service
 
 # No [Install] section on purpose. This service exists to be started BY the
 # socket; `systemctl enable omarchy-faced.service` would make it a root process

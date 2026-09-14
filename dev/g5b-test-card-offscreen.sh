@@ -76,6 +76,13 @@ identity_state() {
     "$(date +%s%3N)" >"$state/state.json"
 }
 
+# The other kind: something asked for root, in the shape omarchy-face-verify
+# writes it. This is the card a person has to be able to read.
+sudo_state() {
+  printf '{"state":"start","service":"sudo","requester":{"command":"pacman","from":"foot"},"person":"","detail":"looking","at":%s}\n' \
+    "$(date +%s%3N)" >"$state/state.json"
+}
+
 run_case() { # run_case <case> [env…]
   local name=$1
   shift
@@ -136,8 +143,32 @@ check "…and comes back once the card has gone" "true" \
   "$(say gone "$out" '.indicator.showing')"
 check "the card takes itself away without being asked" "null" "$(say gone "$out" '.test')"
 
+step "a sudo that lands during a test is NOT the thing that gets hidden"
+# The phase-6 security review's MEDIUM. Any process running as this account can
+# raise a Test card over IPC; if that card suppressed the indicator outright, it
+# would be a way to pick a three-second window in which `sudo -n` draws nothing
+# on screen -- switching off exactly the mitigation phase 5 added. So identity
+# checks are the only ones a Test card suppresses, and for anything else the
+# CARD stands down.
+rm -f "$state/identity.log"
+identity_state
+( sleep 1.4; sudo_state ) &
+writer=$!
+out=$(run_case sudo-during OMARCHY_FACE_DEV_VERIFY=0 OMARCHY_FACE_DEV_VERIFY_SECONDS=6)
+wait "$writer" 2>/dev/null
+echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
+check "GATE: the sudo card draws, test card or no test card" "true" \
+  "$(say checking "$out" '.indicator.showing')"
+check "…still naming the program that asked" "sudo · pacman, from foot" \
+  "$(say checking "$out" '.indicator.detail')"
+check "…and it is the Test card that gets out of the way" "true" \
+  "$(say checking "$out" '.test.standDown')"
+check "…without the check it was running being cancelled" "checking" \
+  "$(say checking "$out" '.test.phase')"
+
 step "GATE: stopping a check signals the helper (plan-merged.md §2.5)"
 rm -f "$state/identity.log"
+identity_state
 out=$(run_case cancel OMARCHY_FACE_DEV_VERIFY=0 OMARCHY_FACE_DEV_VERIFY_SECONDS=8)
 echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
 check "the card is gone" "null" "$(say cancelled "$out" '.test')"

@@ -39,6 +39,13 @@ PanelWindow {
   property int code: -1
   property string fontFamily: Style.font.family
 
+  // Something that matters more is using this piece of screen: a `sudo` asking
+  // for root, drawn by the indicator. This card is about a test nobody's
+  // security depends on, so it gets out of the way rather than drawing over the
+  // one card a person needs to be able to read (Indicator.qml). The check
+  // carries on underneath; only the window goes.
+  property bool standDown: false
+
   // Stop looking. The helper runs as the user, so this is a SIGTERM -- and that
   // is the same cancellation Profiles uses, which frees the camera within
   // 300 ms (plan-merged.md §2.5, common/Ask.qml's cancel()).
@@ -67,6 +74,7 @@ PanelWindow {
 
   anchors { top: true; bottom: true; left: true; right: true }
   color: "transparent"
+  visible: !card.standDown
   exclusionMode: ExclusionMode.Ignore
   WlrLayershell.namespace: "omarchy-face-test"
   WlrLayershell.layer: WlrLayer.Overlay

@@ -446,10 +446,15 @@ producer. It drives the real `Service.qml` through the same `testMatch(name)`
 the popup calls, with the dev stub told which of the five contract exit codes to
 answer with, and reads the card's text out of the service's own `state()`.
 
-Two things it proves that are not about copy: the indicator **stands down**
-while the card is up (the same check would otherwise be announced twice), and
-stopping a check really **signals** the helper — the stub traps `TERM` and
-records it, because a helper that was merely abandoned is a camera still held.
+Three things it proves that are not about copy. The indicator **stands down**
+for the card's own identity checks (the same check would otherwise be announced
+twice) — but a **`sudo` that lands during a test still draws, and the card is
+what gets out of the way**. That way round is the phase-6 review's MEDIUM: any
+process running as this account can raise a Test card over IPC, so a blanket
+suppression would be a way to choose a three-second window in which `sudo -n`
+draws nothing on screen. And stopping a check really **signals** the helper —
+the stub traps `TERM` and records it, because a helper that was merely
+abandoned is a camera still held.
 
 Unlike the other offscreen suites this one really does put a card on the screen
 for a second: the card is a layer-shell window and the shipped file cannot be

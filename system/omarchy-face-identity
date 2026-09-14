@@ -42,10 +42,16 @@ PEOPLE = "/var/lib/omarchy-face/people.json"
 SOCKET = "/run/omarchy-face/verify.sock"
 NAME_RULE = re.compile(r"^[a-z][a-z0-9-]{0,23}$")
 
-# The daemon may sit through howdy's whole scan plus its own backstop (§6.2:
-# `timeout -k 2 8`), so ten seconds is the receive timeout the plan gives and it
-# is comfortably more than the longest real answer.
-TIMEOUT = 10.0
+# The plan says ten seconds (§6.3). Twenty, because ten is less than the answer
+# the daemon is allowed to take: 3 s identifying the camera + 2 s waiting for it
+# + 8 s of engine + the `-k 2` kill + reading what it printed is about fifteen in
+# the worst case, and a client that gave up at ten would turn a slow *success*
+# into exit 3 -- "cannot check right now" about a check that was about to say
+# yes. Nothing waits this long in practice, and nothing is held open by it:
+# Profiles wraps this call in its own `timeout 12` and cancels at the first
+# keystroke, which is the bound that actually applies to a person standing
+# there.
+TIMEOUT = 20.0
 
 # The exit codes, named, because every one of them is a documented answer.
 PRESENT, ABSENT, BAD_NAME, UNAVAILABLE, TRY_AGAIN = 0, 1, 2, 3, 4

@@ -423,6 +423,41 @@ same "no infrared camera at all is 'cannot check'" "3" \
   "$(touch "$STUB/no-camera"; identity verify anna)"
 rm -f "$STUB/no-camera"
 
+step "the engine holds the camera lock itself (review F9)"
+# The lock fd is handed to compare.py the way the sudo verifier hands down its
+# fd 9. It matters for the one state no signal ends: a V4L ioctl stuck in the
+# kernel. If the lock lived only in the daemon, killing the daemon would report
+# the camera FREE while the sensor was still open -- and the next caller, or
+# sudo, would be told to go ahead into nothing. Killing the daemon outright is
+# how that is asked here, because a D state cannot be arranged on demand.
+reset_rate; reset_log; stub hang
+say 'VERIFY-PERSON anna' >"$LAB/orphan" 2>&1 &
+orphan=$!
+for _ in $(seq 1 60); do camera_free || break; sleep 0.05; done
+victim=$(daemon_pid)
+kill -KILL "$victim" 2>/dev/null
+sleep 0.3
+check "the daemon is gone" bash -c "! kill -0 $victim 2>/dev/null"
+check "…the engine it started is not" compare_alive
+check "…and the camera still reads as taken, because it still is" \
+  bash -c '! flock -n /run/omarchy-face/camera.lock true'
+pkill -KILL -f 'compare\.py' 2>/dev/null
+kill "$orphan" 2>/dev/null
+wait "$orphan" 2>/dev/null
+sleep 0.2
+check "…and free once the engine really has gone" camera_free
+stub ok
+
+step "an engine the backstop had to stop is a timeout, not a stranger (review F4)"
+# `timeout -k 2 8` exits 124 when it had to signal the engine. Reporting that as
+# `no_match` would put "Did not recognise Anna" on a card about a camera that
+# hung, and tell Profiles the person was absent when nothing ever looked.
+reset_rate; reset_log; stub hang
+same "the backstop's answer is timeout" "NO timeout" "$(say 'VERIFY-PERSON anna')"
+same "…which the client reports as 'the check said no'" "failed" \
+  "$(python3 -c 'import json; print(json.load(open("/run/omarchy-face/state.json"))["state"])' 2>/dev/null)"
+stub ok
+
 # =============================================================================
 step "GATE: a client that goes away (§6.4 test 3, plan-merged.md §2.5)"
 # =============================================================================
@@ -520,6 +555,10 @@ same "a connection pending at exit is answered rather than left in the backlog" 
 check "…and the engine did not outlive the daemon that started it" \
   bash -c '! pgrep -f "compare\.py" >/dev/null'
 check "…nor the camera lock" camera_free
+# review F5: a check that ended because systemd stopped the daemon must not
+# leave the indicator spinning on the `start` nobody replaced.
+same "…and the indicator is told the check is over, not left waiting" "skipped" \
+  "$(python3 -c 'import json; print(json.load(open("/run/omarchy-face/state.json"))["state"])' 2>/dev/null)"
 stub ok
 
 reset_rate; reset_log
@@ -616,6 +655,23 @@ check "…is allowed video4linux and nothing else" grep -q '^DeviceAllow=char-vi
 check "…and now carries the filter phase 6 promised" grep -q '^SystemCallFilter=@system-service' "$UNIT"
 check "…which fails the call rather than killing an undrained daemon" \
   grep -q '^SystemCallErrorNumber=EPERM' "$UNIT"
+check "…and says so in the journal, since EPERM is otherwise silent" \
+  grep -q '^SystemCallLog=~@system-service' "$UNIT"
+
+step "one name rule, written out in four places (review F6)"
+# The rule cannot be shared: three of the four are self-contained root helpers
+# in three languages, and giving them a common file to import would be giving
+# them a file to be broken by. So the rule is repeated and this is what notices
+# when one copy drifts -- a looser one in the daemon would be a name the store
+# never allowed being accepted at the socket.
+rules=$(grep -ohE '\[a-z\]\[a-z0-9-\]\{[0-9]+,[0-9]+\}' \
+  "$REPO/system/omarchy-face-admin" "$REPO/system/omarchy-face-identity" \
+  "$REPO/system/omarchy-faced" "$REPO/common/names.js" | sort -u)
+same "every copy of the name rule is the same rule" "[a-z][a-z0-9-]{0,23}" "$rules"
+for file in system/omarchy-face-admin system/omarchy-face-identity system/omarchy-faced common/names.js; do
+  check "…and $file has one" \
+    grep -qE '\[a-z\]\[a-z0-9-\]\{[0-9]+,[0-9]+\}' "$REPO/$file"
+done
 
 echo
 if ((failures == 0)); then

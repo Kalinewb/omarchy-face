@@ -30,7 +30,8 @@ for the people you choose.
 > Nothing it says authenticates anybody: `sudo` never goes near it, and the worst
 > a wrong answer can cost is a profile that opens or a lock screen that does not.
 > Each person's page has a **Test** button that asks the same question and says
-> what came back; nothing is unlocked by it.
+> what came back; nothing is unlocked by it, and if something asks for root
+> while a test is on screen, the test card is the one that gets out of the way.
 >
 > **What the card on screen is, and is not.** When something asks for root, a card
 > appears under the camera saying a check is happening and naming what asked.

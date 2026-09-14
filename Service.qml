@@ -142,10 +142,11 @@ Item {
   property var testProcess: null
   property string testName: ""
 
-  // The helper's own worst case is howdy's timeout plus the daemon's backstop;
-  // twice that is a fault, and the answer to a fault is to stop looking rather
-  // than leave a card on somebody's screen.
-  readonly property int testSafetyMs: 20000
+  // Longer than the helper's own receive timeout (20 s), because a safety net
+  // that fires first is not a safety net -- it is a card that cancels checks
+  // which were about to answer. This only ever runs when the helper itself did
+  // not come back at all.
+  readonly property int testSafetyMs: 25000
   readonly property int testDismissMs: 3200
 
   function startTest(name) {
@@ -156,7 +157,12 @@ Item {
     root.testCard = testComponent.createObject(root, {
       label: shown,
       phase: "checking",
-      code: -1
+      code: -1,
+      // A `sudo` card on the same piece of screen wins it. The check keeps
+      // running underneath -- what stands down is the drawing, not the test.
+      standDown: Qt.binding(function () {
+        return indicator.visibleNow && indicator.service !== "identity"
+      })
     })
     if (!root.testCard) { root.testName = ""; return "the card could not be created" }
     root.testCard.stopped.connect(function () { root.closeTest() })
@@ -291,7 +297,8 @@ Item {
           label: String(root.testCard.label),
           phase: String(root.testCard.phase),
           code: root.testCard.code,
-          headline: String(root.testCard.headline)
+          headline: String(root.testCard.headline),
+          standDown: root.testCard.standDown
         } : null,
         card: root.card ? {
           name: root.cardName,
@@ -307,13 +314,14 @@ Item {
   }
 
   // The indicator (G5). It draws only while an authentication is actually in
-  // flight, and it stands down while either card is up: the Test card is a card
-  // in the same place saying more about the same check -- the daemon writes
-  // `identity` states for it, and the indicator drawing them too would be the
-  // same event reported twice, once badly (plan-merged.md §1 row 11).
+  // flight. The recording card suppresses it entirely; the Test card suppresses
+  // only the `identity` states it is itself the cause of -- a `sudo` landing
+  // during a test still draws, and the Test card stands down for it instead
+  // (Indicator.qml says why that way round, and it is a security reason).
   Indicator {
     id: indicator
-    suppressed: root.card !== null || root.testCard !== null
+    suppressed: root.card !== null
+    suppressedIdentity: root.testCard !== null
   }
 
   Component { id: sessionComponent; RecordSession {} }
