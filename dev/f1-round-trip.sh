@@ -285,6 +285,20 @@ session		optional	pam_systemd.so class=none
 PAMPROBE
 pam_probe_expected=$(grep -v 'omarchy-face' "$pam_probe")
 
+# And a stack with a begin marker and NO end marker. `sed '/begin/,/end/d'`
+# would delete from there to the end of the file, which on an auth stack is a
+# machine nobody can authenticate to; purge has to leave it alone and say so.
+pam_broken=/etc/pam.d/omarchy-face-probe-unterminated
+cat >"$pam_broken" <<'PAMBROKEN'
+#%PAM-1.0
+auth		include		system-auth
+# omarchy-face begin
+auth  sufficient  pam_exec.so seteuid quiet /usr/local/bin/omarchy-face-verify
+account		include		system-auth
+session		include		system-auth
+PAMBROKEN
+pam_broken_before=$(sha256sum "$pam_broken" | cut -d' ' -f1)
+
 echo "  ${DIM}pkexec /usr/local/bin/omarchy-face-admin purge${RESET}"
 purge_err=$(mktemp)
 purge_out=$(/usr/local/bin/omarchy-face-admin purge 2>"$purge_err")
@@ -293,14 +307,16 @@ echo "  ${DIM}exit $purge_rc${RESET}  $purge_out"
 [[ -s $purge_err ]] && echo "  ${DIM}stderr:${RESET} $(cat "$purge_err")"
 check "purge exited 0" test "$purge_rc" -eq 0
 check "stdout is one JSON document" bash -c "jq -e . <<<'$purge_out' >/dev/null"
-check "purge reported nothing incomplete" \
-  bash -c "[[ \$(jq -r '.incomplete | length' <<<'$purge_out') == 0 ]]"
+check "purge reported nothing incomplete but the deliberately broken stack" \
+  bash -c "[[ \$(jq -c '.incomplete' <<<'$purge_out') == '[\"$pam_broken\"]' ]]"
+check "an unterminated marker leaves the stack byte-identical, not truncated" \
+  bash -c "[[ \$(sha256sum '$pam_broken' | cut -d' ' -f1) == '$pam_broken_before' ]]"
 check "purge removed the marked block and left every other line untouched" \
   bash -c "[[ \"\$(cat '$pam_probe')\" == \"\$(cat <<'PROBE'
 $pam_probe_expected
 PROBE
 )\" ]]"
-rm -f "$pam_probe"
+rm -f "$pam_probe" "$pam_broken"
 
 step "post-purge checklist (plan-engine.md §10.3)"
 check "no helper left in /usr/local/bin" \

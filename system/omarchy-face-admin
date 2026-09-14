@@ -417,13 +417,31 @@ case $verb in
     #    where sudo was never wired leaves /etc/pam.d byte-for-byte as it was.
     for pam_file in /etc/pam.d/*; do
       [[ -f $pam_file ]] || continue
-      grep -q '^# omarchy-face begin' "$pam_file" 2>/dev/null || continue
+      grep -q '^# omarchy-face begin$' "$pam_file" 2>/dev/null || continue
+
+      # The markers are counted and ordered before anything is deleted.
+      # `sed '/begin/,/end/d'` with a begin and no end deletes to the END OF
+      # FILE, and on an auth stack that is not a bad edit, it is a machine
+      # nobody can authenticate to. Two markers, in that order, or this file is
+      # reported and left exactly as it is.
+      begin_line=$(grep -n '^# omarchy-face begin$' "$pam_file" | cut -d: -f1)
+      end_line=$(grep -n '^# omarchy-face end$' "$pam_file" | cut -d: -f1)
+      if [[ $(grep -c '^# omarchy-face begin$' "$pam_file") != 1 ||
+            $(grep -c '^# omarchy-face end$' "$pam_file") != 1 ||
+            -z $begin_line || -z $end_line || $begin_line -ge $end_line ]]; then
+        incomplete+=("$pam_file")
+        continue
+      fi
+      block_lines=$((end_line - begin_line + 1))
+      before_lines=$(wc -l <"$pam_file")
+
       tmp_pam=$(mktemp "$(dirname -- "$pam_file")/.omarchy-face.XXXXXX") || { incomplete+=("$pam_file"); continue; }
       cp -p "$pam_file" "$tmp_pam" 2>/dev/null || { rm -f "$tmp_pam"; incomplete+=("$pam_file"); continue; }
-      sed -i '/^# omarchy-face begin$/,/^# omarchy-face end$/d' "$tmp_pam"
-      if grep -q 'omarchy-face' "$tmp_pam"; then
-        # A line outside the marked block: leave the file alone and say so,
-        # rather than guessing at somebody's hand edit.
+      sed -i "${begin_line},${end_line}d" "$tmp_pam"
+      if [[ $(wc -l <"$tmp_pam") != $((before_lines - block_lines)) ]] ||
+         grep -q 'omarchy-face' "$tmp_pam"; then
+        # Either more than the block went, or a face line sits outside it. Leave
+        # the file alone and say so, rather than guessing at somebody's edit.
         rm -f "$tmp_pam"
         incomplete+=("$pam_file")
         continue
