@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+
+"""A session-shaped echo, for the one question phase 4 opens with.
+
+`enroll-session` is a long-lived process fed JSON lines on stdin and answering
+on stdout, started through `pkexec` (plan-merged.md §1 row 19: "stdin through
+pkexec -- first test of phase 4"). Everything else in the phase is built on
+pkexec keeping the caller's standard streams across its exec.
+
+This program is that channel with the engine taken out: it prints `ready`, turns
+every command line into an event, and answers stdin EOF with `discarded`, so
+dev/f3-stdin-pkexec.sh can measure whether each line arrived, when it arrived,
+and whether closing stdin ended the process -- with nothing to go wrong that is
+not the channel itself.
+
+It is a development helper. It is not installed, it reads nothing, it writes
+nothing, and it touches no state; the only reason it may end up running as root
+is that proving the channel means proving it where the session runs.
+"""
+
+import json
+import os
+import sys
+import time
+
+started = time.time()
+
+
+def emit(document):
+    sys.stdout.write(json.dumps(document, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+
+
+emit({"event": "ready", "uid": os.getuid(), "at": round((time.time() - started) * 1000)})
+
+count = 0
+while True:
+    line = sys.stdin.readline()
+    if line == "":
+        break
+    line = line.strip()
+    if line == "":
+        continue
+    try:
+        message = json.loads(line)
+    except ValueError:
+        emit({"event": "error", "error": "not_json"})
+        continue
+    count += 1
+    if message.get("cmd") == "done":
+        emit({"event": "saved", "commands": count})
+        sys.exit(0)
+    emit({"event": "echo", "cmd": message.get("cmd"), "n": count,
+          "at": round((time.time() - started) * 1000)})
+
+emit({"event": "discarded", "commands": count})
+sys.exit(0)

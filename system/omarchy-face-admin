@@ -51,6 +51,9 @@ INSTALL_UNIT=omarchy-face-install.service
 BUILD_PHASE_UNIT=omarchy-face-build.service
 
 ENGINE_FILE=$STORE_DIR/engine.json
+PEOPLE_DIR=$STORE_DIR/people
+PEOPLE_FILE=$STORE_DIR/people.json
+STORE_LOCK=$STORE_DIR/.lock
 INSTALL_FILE=$RUN_DIR/install.json
 INSTALL_LOG=$RUN_DIR/install.log
 INSTALL_LOCK=$RUN_DIR/install.lock
@@ -1032,6 +1035,931 @@ set_config_key() { # set_config_key <key> <value>
   [[ $(config_ini_get "$key") == "$value" ]]
 }
 
+# --- the people store (F3) ----------------------------------------------------
+#
+# Everything about people lives in one embedded Python program. Three reasons,
+# and none of them is taste:
+#
+#   * a record holds 128-float encodings. Validating "exactly 128 numbers" and
+#     writing them back byte-for-byte is not something bash can be trusted with,
+#     and `regenerate` has to be idempotent to the byte (§3.6 test 1);
+#   * the derived files are howdy's own model format -- JSON -- and the enrol
+#     session reads one back out of a file howdy wrote;
+#   * `enroll-session` is a long-lived JSON-line conversation on stdin, which in
+#     bash would be a read loop parsing JSON with sed.
+#
+# python3 is not a new dependency: the engine *is* python (howdy's cli.py and
+# compare.py are what capture runs), so any machine where a face can be recorded
+# has it. The verbs that run before the engine exists -- install-system, purge,
+# purge-legacy, the build -- do not touch this code, so a machine without python
+# can still install and remove Face.
+#
+# The script is passed as argv (python3 -c), like the build script above, for the
+# same reason: a second file would have to join the `system` row's fixed set of
+# ten to be compared and installed with the rest.
+read -r -d '' STORE_PY <<'STORE_PY_END' || true
+import errno
+import fcntl
+import glob
+import json
+import os
+import re
+import secrets
+import subprocess
+import sys
+import time
+
+STORE_DIR = "/var/lib/omarchy-face"
+PEOPLE_DIR = STORE_DIR + "/people"
+PEOPLE_FILE = STORE_DIR + "/people.json"
+LOCK_FILE = STORE_DIR + "/.lock"
+ENGINE_FILE = STORE_DIR + "/engine.json"
+RUN_DIR = "/run/omarchy-face"
+CAMERA_LOCK = RUN_DIR + "/camera.lock"
+CONFIG_FILE = "/etc/omarchy-face/config"
+HOWDY_DIR = "/usr/lib/security/howdy"
+HOWDY_CONFIG = HOWDY_DIR + "/config.ini"
+MODELS = HOWDY_DIR + "/models"
+
+# The two rules the GUI is told about in people.json and the engine enforces
+# here (plan-engine.md §3.2). The name is the Profiles contract key, so it is a
+# slug with no room for argument; the label is anything printable a person wants
+# to be called, within one line.
+NAME_RULE = r"^[a-z][a-z0-9-]{0,23}$"
+LABEL_RULE = r"^[^\x00-\x1f\x7f]{1,32}$"
+
+MAX_APPEARANCES = 3
+# Not in the plan, which only names the error code `person_limit`. A bound there
+# has to be, because every person's appearances end up in a set compare.py walks
+# per frame and in a world-readable summary; 16 people is more than the
+# household this is for and small enough that the sudo set stays a list somebody
+# could read. It is never reached by the GUI, which offers no bulk import.
+MAX_PEOPLE = 16
+
+# The three appearance labels the GUI offers; they are not enforced here (any
+# label within LABEL_RULE is accepted) and exist only so the standard ones are
+# spelled the same way everywhere.
+STANDARD_APPEARANCES = ["No glasses", "Everyday glasses", "Reading glasses"]
+
+# howdy's stock `certainty`, in the contract's 0-1 scale (plan-merged.md §2
+# rule 8). Only used when neither howdy's config nor engine.json can be read,
+# which is a machine where nothing can be captured anyway.
+FALLBACK_THRESHOLD = 0.35
+WEAK_MARGIN = 0.05
+
+# How long a capture may take. `add` loops up to 60 frames after a 2 s pause and
+# has no timeout of its own; `compare.py` has its own (config `timeout`, 5 s),
+# and the ceiling here is the backstop for a V4L call stuck in the kernel
+# (plan-merged.md §2 rule 9 -- every compare.py runs under `timeout -k 2`).
+ADD_SECONDS = 40
+COMPARE_SECONDS = 8
+CAMERA_LOCK_WAIT = 5.0
+STORE_LOCK_WAIT = 5.0
+
+# Debris from a session that was killed between taking a frame and committing
+# (plan-engine.md §3.3).
+ENROLL_DEBRIS_AGE = 600
+
+
+class Fatal(Exception):
+    """Ends the verb with {"error":code,…} and exit 1."""
+
+    def __init__(self, code, **extra):
+        Exception.__init__(self, code)
+        self.code = code
+        self.extra = extra
+
+
+class Busy(Exception):
+    """Exit 3: somebody else holds the store lock (plan-merged.md §2 rule 3)."""
+
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+
+
+def prose(text):
+    sys.stderr.write(text + "\n")
+    sys.stderr.flush()
+
+
+def audit(text):
+    """The journal line for a store change. Names only, never labels: people.json
+    is world-readable but the journal is a different audience, and a name is what
+    every other record of this (PAM, the daemon) is keyed on."""
+    try:
+        subprocess.run(["logger", "-t", "omarchy-face", "-p", "auth.notice", "--", text],
+                       env={"PATH": "/usr/local/bin:/usr/bin"},
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+    except OSError:
+        pass
+
+
+def config_get(key, default=""):
+    try:
+        with open(CONFIG_FILE, "r") as handle:
+            for line in handle:
+                match = re.match(r"^\s*" + re.escape(key) + r"\s*=\s*(.*?)\s*$", line)
+                if match:
+                    return match.group(1).split("#")[0].strip()
+    except OSError:
+        pass
+    return default
+
+
+def account():
+    who = config_get("account")
+    if not who:
+        raise Fatal("not_installed")
+    return who
+
+
+# --- atomic writes ------------------------------------------------------------
+#
+# Same directory, temp + rename (plan-merged.md §2 rule 5), and the mode is set
+# on the temp file before it is renamed: a world-readable summary that exists for
+# a moment as 0600 is harmless, but a 0600 record that exists for a moment as
+# 0644 is an encoding somebody could have read.
+
+def write_file(path, text, mode):
+    directory = os.path.dirname(path)
+    tmp = os.path.join(directory, ".omarchy-face.%s.tmp" % secrets.token_hex(6))
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(text)
+        os.chmod(tmp, mode)
+        os.chown(tmp, 0, 0)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def write_json(path, doc, mode):
+    write_file(path, json.dumps(doc, separators=(",", ":")) + "\n", mode)
+
+
+def ensure_dirs():
+    for path, mode in ((STORE_DIR, 0o755), (PEOPLE_DIR, 0o700)):
+        if not os.path.isdir(path):
+            os.makedirs(path, mode)
+        os.chmod(path, mode)
+        os.chown(path, 0, 0)
+
+
+class store_lock(object):
+    """The store flock (plan-engine.md §3.2). Held only while writing."""
+
+    def __enter__(self):
+        ensure_dirs()
+        if not os.path.exists(LOCK_FILE):
+            os.close(os.open(LOCK_FILE, os.O_WRONLY | os.O_CREAT, 0o600))
+        os.chmod(LOCK_FILE, 0o600)
+        self.fd = os.open(LOCK_FILE, os.O_WRONLY | os.O_APPEND)
+        deadline = time.time() + STORE_LOCK_WAIT
+        while True:
+            try:
+                fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except OSError:
+                if time.time() >= deadline:
+                    os.close(self.fd)
+                    raise Busy()
+                time.sleep(0.1)
+
+    def __exit__(self, *exc):
+        fcntl.flock(self.fd, fcntl.LOCK_UN)
+        os.close(self.fd)
+        return False
+
+
+# --- records ------------------------------------------------------------------
+
+def is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def validate_record(path, doc):
+    """Every rule of plan-engine.md §3.2, or store_corrupt naming the file."""
+
+    def bad():
+        raise Fatal("store_corrupt", file=path)
+
+    if not isinstance(doc, dict):
+        bad()
+    name = doc.get("name")
+    if not isinstance(name, str) or not re.match(NAME_RULE, name):
+        bad()
+    # The file name is the key the rest of the store is indexed by; a record
+    # that says it is somebody else would make `regenerate` write a derived set
+    # under one name from a record stored under another.
+    if os.path.basename(path) != name + ".json":
+        bad()
+    if not isinstance(doc.get("label"), str) or not re.match(LABEL_RULE, doc["label"]):
+        bad()
+    for key in ("owner", "sudo", "lock"):
+        if not isinstance(doc.get(key), bool):
+            bad()
+    if not is_number(doc.get("created")):
+        bad()
+    appearances = doc.get("appearances")
+    if not isinstance(appearances, list) or len(appearances) > MAX_APPEARANCES:
+        bad()
+    seen = set()
+    for appearance in appearances:
+        if not isinstance(appearance, dict):
+            bad()
+        label = appearance.get("label")
+        if not isinstance(label, str) or not re.match(LABEL_RULE, label):
+            bad()
+        if label in seen:
+            bad()
+        seen.add(label)
+        if not is_number(appearance.get("time")):
+            bad()
+        encoding = appearance.get("encoding")
+        if not isinstance(encoding, list) or len(encoding) != 128:
+            bad()
+        for value in encoding:
+            if not is_number(value):
+                bad()
+    return doc
+
+
+def read_all():
+    """Every record, validated, sorted by name. store_corrupt if any is wrong."""
+    people = []
+    for path in sorted(glob.glob(PEOPLE_DIR + "/*.json")):
+        try:
+            with open(path, "r") as handle:
+                doc = json.load(handle)
+        except (OSError, ValueError):
+            raise Fatal("store_corrupt", file=path)
+        people.append(validate_record(path, doc))
+    owners = [p for p in people if p["owner"]]
+    if len(owners) > 1:
+        raise Fatal("store_corrupt", file=PEOPLE_DIR)
+    people.sort(key=lambda p: p["name"])
+    return people
+
+
+def record_path(name):
+    return PEOPLE_DIR + "/" + name + ".json"
+
+
+def find(people, name):
+    for person in people:
+        if person["name"] == name:
+            return person
+    return None
+
+
+def public(person):
+    """What leaves this file: never an encoding (plan-engine.md §3.2)."""
+    return {
+        "name": person["name"],
+        "label": person["label"],
+        "owner": person["owner"],
+        "sudo": person["sudo"],
+        "lock": person["lock"],
+        "appearances": [{"label": a["label"], "time": a["time"]}
+                        for a in person["appearances"]],
+    }
+
+
+def order_for_display(people):
+    # Owner first, then by label (plan-gui.md §5.1). people.json is written in
+    # this order so the GUI renders it without sorting, and so two regenerates
+    # of the same store produce the same bytes.
+    return sorted(people, key=lambda p: (0 if p["owner"] else 1, p["label"].lower(), p["name"]))
+
+
+# --- derivation (plan-engine.md §3.3) -----------------------------------------
+
+def set_path(kind, who):
+    return "%s/omarchy-face.%s.%s.dat" % (MODELS, kind, who)
+
+
+def person_path(name):
+    return "%s/omarchy-face.person.%s.dat" % (MODELS, name)
+
+
+def model_entries(people, key):
+    entries = []
+    for person in people:
+        if key is not None and not person[key]:
+            continue
+        for appearance in person["appearances"]:
+            entries.append({
+                "time": appearance["time"],
+                "label": person["name"] + "/" + appearance["label"],
+                "id": len(entries),
+                "data": [appearance["encoding"]],
+            })
+    return entries
+
+
+def write_set(path, entries):
+    # An empty set is DELETED, never written empty: compare.py exits 10 on a
+    # missing file, and 10 on a file holding no models -- but a present file is
+    # also a file the sudo row would count as a set that exists.
+    if not entries:
+        if os.path.exists(path):
+            os.unlink(path)
+        return
+    write_json(path, entries, 0o600)
+
+
+def warning_for(sudo_faces):
+    # From the F3 measurement (plan-engine.md §7): the cost of more Sudo faces
+    # is not search time, it is that each template is another chance of landing
+    # inside the threshold. Null while sudo_faces <= 3.
+    if sudo_faces <= 3:
+        return None
+    return ("Sudo now matches against %d faces. Every extra face is another "
+            "chance that the wrong one is accepted." % sudo_faces)
+
+
+def newest_time(people):
+    # `updated` is the newest thing in the store, not "now". That is what makes
+    # regenerate a function of people/*.json alone: run it twice and the bytes
+    # are identical, which is §3.6 test 1 and the only way the GUI can tell a
+    # real change from a rewrite.
+    newest = 0
+    for person in people:
+        newest = max(newest, int(person["created"]))
+        for appearance in person["appearances"]:
+            newest = max(newest, int(appearance["time"]))
+    return newest
+
+
+def regenerate(people=None):
+    """Rebuild every derived file from people/*.json alone. Caller holds the lock."""
+    if people is None:
+        people = read_all()
+    who = account()
+    if not os.path.isdir(MODELS):
+        # howdy's own directory. Without it there is nothing to derive into, and
+        # creating it would be Face inventing half an engine.
+        raise Fatal("engine_missing")
+
+    ordered = order_for_display(people)
+    sudo_entries = model_entries(people, "sudo")
+    lock_entries = model_entries(people, "lock")
+
+    write_set(set_path("sudo", who), sudo_entries)
+    write_set(set_path("lock", who), lock_entries)
+    for person in people:
+        write_set(person_path(person["name"]), model_entries([person], None))
+
+    # A derived file with no record behind it is a face that can still
+    # authenticate somebody the store has forgotten.
+    for path in glob.glob(MODELS + "/omarchy-face.person.*.dat"):
+        name = os.path.basename(path)[len("omarchy-face.person."):-len(".dat")]
+        if not os.path.exists(record_path(name)):
+            os.unlink(path)
+    now = time.time()
+    for path in glob.glob(MODELS + "/omarchy-face.enroll.*"):
+        try:
+            if now - os.path.getmtime(path) > ENROLL_DEBRIS_AGE:
+                os.unlink(path)
+        except OSError:
+            pass
+
+    summary = {
+        "people": [public(p) for p in ordered],
+        "sudo_faces": len(sudo_entries),
+        "lock_faces": len(lock_entries),
+        "maxAppearances": MAX_APPEARANCES,
+        "nameRule": NAME_RULE,
+        "labelRule": LABEL_RULE,
+        "appearanceLabels": STANDARD_APPEARANCES,
+        "warning": warning_for(len(sudo_entries)),
+        "updated": newest_time(people),
+    }
+    write_json(PEOPLE_FILE, summary, 0o644)
+    return summary
+
+
+# --- the camera ---------------------------------------------------------------
+
+def howdy_threshold():
+    """howdy's certainty, on the contract's 0-1 scale (plan-merged.md §2 rule 8)."""
+    raw = None
+    try:
+        with open(HOWDY_CONFIG, "r") as handle:
+            for line in handle:
+                match = re.match(r"^\s*certainty\s*=\s*([0-9.]+)\s*$", line)
+                if match:
+                    raw = float(match.group(1))
+    except (OSError, ValueError):
+        raw = None
+    if raw is not None:
+        return raw / 10.0
+    try:
+        with open(ENGINE_FILE, "r") as handle:
+            value = json.load(handle).get("threshold")
+        if is_number(value):
+            return float(value)
+    except (OSError, ValueError):
+        pass
+    return FALLBACK_THRESHOLD
+
+
+class camera_lock(object):
+    """One camera user at a time (plan-engine.md §3.2). Raises Busy on timeout."""
+
+    def __enter__(self):
+        if not os.path.isdir(RUN_DIR):
+            os.makedirs(RUN_DIR, 0o755)
+        if not os.path.exists(CAMERA_LOCK):
+            os.close(os.open(CAMERA_LOCK, os.O_WRONLY | os.O_CREAT, 0o600))
+        os.chmod(CAMERA_LOCK, 0o600)
+        self.fd = os.open(CAMERA_LOCK, os.O_WRONLY | os.O_APPEND)
+        deadline = time.time() + CAMERA_LOCK_WAIT
+        while True:
+            try:
+                fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except OSError:
+                if time.time() >= deadline:
+                    os.close(self.fd)
+                    raise Busy()
+                time.sleep(0.2)
+
+    def __exit__(self, *exc):
+        fcntl.flock(self.fd, fcntl.LOCK_UN)
+        os.close(self.fd)
+        return False
+
+
+def engine_env():
+    # howdy's cli.py refuses to run without SUDO_USER and refuses to work on the
+    # user "root" (cli.py:83-90), so the temp model name is the user and
+    # SUDO_USER is only there to get past the check. A fixed environment for the
+    # same reason the helper pins its own PATH.
+    return {
+        "PATH": "/usr/local/bin:/usr/bin",
+        "HOME": "/root",
+        "LC_ALL": "C",
+        "SUDO_USER": "root",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+
+
+def run_engine(argv, seconds):
+    """One engine call under `timeout -k 2` (plan-merged.md §2 rule 9)."""
+    command = ["timeout", "-k", "2", str(seconds)] + argv
+    try:
+        done = subprocess.run(command, env=engine_env(), stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    except OSError:
+        return 127, ""
+    return done.returncode, done.stdout.decode("utf-8", "replace")
+
+
+# add.py's four ways of failing, by the lines it prints (add.py:166-179). Order
+# matters: "All frames were too dark" is followed by an average, and the black
+# frame message is the more specific of the two.
+ADD_FAILURES = [
+    ("Camera saw only black frames", "black_frames"),
+    ("All frames were too dark", "too_dark"),
+    ("Multiple faces detected", "multiple_faces"),
+    ("No face detected", "no_face"),
+]
+
+
+def capture(appearance, threshold):
+    """One frame, verified, as an event of plan-merged.md §2.4."""
+    nonce = secrets.token_hex(8)
+    model = "omarchy-face.enroll." + nonce
+    temp = MODELS + "/" + model + ".dat"
+
+    def cleanup():
+        try:
+            os.unlink(temp)
+        except OSError:
+            pass
+
+    try:
+        with camera_lock():
+            code, output = run_engine(
+                ["python3", HOWDY_DIR + "/cli.py", "-U", model, "-y", "add"], ADD_SECONDS)
+            if code != 0:
+                cleanup()
+                for needle, mapped in ADD_FAILURES:
+                    if needle in output:
+                        return {"event": "capture_failed", "code": mapped}
+                prose("howdy add exited %d: %s" % (code, output.strip()[-400:]))
+                return {"event": "capture_failed", "code": "timeout"}
+
+            # Verified with howdy's own comparison, against the model just
+            # written and nothing else: the certainty in the event is the engine's
+            # own opinion of the face it just stored, not a number Face invented.
+            code, output = run_engine(
+                ["python3", HOWDY_DIR + "/compare.py", model], COMPARE_SECONDS)
+    except Busy:
+        cleanup()
+        return {"event": "capture_failed", "code": "camera_busy"}
+
+    if code != 0:
+        cleanup()
+        prose("compare exited %d: %s" % (code, output.strip()[-400:]))
+        # 11 and 13 are compare.py's timeouts; 10 and 12 mean it could not read
+        # the model we just wrote, which is an engine that cannot see the face
+        # it stored -- retryable either way, and never a reason to keep it.
+        return {"event": "capture_failed", "code": "timeout"}
+
+    certainty = None
+    for line in output.splitlines():
+        match = re.match(r"^Certainty of winning frame:\s*([0-9.]+)", line)
+        if match:
+            # compare.py:277 prints match * 10; every number in the contract is
+            # on howdy's 0-1 distance scale (plan-merged.md §2 rule 8).
+            certainty = float(match.group(1)) / 10.0
+        # E8: the winning model's label is the attribution the sudo journal
+        # line and the indicator are built on, and it is only correct because
+        # each model file here holds exactly one encoding.
+        if line.startswith("Winning model:"):
+            prose(line.strip())
+    if certainty is None:
+        cleanup()
+        prose("compare printed no certainty; is end_report on?")
+        return {"event": "capture_failed", "code": "timeout"}
+
+    try:
+        # O_NOFOLLOW: this is root reading a file another program just wrote, by
+        # a name root chose. Nothing unprivileged can write howdy's model
+        # directory, so a link at that name should be impossible -- which is
+        # exactly the sort of "impossible" worth one flag to refuse.
+        fd = os.open(temp, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "r") as handle:
+            models = json.load(handle)
+        encoding = models[0]["data"][0]
+    except (OSError, ValueError, IndexError, KeyError, TypeError):
+        cleanup()
+        return {"event": "capture_failed", "code": "no_face"}
+    cleanup()
+    if not isinstance(encoding, list) or len(encoding) != 128:
+        return {"event": "capture_failed", "code": "no_face"}
+
+    return {
+        "event": "captured",
+        "appearance": appearance,
+        "certainty": certainty,
+        "threshold": threshold,
+        "weak": (threshold - certainty) < WEAK_MARGIN,
+        "encoding": encoding,
+    }
+
+
+# --- verbs --------------------------------------------------------------------
+
+def check_name(name):
+    if not isinstance(name, str) or not re.match(NAME_RULE, name):
+        raise Fatal("invalid_name")
+    return name
+
+
+def check_label(label):
+    if not isinstance(label, str) or not re.match(LABEL_RULE, label):
+        raise Fatal("invalid_label")
+    return label
+
+
+def stdin_json():
+    try:
+        return json.loads(sys.stdin.read() or "{}")
+    except ValueError:
+        raise Fatal("bad_input")
+
+
+def cmd_regenerate():
+    with store_lock():
+        summary = regenerate()
+    emit({"ok": True, "sudo_faces": summary["sudo_faces"],
+          "lock_faces": summary["lock_faces"]})
+
+
+def cmd_set_label(name, payload):
+    label = check_label(payload.get("label"))
+    with store_lock():
+        people = read_all()
+        person = find(people, name)
+        if person is None:
+            raise Fatal("no_person")
+        person["label"] = label
+        write_json(record_path(name), person, 0o600)
+        summary = regenerate(people)
+    emit({"ok": True, "person": public(person), "sudo_faces": summary["sudo_faces"]})
+
+
+def cmd_set_permission(name, which, value):
+    if which not in ("sudo", "lock"):
+        raise Fatal("bad_arguments")
+    with store_lock():
+        people = read_all()
+        person = find(people, name)
+        if person is None:
+            raise Fatal("no_person")
+        if value and not person["appearances"]:
+            raise Fatal("no_appearances")
+        person[which] = value
+        write_json(record_path(name), person, 0o600)
+        summary = regenerate(people)
+    emit({"ok": True, "person": public(person), "sudo_faces": summary["sudo_faces"]})
+
+
+def cmd_remove_appearance(name, payload):
+    label = check_label(payload.get("appearance"))
+    with store_lock():
+        people = read_all()
+        person = find(people, name)
+        if person is None:
+            raise Fatal("no_person")
+        kept = [a for a in person["appearances"] if a["label"] != label]
+        if len(kept) == len(person["appearances"]):
+            raise Fatal("no_appearance")
+        person["appearances"] = kept
+        # A person with no appearances left holds no permission either: the sets
+        # are derived from appearances, so leaving `sudo` true would be a flag
+        # with nothing behind it that silently rewires on the next capture.
+        if not kept:
+            person["sudo"] = False
+            person["lock"] = False
+        write_json(record_path(name), person, 0o600)
+        summary = regenerate(people)
+    emit({"ok": True, "person": public(person), "sudo_faces": summary["sudo_faces"]})
+
+
+def cmd_remove_person(name):
+    with store_lock():
+        people = read_all()
+        person = find(people, name)
+        if person is None:
+            raise Fatal("no_person")
+        # plan-merged.md §1 row 7. The GUI hides the control; this is what makes
+        # it true, because IPC and the helper itself can both be called directly.
+        if person["owner"]:
+            raise Fatal("is_owner")
+        os.unlink(record_path(name))
+        people = [p for p in people if p["name"] != name]
+        summary = regenerate(people)
+    emit({"ok": True, "removed": name, "sudo_faces": summary["sudo_faces"]})
+
+
+def cmd_enroll_session(name):
+    """plan-merged.md §2.4. JSON lines both ways; stdin EOF is the cancel."""
+    # invalid_name is checked first, so it can arrive before `ready` (§2.4).
+    check_name(name)
+    people = read_all()
+    person = find(people, name)
+    if person is None and len(people) >= MAX_PEOPLE:
+        raise Fatal("person_limit")
+    threshold = howdy_threshold()
+
+    emit({"event": "ready", "person": public(person) if person else None})
+
+    created = None          # the record a `create` proposed, not yet written
+    captured = {}           # appearance label -> appearance, this session only
+    committed = False
+
+    while True:
+        line = sys.stdin.readline()
+        if line == "":
+            break
+        line = line.strip()
+        if line == "":
+            continue
+        try:
+            message = json.loads(line)
+        except ValueError:
+            prose("ignoring a line that is not JSON")
+            continue
+        if not isinstance(message, dict):
+            continue
+        command = message.get("cmd")
+
+        if command == "create":
+            if person is not None or created is not None:
+                raise Fatal("exists")
+            label = check_label(message.get("label"))
+            created = {
+                "name": name,
+                "label": label,
+                # The owner is the first person committed into an empty store,
+                # and no verb ever sets or moves it (plan-engine.md §3.1).
+                "owner": len(people) == 0,
+                "sudo": len(people) == 0,
+                "lock": False,
+                "created": int(time.time()),
+                "appearances": [],
+            }
+
+        elif command == "capture":
+            target = person if person is not None else created
+            if target is None:
+                # A capture for a person who neither exists nor was created:
+                # the name names nobody, which is what invalid_name says.
+                raise Fatal("invalid_name")
+            appearance = check_label(message.get("appearance"))
+            labels = set(a["label"] for a in target["appearances"]) | set(captured)
+            if appearance not in labels and len(labels) >= MAX_APPEARANCES:
+                raise Fatal("appearance_limit")
+            emit({"event": "capturing"})
+            result = capture(appearance, threshold)
+            if result["event"] == "captured":
+                encoding = result.pop("encoding")
+                captured[appearance] = {"label": appearance,
+                                        "time": int(time.time()),
+                                        "encoding": encoding}
+            emit(result)
+
+        elif command == "done":
+            if not captured:
+                # Nothing was recorded, so there is nothing to save -- and a
+                # person with no appearances is exactly what "no empty people"
+                # rules out (plan-merged.md §1 row 5).
+                break
+            target = person if person is not None else created
+            with store_lock():
+                # Re-read under the lock: this is the first moment the store is
+                # being written, and it may have changed since `ready`.
+                people = read_all()
+                fresh = find(people, name)
+                if person is None and fresh is not None:
+                    raise Fatal("exists")
+                if fresh is not None:
+                    target = fresh
+                else:
+                    people.append(target)
+                for appearance in captured.values():
+                    kept = [a for a in target["appearances"]
+                            if a["label"] != appearance["label"]]
+                    if len(kept) >= MAX_APPEARANCES:
+                        raise Fatal("appearance_limit")
+                    target["appearances"] = kept + [appearance]
+                write_json(record_path(name), target, 0o600)
+                summary = regenerate(people)
+            committed = True
+            audit("enrolled %s: %d appearance(s) this session, %d in all; "
+                  "owner=%s sudo=%s lock=%s; sudo set now %d face(s)"
+                  % (name, len(captured), len(target["appearances"]),
+                     target["owner"], target["sudo"], target["lock"],
+                     summary["sudo_faces"]))
+            emit({"event": "saved", "person": public(target)})
+            break
+
+        else:
+            prose("ignoring an unknown command")
+
+    if not committed:
+        # EOF, or `done` with nothing captured. Nothing was written: the store
+        # lock was never taken, and the temp models were deleted as they were
+        # read (plan-merged.md §2.4).
+        emit({"event": "discarded"})
+    return 0
+
+
+def main(argv):
+    if not argv:
+        emit({"error": "no_verb"})
+        return 1
+    verb = argv[0]
+    try:
+        if verb == "regenerate":
+            cmd_regenerate()
+        elif verb == "enroll-session":
+            ensure_dirs()
+            return cmd_enroll_session(argv[1])
+        elif verb == "set-label":
+            cmd_set_label(check_name(argv[1]), stdin_json())
+        elif verb == "set-permission":
+            cmd_set_permission(check_name(argv[1]), argv[2], argv[3] == "on")
+        elif verb == "remove-appearance":
+            cmd_remove_appearance(check_name(argv[1]), stdin_json())
+        elif verb == "remove-person":
+            cmd_remove_person(check_name(argv[1]))
+        elif verb == "sudo-faces":
+            # Read-only, for the caller that has to decide whether removing a
+            # permission just emptied the sudo set (plan-engine.md §3.4).
+            people = read_all()
+            emit({"sudo_faces": len(model_entries(people, "sudo")),
+                  "lock_faces": len(model_entries(people, "lock"))})
+        else:
+            emit({"error": "unknown_verb"})
+            return 1
+    except Fatal as fatal:
+        document = {"error": fatal.code}
+        document.update(fatal.extra)
+        if verb == "enroll-session":
+            # One error shape per verb: a session reports on the stream, because
+            # the GUI is parsing events and never a second document (§2.4).
+            document = {"event": "error", "error": fatal.code}
+            document.update(fatal.extra)
+        emit(document)
+        return 1
+    except Busy:
+        emit({"error": "busy"})
+        return 3
+    except (IndexError, KeyError):
+        emit({"error": "bad_arguments"})
+        return 1
+    except OSError as error:
+        if error.errno == errno.EPIPE:
+            return 0
+        emit({"error": "store_write_failed"})
+        return 1
+    return 0
+
+
+sys.exit(main(sys.argv[1:]))
+STORE_PY_END
+
+# python3 is the engine's own language, but this helper installs and removes
+# Face on machines that have no engine yet, so the dependency is asserted where
+# it is needed rather than at the top of the file.
+require_python() {
+  command -v python3 >/dev/null 2>&1 || die "python_missing"
+}
+
+store_py() { python3 -c "$STORE_PY" "$@"; }
+
+# Names arrive in argv and are validated here as well as in the store
+# (plan-merged.md §2 rule 4). The shell check is first because it decides what a
+# `die` looks like: the store answers in the verb's own shape, and by the time
+# it runs the argument has already been handed to python.
+name_rule_ok() { [[ $1 =~ ^[a-z][a-z0-9-]{0,23}$ ]]; }
+
+# Invariant 1 of plan-engine.md §3.4: `sudo=true` in the config needs a non-empty
+# sudo set, so a change that empties it unwires PAM in the same call. Phase 5
+# owns the wiring; this is the half that cannot wait for it, because the store
+# verbs that empty the set are this phase's.
+#
+# Nothing here is reached before phase 5 has wired sudo at least once: on a
+# machine where `sudo=false` (every machine until then) the caller does not call
+# it at all.
+unwire_sudo() {
+  pam_remove_block "$PAM_DIR/sudo"
+  config_set sudo false
+  audit "sudo unwired: no face can approve sudo any more"
+}
+
+# One key of /etc/omarchy-face/config, rewritten in place. Same temp + rename as
+# everything else root writes here, and the file stays 0644 because the status
+# helper runs as the owner and reads it.
+config_set() { # config_set <key> <value>
+  local key=$1 value=$2 tmp
+  [[ -f $CONFIG_FILE ]] || return 1
+  tmp=$CONFIG_FILE.tmp
+  {
+    sed "/^[[:space:]]*${key}[[:space:]]*=/d" "$CONFIG_FILE"
+    printf '%s=%s\n' "$key" "$value"
+  } >"$tmp" || { rm -f "$tmp"; return 1; }
+  chmod 0644 "$tmp"
+  chown root:root "$tmp"
+  mv -f "$tmp" "$CONFIG_FILE"
+}
+
+# The count the unwire rule turns on, read back from the store rather than
+# tracked by the caller.
+sudo_faces_now() {
+  local doc
+  doc=$(store_py sudo-faces 2>/dev/null) || return 1
+  sed -n 's/.*"sudo_faces":\([0-9]\{1,\}\).*/\1/p' <<<"$doc" | head -1
+}
+
+# Run one store verb and apply the unwire rule to its result.
+#
+# The store answers with a JSON document; when that document leaves sudo with no
+# faces behind it and the config still says sudo is on, PAM is unwired here and
+# the document gains `"unwired":"sudo"` (plan-merged.md §2.3). The document is
+# built by this file, so appending one key to it is a text edit on a shape we
+# control -- checked for that shape before it is touched.
+store_verb() { # store_verb <verb> [args…]  (stdin is passed through)
+  local doc status
+  doc=$(store_py "$@")
+  status=$?
+  if ((status != 0)); then
+    printf '%s\n' "$doc"
+    exit "$status"
+  fi
+  if [[ $(config_get sudo false) == true ]] && [[ $(sudo_faces_now) == 0 ]]; then
+    unwire_sudo
+    if [[ $doc == \{*\} ]]; then
+      doc="${doc%\}}"',"unwired":"sudo"}'
+    fi
+  fi
+  printf '%s\n' "$doc"
+  exit 0
+}
+
 # --- verbs -------------------------------------------------------------------
 
 case $verb in
@@ -1538,9 +2466,91 @@ case $verb in
     exit 0
     ;;
 
-  enroll-session | set-label | set-permission | remove-appearance | remove-person | \
-  sudo-on | sudo-off | lock-on | lock-off | regenerate)
-    # Phases 4 to 7 (plan-engine.md §1). Answering in the contract's error shape
+  enroll-session)
+    # The only capture path (plan-engine.md §3.5). One owner prompt per session,
+    # drawn by pkexec before this file runs at all, so the first line printed
+    # here -- `ready` -- IS the authorised signal the card's countdown starts on.
+    #
+    # Errors are events on the stream, including the ones raised before `ready`:
+    # the GUI parses stdout line by line and never needs a second document.
+    assert_owner
+    [[ -n $account ]] || die "not_installed"
+    require_python
+    name=${1:-}
+    if ! name_rule_ok "$name"; then
+      printf '{"event":"error","error":"invalid_name"}\n'
+      exit 1
+    fi
+    audit "enroll-session for $name, by uid ${caller_uid:-0}"
+    # exec, so python owns the standard streams this process was given: the
+    # session is a conversation on stdin, and a bash layer in the middle is a
+    # buffer between the GUI and the engine for no reason at all.
+    exec python3 -c "$STORE_PY" enroll-session "$name"
+    ;;
+
+  set-label)
+    assert_owner
+    [[ -n $account ]] || die "not_installed"
+    require_python
+    name=${1:-}
+    name_rule_ok "$name" || die "invalid_name"
+    audit "set-label for $name, by uid ${caller_uid:-0}"
+    # No unwire rule: a label change cannot empty the sudo set.
+    store_py set-label "$name"
+    exit $?
+    ;;
+
+  set-permission)
+    # Granting Sudo to a face IS granting it root as this account, which is why
+    # it is behind the same prompt as everything else here (plan-engine.md §3.4
+    # invariant 3).
+    assert_owner
+    [[ -n $account ]] || die "not_installed"
+    require_python
+    name=${1:-}
+    which=${2:-}
+    value=${3:-}
+    name_rule_ok "$name" || die "invalid_name"
+    [[ $which == sudo || $which == lock ]] || die "bad_arguments"
+    [[ $value == on || $value == off ]] || die "bad_arguments"
+    audit "set-permission $which=$value for $name, by uid ${caller_uid:-0}"
+    store_verb set-permission "$name" "$which" "$value"
+    ;;
+
+  remove-appearance)
+    assert_owner
+    [[ -n $account ]] || die "not_installed"
+    require_python
+    name=${1:-}
+    name_rule_ok "$name" || die "invalid_name"
+    audit "remove-appearance for $name, by uid ${caller_uid:-0}"
+    store_verb remove-appearance "$name"
+    ;;
+
+  remove-person)
+    assert_owner
+    [[ -n $account ]] || die "not_installed"
+    require_python
+    name=${1:-}
+    name_rule_ok "$name" || die "invalid_name"
+    audit "remove-person $name, by uid ${caller_uid:-0}"
+    store_verb remove-person "$name"
+    ;;
+
+  regenerate)
+    # Every derived file, rebuilt from people/*.json alone. A record that does
+    # not validate stops the whole thing before anything is written, so a corrupt
+    # store cannot take the derived sets with it (plan-merged.md §2.3).
+    assert_owner
+    [[ -n $account ]] || die "not_installed"
+    require_python
+    audit "regenerate, by uid ${caller_uid:-0}"
+    store_py regenerate
+    exit $?
+    ;;
+
+  sudo-on | sudo-off | lock-on | lock-off)
+    # Phases 5 and 7 (plan-engine.md §1). Answering in the contract's error shape
     # rather than with prose keeps the GUI's error path honest: whatever asked
     # for this gets {"error":…} and exit 1, exactly as it will if the real verb
     # ever fails.
