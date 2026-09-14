@@ -442,7 +442,24 @@ chmod 0755 /usr/local/bin/{pacman,systemctl,systemd-run,omarchy-face-camera}
 # Real .pkg.tar.zst files, because the job's checks are `bsdtar` on the package
 # and nothing else would exercise them.
 
-STOCK_CONFIG=$(cat <<'INI'
+# The config `configure` edits is howdy's own, so the fixture is howdy's own
+# wherever it can be had: out of a package this machine has built, else out of
+# the tag in the yay cache. Hand-written keys would test the seds against the
+# spelling this file happens to use, which is the one spelling that cannot be
+# wrong. The fallback is there so the test still runs on a machine with neither.
+config_source="a copy in this test"
+STOCK_CONFIG=""
+built_howdy=$(compgen -G '/tmp/omarchy-face-f2.*/howdy/howdy-[0-9]*.pkg.tar.*' 2>/dev/null | head -1)
+if [[ -n $built_howdy ]]; then
+  STOCK_CONFIG=$(bsdtar -xOqf "$built_howdy" usr/lib/security/howdy/config.ini 2>/dev/null)
+  [[ -n $STOCK_CONFIG ]] && config_source="the howdy package built by --builder"
+fi
+if [[ -z $STOCK_CONFIG ]]; then
+  STOCK_CONFIG=$(git -C "$HOME/.cache/yay/howdy/howdy" show v2.6.1:src/config.ini 2>/dev/null)
+  [[ -n $STOCK_CONFIG ]] && config_source="howdy v2.6.1 in the yay cache"
+fi
+if [[ -z $STOCK_CONFIG ]]; then
+  STOCK_CONFIG=$(cat <<'INI'
 [core]
 disabled = false
 [video]
@@ -460,6 +477,8 @@ capture_successful = true
 end_report = false
 INI
 )
+fi
+echo "${DIM}howdy's config.ini for this run: $config_source${RESET}"
 
 make_package() { # make_package <out> <pkgname> <depends…> -- called with EXTRA=… for files
   local out=$1 name=$2

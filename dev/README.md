@@ -166,6 +166,23 @@ a sandbox cannot: whether `makepkg` (and `fakeroot` inside it) runs under
 systemd's `DynamicUser`. If it does not, `plan-engine.md §5.3`'s fallback
 applies.
 
+## G2 — the engine row
+
+```sh
+./dev/g2-engine-row.sh            # on the live shell: close the popup, restart the shell, mid-build
+./dev/g2-engine-row-offscreen.sh  # the same view in a QML runtime with no shell to restart
+```
+
+The live one is what the gate is written about, and it restarts the shell twice,
+so it refuses while the session is locked. The offscreen one loads the **real**
+`SetupView.qml` against the running Omarchy's `qs.Commons` and `qs.Ui` with a
+fake panel in front of it (`dev/qml-harness/shell.qml`), drives it through
+`running`, `failed` and `idle`, and checks the step marks, the elapsed
+formatting, the Fix button's three states, the folded `install-job` row and the
+log tail it fetches through `common/Ask.qml`. It draws nothing, so it cannot say
+the row *looks* right — only that every binding in it evaluates and agrees with
+the contract.
+
 ## F0
 
 `./dev/f0-verify.sh` is `plan-engine.md §2` as a runnable checklist, plus the
