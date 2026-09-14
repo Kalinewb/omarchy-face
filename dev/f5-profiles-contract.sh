@@ -394,8 +394,14 @@ for _ in $(seq 1 100); do
   sleep 0.1
 done
 same "GATE: the machine really is in the profile now" "work" "$switched"
+# Polled, not asserted: current.json is written one step BEFORE the restart
+# (deliberately -- Profiles' own comment says a switch that died after the
+# restart must not leave the old name live), so the file this looks in is
+# written a moment after the one above.
 check "…and the shell was asked to restart, the way a real switch does" \
-  grep -q '^omarchy restart shell' "$LAB/desktop.log"
+  bash -c 'for _ in $(seq 1 100); do
+             grep -q "^omarchy restart shell" "$0" && exit 0; sleep 0.1
+           done; exit 1' "$LAB/desktop.log"
 check "…leaving no journal behind when it finished" \
   bash -c 'for _ in $(seq 1 50); do [[ -e "$XDG_STATE_HOME/omarchy-profiles/switch.json" ]] || exit 0; sleep 0.1; done; exit 1'
 
