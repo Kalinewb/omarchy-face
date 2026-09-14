@@ -78,6 +78,7 @@ if [[ ${OMARCHY_FACE_F1_IN_NS:-0} == 1 ]]; then
   # and `id -u <account>` both stop working.
   mount --bind /etc /mnt || exit 1
   mount -t tmpfs tmpfs /etc || exit 1
+  chmod 0755 /etc
   for real in /mnt/*; do ln -s "$real" "/etc/${real#/mnt/}"; done
   rm -f /etc/pam.d
   cp -rp /mnt/pam.d /etc/pam.d 2>/dev/null
@@ -90,10 +91,18 @@ if [[ ${OMARCHY_FACE_F1_IN_NS:-0} == 1 ]]; then
   rm -f /etc/systemd/system
   cp -rp /mnt/systemd/system /etc/systemd/system 2>/dev/null
   chown -R root:root /etc/systemd/system
+  # tmpfs is mode 1777 by default. /usr/local/bin and the polkit actions
+  # directory are places root helpers are installed into, and the install now
+  # refuses a world-writable one -- correctly -- so the sandbox has to give them
+  # the modes a real machine has.
   mount -t tmpfs tmpfs /run || exit 1
+  chmod 0755 /run
   mount -t tmpfs tmpfs /usr/local || exit 1
+  chmod 0755 /usr/local
   mkdir -p /usr/local/bin
+  chmod 0755 /usr/local/bin
   mount -t tmpfs tmpfs /usr/share/polkit-1/actions || exit 1
+  chmod 0755 /usr/share/polkit-1/actions
   # `install-system` (no arguments) derives the plugin folder from the config
   # account's home, which is the INSTALLED plugin, not this checkout. Binding the
   # checkout over it inside the namespace is how the update path gets tested
@@ -125,6 +134,23 @@ check "no terminal launcher in any .qml" \
            '$REPO'/*.qml '$REPO'/common/*.qml"
 check "the first install is the pkexec /bin/bash form, not a terminal" \
   bash -c "grep -q 'firstInstallArgv' '$REPO/common/Ask.qml'"
+
+step "who Face may be set up for (plan-engine.md §8.2, the auth_self boundary)"
+# Face's own action is auth_self, so the owner can later run install-system with
+# their own password -- which installs scripts that phase 5 runs as root from
+# sudo's PAM stack. An owner who is not already an administrator would therefore
+# be an owner who just became one.
+nonadmin=nobody
+if id -Gn -- "$nonadmin" >/dev/null 2>&1 &&
+   ! id -Gn -- "$nonadmin" 2>/dev/null | tr ' ' '\n' | grep -qxF wheel; then
+  refuse_out=$(/bin/bash -c "$(cat "$REPO/system/install.sh")" omarchy-face-install "$REPO" "$nonadmin" 2>/dev/null)
+  echo "  ${DIM}install.sh … $nonadmin${RESET}  $refuse_out"
+  check "a first install for a non-administrator account is not_admin" \
+    bash -c "[[ \$(jq -r '.error' <<<'$refuse_out') == not_admin ]]"
+  check "and it installed nothing" test ! -e /usr/local/bin/omarchy-face-admin
+else
+  note "skipped: no non-administrator account to test with"
+fi
 
 step "install (the form the GUI uses, plan-engine.md §5.1)"
 echo "  ${DIM}pkexec /bin/bash -c \"\$(cat system/install.sh)\" omarchy-face-install $REPO $ACCOUNT${RESET}"
@@ -246,6 +272,14 @@ if ((bound_plugin == 1)); then
     bash -c "[[ \$(jq -r '.error' <<<'$refuse_out') == snapshot_unsafe ]]"
   umount "$PLUGINS/graveklar.face"
 
+  # A group-writable /usr/local/bin is a way to replace a file PAM runs as root.
+  chmod g+w /usr/local/bin
+  refuse_out=$(/usr/local/bin/omarchy-face-admin install-system 2>/dev/null)
+  chmod g-w /usr/local/bin
+  echo "  ${DIM}install-system into a group-writable /usr/local/bin${RESET}  $refuse_out"
+  check "an unsafe destination directory is refused" \
+    bash -c "[[ \$(jq -r '.error' <<<'$refuse_out') == install_dir_unsafe ]]"
+
   # An older release version than the one installed. Not a repair and never
   # offered by the Setup row, so it is refused rather than quietly downgrading
   # the root-owned half.
@@ -266,6 +300,115 @@ if ((bound_plugin == 1)); then
 else
   note "refusal tests on the plugin folder skipped: it is not this checkout"
 fi
+
+# purge-legacy deletes things Face never installed -- a howdy polkit drop-in
+# owned by the howdy package, stock model files, PAM backups. With no config
+# there is no owner it could be doing that on behalf of.
+mv /etc/omarchy-face/config /etc/omarchy-face/config.away
+refuse_out=$(/usr/local/bin/omarchy-face-admin purge-legacy 2>/dev/null)
+mv /etc/omarchy-face/config.away /etc/omarchy-face/config
+echo "  ${DIM}purge-legacy with no config${RESET}  $refuse_out"
+check "purge-legacy is not offered to anybody on an unconfigured machine" \
+  bash -c "[[ \$(jq -r '.error' <<<'$refuse_out') == not_installed ]]"
+
+step "the PAM block library, both directions (plan-engine.md §4.1)"
+# phase 5's sudo-on and sudo-off are the callers, and they do not exist yet --
+# so the functions are exercised here, before an auth stack depends on them.
+# The library is sourced straight out of the installed helper (everything above
+# its verb dispatch), which is the same code phase 5 will call.
+insert_probe=/etc/pam.d/omarchy-face-insert-probe
+cat >"$insert_probe" <<'PAMINSERT'
+#%PAM-1.0
+auth		include		system-auth
+account		include		system-auth
+session		include		system-auth
+session		optional	pam_systemd.so class=none
+PAMINSERT
+insert_before=$(sha256sum "$insert_probe" | cut -d' ' -f1)
+
+pam_lib() { # pam_lib <function> <file>
+  # The function name travels in the environment, not in $@: the sourced prefix
+  # ends with the helper's own `shift`, which would eat the positional
+  # parameters this needs afterwards. `set -- purge` gives that prefix a verb to
+  # shift, so its "no verb" check does not exit the shell.
+  FACE_FN=$1 FACE_ARG=$2 bash -c '
+    set -- purge
+    source <(sed -n "1,/^# --- verbs/p" /usr/local/bin/omarchy-face-admin) >/dev/null
+    "$FACE_FN" "$FACE_ARG"'
+}
+
+pam_lib pam_insert_block "$insert_probe"
+check "pam_insert_block wrote exactly one marked block above the first auth line" \
+  bash -c "[[ \$(grep -c '^# omarchy-face begin\$' '$insert_probe') == 1 &&
+              \$(grep -c '^# omarchy-face end\$' '$insert_probe') == 1 &&
+              \$(grep -c 'omarchy-face' '$insert_probe') == 4 ]] &&
+           [[ \$(sed -n '2p' '$insert_probe') == '# omarchy-face begin' ]] &&
+           grep -q '^auth[[:space:]]*include[[:space:]]*system-auth' '$insert_probe'"
+pam_lib pam_insert_block "$insert_probe"
+check "a second insert is refused, not stacked" \
+  bash -c "[[ \$(grep -c '^# omarchy-face begin\$' '$insert_probe') == 1 ]]"
+
+# A line somebody added inside the block is not ours to delete.
+sed -i '/^# omarchy-face end$/i auth  optional  pam_permit.so' "$insert_probe"
+pam_lib pam_remove_block "$insert_probe"
+check "a foreign line inside the block makes removal refuse" \
+  bash -c "grep -q 'pam_permit.so' '$insert_probe' &&
+           [[ \$(grep -c '^# omarchy-face begin\$' '$insert_probe') == 1 ]]"
+sed -i '/pam_permit.so/d' "$insert_probe"
+
+pam_lib pam_remove_block "$insert_probe"
+check "insert then remove leaves the stack byte-identical" \
+  bash -c "[[ \$(sha256sum '$insert_probe' | cut -d' ' -f1) == '$insert_before' ]]"
+rm -f "$insert_probe"
+
+step "the daemon drains its socket (plan-engine.md §6.1)"
+# Accept=no means systemd hands over the LISTENING socket. A daemon that exits
+# without accepting leaves the client pending, systemd re-activates immediately,
+# and five of those in ten seconds put the socket unit itself into `failed` with
+# its path unlinked -- a denial of service any local user can run, and root is
+# needed to undo it.
+python3 - "$REPO/system/omarchy-faced" <<'DRAIN'
+import os, socket, sys, tempfile
+daemon = sys.argv[1]
+path = os.path.join(tempfile.mkdtemp(), "verify.sock")
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.bind(path)
+server.listen(16)
+# A connection already waiting when the daemon starts, exactly as activation
+# hands it over.
+early = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+early.connect(path)
+os.set_inheritable(server.fileno(), True)
+pid = os.fork()
+if pid == 0:
+    os.dup2(server.fileno(), 3)
+    os.set_inheritable(3, True)
+    os.environ["LISTEN_FDS"] = "1"
+    os.environ["LISTEN_PID"] = str(os.getpid())
+    os.execv(daemon, [daemon])
+try:
+    early.settimeout(5)
+    early.sendall(b"VERIFY-LOCK\n")
+    if not early.recv(64).startswith(b"NO "):
+        sys.exit(1)
+    for _ in range(3):
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(5)
+        client.connect(path)
+        client.sendall(b"VERIFY-PERSON anna\n")
+        if not client.recv(64).startswith(b"NO "):
+            sys.exit(1)
+        client.close()
+    # Still there: it drained the backlog instead of dying with one pending.
+    sys.exit(0 if os.waitpid(pid, os.WNOHANG) == (0, 0) else 1)
+finally:
+    try:
+        os.kill(pid, 15)
+        os.waitpid(pid, 0)
+    except OSError:
+        pass
+DRAIN
+check "four connections, four answers, and the daemon is still up" test $? -eq 0
 
 step "purge (plan-engine.md §10.2 step 2)"
 # A stack WITH a marked block, so purge's PAM step is exercised rather than

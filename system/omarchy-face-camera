@@ -21,7 +21,19 @@ unset IFS BASH_ENV ENV CDPATH
 PATH=/usr/local/bin:/usr/bin
 umask 077
 
-SYSFS=${OMARCHY_V4L_SYSFS_PATH:-/sys/class/video4linux}
+# The sysfs path is overridable for testing, and NEVER when running as root.
+# This helper decides which /dev/videoN is "the infrared sensor", and from phase
+# 5 the sudo gate runs it as root: an environment variable that redirects that
+# decision at a directory of the caller's choosing is not a knob a root helper
+# should have. pkexec and pam_exec both build a clean environment, so this is
+# belt and braces -- and the gate will also run its children with `env -i`
+# (plan-engine.md §4.2's pinned environment), so this class of hook cannot
+# matter however it is reached.
+if [[ $EUID -eq 0 ]]; then
+  SYSFS=/sys/class/video4linux
+else
+  SYSFS=${OMARCHY_V4L_SYSFS_PATH:-/sys/class/video4linux}
+fi
 
 usage() {
   cat <<'USAGE'

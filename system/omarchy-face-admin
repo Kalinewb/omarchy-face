@@ -132,6 +132,40 @@ assert_owner() {
   [[ $caller_uid == "$account_uid" ]] || die "not_owner"
 }
 
+# --- who counts as an administrator ------------------------------------------
+#
+# The polkit action is auth_self, so the dialog takes the INVOKING account's own
+# password. PKEXEC_UID is who invoked pkexec, not who authenticated, and nothing
+# about either says that account is an administrator.
+#
+# That matters for exactly one verb. `install-system` installs scripts out of
+# the account's own plugin folder into /usr/local/bin, and from phase 5 those
+# scripts run as root from sudo's PAM stack. If Face could be set up for an
+# ordinary user, that user could edit their own plugin folder, run
+# `pkexec omarchy-face-admin install-system` with their OWN password, and be
+# root -- and the version check is no obstacle at all, because a `-dev` version
+# is exempt by design and the header sits in the same writable file.
+#
+# So: Face's owner is by construction an administrator. install-system then
+# grants nothing that the owner's password does not already grant. Every other
+# verb stays auth_self on purpose -- people, permissions, sudo wiring and purge
+# are the owner's own decisions about their own machine.
+admin_group() {
+  # polkit's administrator identity, read rather than assumed. Arch's
+  # 50-default.rules says `unix-group:wheel`; a machine that says something else
+  # is honoured, and an unparseable file falls back to wheel.
+  local group
+  group=$(sed -n 's/.*unix-group:\([a-zA-Z0-9_.-]\+\).*/\1/p' \
+    /usr/share/polkit-1/rules.d/50-default.rules 2>/dev/null | head -1)
+  printf '%s' "${group:-wheel}"
+}
+
+assert_account_is_admin() { # assert_account_is_admin <account>
+  local who=$1 group
+  group=$(admin_group)
+  id -Gn -- "$who" 2>/dev/null | tr ' ' '\n' | grep -qxF "$group" || die "not_admin"
+}
+
 # Removal has to work on a machine whose config is already gone -- a purge that
 # was interrupted after step 3, or a half-finished install. With no config there
 # is no account to be the owner of, and nothing left that is worth refusing to
@@ -162,17 +196,30 @@ trap cleanup_snapshot EXIT
 # being assigned, and the caller would carry on with an error document where it
 # expected a path.
 take_snapshot() { # take_snapshot <plugin dir>
-  local plugin_dir=$1
+  local plugin_dir=$1 entry name
   [[ -d $plugin_dir/system ]] || die "plugin_missing"
   snapshot_dir=$(mktemp -d /run/omarchy-face-install.XXXXXX) || die "snapshot_failed"
   chmod 0700 "$snapshot_dir" || die "snapshot_failed"
-  cp -a --no-dereference "$plugin_dir/system/." "$snapshot_dir/" 2>/dev/null || die "snapshot_failed"
+  # The ten files by name, not the whole directory: the install is defined by
+  # the table, so anything else in system/ -- a README, a stray subdirectory,
+  # the installer itself -- has no business being copied, let alone failing the
+  # whole install for being the wrong kind of file.
+  for entry in "${SYSTEM_FILES[@]}"; do
+    name=${entry%%:*}
+    cp -a --no-dereference "$plugin_dir/system/$name" "$snapshot_dir/$name" 2>/dev/null ||
+      die "snapshot_incomplete"
+  done
 }
 
-# Everything in the snapshot must be a plain file. A symlink would have been
-# followed out of the snapshot when it was installed -- back into the folder we
-# just stopped trusting, or anywhere else -- and a hard link means the same
-# inode is still reachable and writable from outside it.
+# Everything in the snapshot must be a plain file. `cp -a --no-dereference`
+# copies a symlink AS a symlink, so a link in the plugin folder arrives here as
+# a link and would have been followed out of the snapshot when it was installed
+# -- back into the folder we just stopped trusting, or anywhere else.
+#
+# `-links +1` catches two names in the snapshot that are the same inode (cp -a
+# preserves links within one copy). It does NOT prove the source was not a hard
+# link to something outside, and it does not need to: each file was copied to a
+# fresh inode that nothing outside this directory can reach.
 verify_snapshot_shape() {
   local tmp=$1 bad
   bad=$(find "$tmp" -mindepth 1 \( -type l -o -links +1 -o ! -type f \) -print -quit 2>/dev/null)
@@ -242,6 +289,29 @@ version_newer() {
   [[ $(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1) == "$1" ]]
 }
 
+# A directory root helpers are installed into must be root-owned and writable by
+# nobody else. /usr/local/bin with a group write bit is a way to replace a file
+# that PAM runs as root, and it is worth one stat to refuse rather than to
+# assume the distribution got it right.
+assert_dir_safe() { # assert_dir_safe <dir>
+  local info mode
+  info=$(stat -Lc '%u %a' "$1" 2>/dev/null) || die "install_dir_unsafe"
+  [[ ${info%% *} == 0 ]] || die "install_dir_unsafe"
+  mode=${info##* }
+  (( (8#$mode & 8#022) == 0 )) || die "install_dir_unsafe"
+}
+
+# The same question about one file: root-owned, nobody else writable. What §4.1
+# calls assert_helper_safe, and what pam_insert_block asks before it points an
+# auth stack at a helper.
+file_is_safe() { # file_is_safe <path>
+  local info mode
+  info=$(stat -Lc '%u %a' "$1" 2>/dev/null) || return 1
+  [[ ${info%% *} == 0 ]] || return 1
+  mode=${info##* }
+  (( (8#$mode & 8#022) == 0 ))
+}
+
 # Fills the global `changed`. Not a subshell and not a pipeline on purpose: a
 # `die` inside a $(…) would exit that subshell and print its JSON into the
 # caller's variable, and the install would carry on as though nothing had gone
@@ -256,13 +326,17 @@ install_from_snapshot() { # install_from_snapshot <snapshot dir>
     mode=${entry##*:}
     dir=$(dirname -- "$dest")
     [[ -d $dir ]] || install -d -o root -g root -m 0755 "$dir" || die "install_failed"
+    assert_dir_safe "$dir"
     if ! diff -q "$source" "$dest" >/dev/null 2>&1; then
       changed+=("${entry%%:*}")
     fi
-    # install(1) writes a new inode and renames it into place, so a helper that
-    # is executing right now (this file, when it updates itself) keeps the copy
-    # it started with.
-    install -o root -g root -m "$mode" "$source" "$dest" || die "install_failed"
+    # Install beside it, then rename. install(1) does NOT replace atomically --
+    # it unlinks, creates, writes and chmods as separate steps, so for the width
+    # of a write there is a file at that path with the wrong length and the
+    # wrong mode. These are files PAM runs as root; rename(2) is one step, and
+    # a process that already has one open keeps the inode it opened.
+    install -o root -g root -m "$mode" "$source" "$dest.tmp" || die "install_failed"
+    mv -f "$dest.tmp" "$dest" || { rm -f "$dest.tmp"; die "install_failed"; }
   done
 }
 
@@ -273,9 +347,14 @@ install_from_snapshot() { # install_from_snapshot <snapshot dir>
 check_plugin_dir() { # check_plugin_dir <dir> <account>
   local dir=$1 who=$2 owner_uid account_uid
   [[ $dir == /* ]] || die "plugin_missing"
+  # A symlink here would make the ownership check below a check on the link's
+  # target -- which is a different directory, possibly one the account does not
+  # own. Only the account can plant such a link in its own home, so this is not
+  # a boundary being crossed; it is the check meaning what it says.
+  [[ ! -L $dir && ! -L $dir/system ]] || die "plugin_unsafe"
   [[ -d $dir/system ]] || die "plugin_missing"
   account_uid=$(id -u -- "$who" 2>/dev/null) || die "unknown_account"
-  owner_uid=$(stat -c %u "$dir/system" 2>/dev/null) || die "plugin_missing"
+  owner_uid=$(stat -Lc %u "$dir/system" 2>/dev/null) || die "plugin_missing"
   # root-owned is fine (a system-wide install); the account's own is the normal
   # case. Anything else is another user's directory, and root must not install
   # scripts out of it.
@@ -297,6 +376,160 @@ plugin_dir_for_account() { # plugin_dir_for_account <account>
 warnings=()
 systemctl_step() { # systemctl_step <args…>
   systemctl "$@" >/dev/null 2>&1 || warnings+=("systemctl $* failed")
+}
+
+# --- the PAM stack, in one place ---------------------------------------------
+#
+# Two functions, written together because they are each other's mirror:
+# `purge` removes the block, and phase 5's `sudo-on`/`sudo-off` insert and
+# remove the same block from the same file (§4.1). Two implementations of an
+# edit to an auth stack is how the two stop agreeing about what a safe edit is,
+# and the file they disagree about is the one that decides whether anybody can
+# become root on this machine.
+#
+# The rules both obey:
+#
+#   * one flock for the whole operation, so two roots editing at once is not a
+#     state that has to be reasoned about;
+#   * copy the file FIRST and compute every count, line number and check from
+#     the copy -- reading the live file six times and then editing from those
+#     numbers is a race a concurrent writer can win;
+#   * refuse anything that is not exactly the shape we wrote;
+#   * verify the result before it is renamed into place, including that the
+#     stack's own invariant line survived.
+
+PAM_DIR=/etc/pam.d
+PAM_LOCK=/run/omarchy-face-pam.lock
+PAM_BEGIN='# omarchy-face begin'
+PAM_END='# omarchy-face end'
+PAM_GATE_LINE='auth  [success=1 default=ignore]  pam_exec.so seteuid quiet /usr/local/bin/omarchy-face-gate'
+PAM_VERIFY_LINE='auth  sufficient                  pam_exec.so seteuid quiet /usr/local/bin/omarchy-face-verify'
+# The ONLY lines the marked block may contain. A line somebody added inside it
+# is not ours to delete, so a block holding one is refused, not cleaned.
+PAM_BLOCK_LINE='^auth[[:space:]]+.*[[:space:]]pam_exec\.so[[:space:]].*/usr/local/bin/omarchy-face-(gate|verify)$'
+# What must still be true of the stack afterwards, when it was true before
+# (§4.1). Not "must be present": Face does not get to decide that every PAM
+# file in the world includes system-auth, only that it did not remove it.
+PAM_INVARIANT='^auth[[:space:]]+include[[:space:]]+system-auth'
+
+pam_lock() {
+  [[ -e $PAM_LOCK ]] || (umask 077; : >"$PAM_LOCK") 2>/dev/null
+  exec 9>>"$PAM_LOCK" 2>/dev/null || return 1
+  flock -w 10 9
+}
+
+# Remove Face's marked block from one PAM stack.
+#   0  removed
+#   2  nothing of ours is in it -- the file is not touched, not even copied
+#   1  refused: not the shape we wrote. The caller reports it; the file is
+#      exactly as it was.
+pam_remove_block() { # pam_remove_block <file>
+  local file=$1 copy begin end n_begin n_end block_lines before after had_invariant line
+  [[ -f $file ]] || return 2
+  grep -q "^${PAM_BEGIN}\$" "$file" 2>/dev/null || return 2
+  pam_lock || return 1
+
+  copy=$(mktemp "$(dirname -- "$file")/.omarchy-face.XXXXXX") || return 1
+  # cp -p carries mode, owner and timestamps, so the file that is renamed into
+  # place is the original in every respect but the four lines.
+  cp -p "$file" "$copy" 2>/dev/null || { rm -f "$copy"; return 1; }
+
+  n_begin=$(grep -c "^${PAM_BEGIN}\$" "$copy")
+  n_end=$(grep -c "^${PAM_END}\$" "$copy")
+  begin=$(grep -n "^${PAM_BEGIN}\$" "$copy" | head -1 | cut -d: -f1)
+  end=$(grep -n "^${PAM_END}\$" "$copy" | head -1 | cut -d: -f1)
+  # A begin with no end would make a range delete run to the END OF FILE. On an
+  # auth stack that is not a bad edit, it is a machine nobody can authenticate
+  # to -- and "no omarchy-face line left" cannot tell the difference, because a
+  # file whose tail is gone has none either.
+  if [[ $n_begin != 1 || $n_end != 1 || -z $begin || -z $end || $begin -ge $end ]]; then
+    rm -f "$copy"
+    return 1
+  fi
+
+  while IFS= read -r line; do
+    [[ $line =~ $PAM_BLOCK_LINE ]] || { rm -f "$copy"; return 1; }
+  done < <(sed -n "$((begin + 1)),$((end - 1))p" "$copy")
+
+  had_invariant=false
+  grep -qE "$PAM_INVARIANT" "$copy" && had_invariant=true
+  block_lines=$((end - begin + 1))
+  before=$(wc -l <"$copy")
+
+  sed -i "${begin},${end}d" "$copy"
+
+  after=$(wc -l <"$copy")
+  if [[ $after != $((before - block_lines)) ]] || grep -q 'omarchy-face' "$copy"; then
+    rm -f "$copy"
+    return 1
+  fi
+  if [[ $had_invariant == true ]] && ! grep -qE "$PAM_INVARIANT" "$copy"; then
+    rm -f "$copy"
+    return 1
+  fi
+  mv -f "$copy" "$file" || { rm -f "$copy"; return 1; }
+  audit "removed the face block from $file"
+  return 0
+}
+
+# Insert Face's block above the first auth line of one PAM stack (§4.1).
+#   0  inserted
+#   1  refused -- including when the helpers it would point at are not root's
+#
+# **Phase 5 (F4) is the only caller**: `sudo-on`, on /etc/pam.d/sudo. It is
+# written here rather than there so that the insert and the removal share their
+# invariants, their lock and their idea of what the block looks like.
+pam_insert_block() { # pam_insert_block <file>
+  local file=$1 copy new first_auth before after original helper
+  [[ -f $file ]] || return 1
+
+  # Nothing points an auth stack at a helper that somebody else can write
+  # (§4.1, the old assert_helper_safe).
+  for helper in /usr/local/bin/omarchy-face-gate /usr/local/bin/omarchy-face-verify; do
+    file_is_safe "$helper" || return 1
+  done
+
+  # Not "no block": no mention of Face at all. A leftover line outside a block
+  # is exactly the state a second insert would make unreadable.
+  grep -q 'omarchy-face' "$file" 2>/dev/null && return 1
+  pam_lock || return 1
+
+  copy=$(mktemp "$(dirname -- "$file")/.omarchy-face.XXXXXX") || return 1
+  cp -p "$file" "$copy" 2>/dev/null || { rm -f "$copy"; return 1; }
+  new=$copy.new
+
+  first_auth=$(grep -n '^auth' "$copy" | head -1 | cut -d: -f1)
+  [[ -n $first_auth ]] || { rm -f "$copy"; return 1; }
+  before=$(wc -l <"$copy")
+  original=$(cat "$copy")
+
+  {
+    head -n $((first_auth - 1)) "$copy"
+    printf '%s\n' "$PAM_BEGIN" "$PAM_GATE_LINE" "$PAM_VERIFY_LINE" "$PAM_END"
+    tail -n +"$first_auth" "$copy"
+  } >"$new" 2>/dev/null || { rm -f "$copy" "$new"; return 1; }
+
+  after=$(wc -l <"$new")
+  # Four lines more, one block, and -- the check that makes the other two worth
+  # having -- the file with our lines taken back out is what we started from.
+  if [[ $after != $((before + 4)) ]] ||
+     [[ $(grep -c "^${PAM_BEGIN}\$" "$new") != 1 ]] ||
+     [[ $(grep -c "^${PAM_END}\$" "$new") != 1 ]] ||
+     [[ $(grep -v 'omarchy-face' "$new") != "$original" ]]; then
+    rm -f "$copy" "$new"
+    return 1
+  fi
+  if grep -qE "$PAM_INVARIANT" "$copy" && ! grep -qE "$PAM_INVARIANT" "$new"; then
+    rm -f "$copy" "$new"
+    return 1
+  fi
+
+  chmod --reference="$copy" "$new" 2>/dev/null
+  chown --reference="$copy" "$new" 2>/dev/null
+  mv -f "$new" "$file" || { rm -f "$copy" "$new"; return 1; }
+  rm -f "$copy"
+  audit "inserted the face block into $file"
+  return 0
 }
 
 # --- verbs -------------------------------------------------------------------
@@ -334,6 +567,11 @@ case $verb in
     fi
 
     check_plugin_dir "$plugin_dir" "$account"
+    # Both paths, and whoever the caller is. A machine whose Face account is not
+    # an administrator would make this verb -- which installs scripts that phase
+    # 5 runs as root from sudo's PAM stack -- a way to become root with an
+    # ordinary user's own password, because the action is auth_self.
+    assert_account_is_admin "$account"
 
     take_snapshot "$plugin_dir"
     tmp=$snapshot_dir
@@ -406,50 +644,40 @@ case $verb in
       die "install_running" 3
     fi
 
-    audit "purge requested by uid ${caller_uid:-0}"
+    # With no config there is no account this machine belongs to, so this is not
+    # the owner asking to remove their own Face -- it is anybody active asking.
+    # That is allowed, because a half-installed machine has to be cleanable, but
+    # it is restricted to what Face itself put there: the table's own files,
+    # Face's own directories, Face's own marked PAM block and Face's own derived
+    # models. No packages, and nothing that belongs to somebody else.
+    minimal=0
+    [[ -n $account ]] || minimal=1
+
+    # (An apostrophe inside ${x:+…} inside double quotes is a parse error in
+    # bash, not a typo waiting to be spotted -- hence the plain variable.)
+    minimal_note=""
+    ((minimal)) && minimal_note=" (no config: restricted to files Face installed)"
+    audit "purge requested by uid ${caller_uid:-0}$minimal_note"
     incomplete=()
 
     # 1. PAM first. A stack pointing at helpers that have just been deleted is
     #    the one outcome of a half-finished purge that could actually hurt.
     #
-    #    The block is only ever removed, never rewritten: a file without our
-    #    marker is not touched at all, not even copied, so `purge` on a machine
-    #    where sudo was never wired leaves /etc/pam.d byte-for-byte as it was.
-    for pam_file in /etc/pam.d/*; do
+    #    pam_remove_block only ever deletes our own marked block, and only from
+    #    a file whose block is exactly the shape we wrote. A file without it is
+    #    not touched, not even copied, so `purge` on a machine where sudo was
+    #    never wired leaves /etc/pam.d byte-for-byte as it was.
+    for pam_file in "$PAM_DIR"/*; do
       [[ -f $pam_file ]] || continue
-      grep -q '^# omarchy-face begin$' "$pam_file" 2>/dev/null || continue
+      pam_remove_block "$pam_file"
+    done
 
-      # The markers are counted and ordered before anything is deleted.
-      # `sed '/begin/,/end/d'` with a begin and no end deletes to the END OF
-      # FILE, and on an auth stack that is not a bad edit, it is a machine
-      # nobody can authenticate to. Two markers, in that order, or this file is
-      # reported and left exactly as it is.
-      begin_line=$(grep -n '^# omarchy-face begin$' "$pam_file" | cut -d: -f1)
-      end_line=$(grep -n '^# omarchy-face end$' "$pam_file" | cut -d: -f1)
-      if [[ $(grep -c '^# omarchy-face begin$' "$pam_file") != 1 ||
-            $(grep -c '^# omarchy-face end$' "$pam_file") != 1 ||
-            -z $begin_line || -z $end_line || $begin_line -ge $end_line ]]; then
-        incomplete+=("$pam_file")
-        continue
-      fi
-      block_lines=$((end_line - begin_line + 1))
-      before_lines=$(wc -l <"$pam_file")
-
-      tmp_pam=$(mktemp "$(dirname -- "$pam_file")/.omarchy-face.XXXXXX") || { incomplete+=("$pam_file"); continue; }
-      cp -p "$pam_file" "$tmp_pam" 2>/dev/null || { rm -f "$tmp_pam"; incomplete+=("$pam_file"); continue; }
-      sed -i "${begin_line},${end_line}d" "$tmp_pam"
-      if [[ $(wc -l <"$tmp_pam") != $((before_lines - block_lines)) ]] ||
-         grep -q 'omarchy-face' "$tmp_pam"; then
-        # Either more than the block went, or a face line sits outside it. Leave
-        # the file alone and say so, rather than guessing at somebody's edit.
-        rm -f "$tmp_pam"
-        incomplete+=("$pam_file")
-        continue
-      fi
-      chmod --reference="$pam_file" "$tmp_pam" 2>/dev/null
-      chown --reference="$pam_file" "$tmp_pam" 2>/dev/null
-      mv -f "$tmp_pam" "$pam_file" || incomplete+=("$pam_file")
-      audit "removed the face block from $pam_file"
+    # One sweep afterwards, rather than trusting the loop's own account of
+    # itself: anything of ours still in a stack is incomplete, whether it was
+    # refused, appeared while we worked, or could not be locked.
+    for pam_file in "$PAM_DIR"/*; do
+      [[ -f $pam_file ]] || continue
+      grep -q "^${PAM_BEGIN}\$" "$pam_file" 2>/dev/null && incomplete+=("$pam_file")
     done
 
     # 2. The daemon, before the files it runs.
@@ -464,9 +692,11 @@ case $verb in
     rm -rf "$STORE_DIR" "$RUN_DIR" "$CONFIG_DIR" "$BUILD_STATE"
 
     # 4. Packages. Scope says remove everything; --keep-packages is the Remove
-    #    view's "saves a rebuild" tick.
+    #    view's "saves a rebuild" tick. Never in minimal mode: howdy may be
+    #    installed on this machine for reasons that have nothing to do with
+    #    Face, and "no config" is not evidence that it is not.
     removed_packages=()
-    if ((!keep_packages)); then
+    if ((!keep_packages && !minimal)); then
       for package in howdy python-dlib; do
         pacman -Q "$package" >/dev/null 2>&1 || continue
         if pacman -Rns --noconfirm "$package" >/dev/null 2>&1; then
@@ -497,6 +727,14 @@ case $verb in
     for leftover in "$STORE_DIR" "$RUN_DIR" "$CONFIG_DIR" "$BUILD_STATE"; do
       [[ -e $leftover ]] && incomplete+=("$leftover")
     done
+    # `systemctl disable --now` can fail without saying so on a machine where
+    # the unit is masked, or wedged, or the manager is busy. The unit FILES are
+    # gone by now, so a socket still listening is an orphan holding a path in
+    # /run that nothing owns any more, and it needs a root `systemctl
+    # reset-failed` or a reboot -- which is worth saying out loud.
+    if [[ -d /run/systemd/system ]] && systemctl is-active --quiet omarchy-faced.socket 2>/dev/null; then
+      incomplete+=("omarchy-faced.socket is still active")
+    fi
     compgen -G "$MODELS/omarchy-face.*.dat" >/dev/null && incomplete+=("$MODELS/omarchy-face.*.dat")
 
     audit "purge finished by uid ${caller_uid:-0}; ${#incomplete[@]} left"
@@ -509,7 +747,13 @@ case $verb in
     # The old install's leavings (plan-engine.md §2, §10.1 row `legacy`). Only
     # artefacts the rewrite never creates, plus files that share a name with one
     # of ours and lack the `omarchy-face v2` marker.
-    assert_owner_unless_uninstalled
+    # Unlike `purge`, this one deletes things Face never installed: a howdy
+    # polkit drop-in that belongs to the howdy package, model files belonging to
+    # a stock howdy setup, PAM backups somebody may be keeping. That is only the
+    # right thing to do for the account this machine's Face belongs to, so with
+    # no config it is not offered at all.
+    [[ -n $account ]] || die "not_installed"
+    assert_owner
     audit "purge-legacy requested by uid ${caller_uid:-0}"
     removed=()
 

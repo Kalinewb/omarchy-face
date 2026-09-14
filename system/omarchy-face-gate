@@ -23,6 +23,13 @@ unset IFS BASH_ENV ENV CDPATH
 PATH=/usr/local/bin:/usr/bin
 umask 077
 
+# F4 note, and a requirement rather than a preference: every helper this gate
+# runs -- omarchy-face-camera, compare.py, anything else -- is invoked through
+# `env -i PATH=/usr/local/bin:/usr/bin …`, so no inherited variable can steer a
+# decision made as root. omarchy-face-camera already refuses its own sysfs
+# override when EUID is 0; the gate is where that rule is enforced for the
+# whole tree.
+
 # §4.2: every path ends in an explicit exit. A helper that falls off the end
 # returns whatever the last command happened to return, and in this file that
 # status is a decision about an authentication.

@@ -75,7 +75,14 @@ Column {
     if (code === "version_mismatch")
       return "The installed system files do not match this plugin version — reinstall the plugin."
     if (code === "not_owner") return "Face is set up for another account on this machine."
-    if (code === "plugin_not_owned" || code === "plugin_missing")
+    // Face's own prompt authenticates whoever is asking, not an administrator,
+    // so an account that cannot already become root must not be able to install
+    // the helpers that sudo will run as root (plan-engine.md §8.2).
+    if (code === "not_admin")
+      return "Face can only be set up for an account that can already administer this machine."
+    if (code === "install_dir_unsafe")
+      return "/usr/local/bin is not owned by root, or is writable by others — Face will not install helpers there."
+    if (code === "plugin_not_owned" || code === "plugin_missing" || code === "plugin_unsafe")
       return "Face could not read its own system files from the plugin folder."
     return "It did not work: " + code + "."
   }

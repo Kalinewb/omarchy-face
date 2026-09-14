@@ -258,6 +258,25 @@ done
 
 socket_enabled=false
 systemctl is-enabled --quiet omarchy-faced.socket 2>/dev/null && socket_enabled=true
+
+# Enabled is not the same as working. A socket unit whose service exits without
+# draining the backlog can be driven into `failed` by any local user (one
+# connection, repeated until the start-rate limit trips), and a failed socket
+# unit has had its path unlinked -- so face checks stop, with every unit file
+# still exactly where it should be. `is-enabled` cannot see that; `is-active`
+# can. Only asked when systemd is actually reachable: in a container or a chroot
+# the answer would be "no" for a reason that says nothing about this machine.
+socket_live=true
+socket_detail=""
+if [[ -d /run/systemd/system ]] && [[ $socket_enabled == true ]]; then
+  socket_state=$(systemctl is-active omarchy-faced.socket 2>/dev/null)
+  if [[ $socket_state != active && $socket_state != activating ]]; then
+    socket_live=false
+    socket_detail="the verification socket is $socket_state"
+    [[ $(systemctl show -p Result --value omarchy-faced.socket 2>/dev/null) == success ]] ||
+      socket_detail="$socket_detail (systemctl reset-failed omarchy-faced.socket, then restart it)"
+  fi
+fi
 policy_ok=false
 [[ -f $POLICY ]] && grep -q 'org.freedesktop.policykit.exec.path' "$POLICY" 2>/dev/null && policy_ok=true
 config_ok=false
@@ -291,9 +310,10 @@ elif ((${#system_problems[@]} > 0)); then
       "system files do not match this plugin version — reinstall the plugin ($(join_comma "${system_problems[@]}"))" \
       false ""
   fi
-elif [[ $socket_enabled != true || $policy_ok != true || $config_ok != true ]]; then
+elif [[ $socket_enabled != true || $socket_live != true || $policy_ok != true || $config_ok != true ]]; then
   detail=()
   [[ $socket_enabled == true ]] || detail+=("the verification socket is not enabled")
+  [[ $socket_live == true ]] || detail+=("$socket_detail")
   [[ $policy_ok == true ]] || detail+=("the polkit action is missing its exec.path")
   if [[ $config_ok != true ]]; then
     [[ -n $account ]] && detail+=("Face is set up for $account, not ${USER:-$(id -un)}") ||
@@ -323,9 +343,14 @@ if howdy_version=$(pacman -Q howdy 2>/dev/null | awk '{print $2}') && [[ -n $how
 fi
 [[ $engine_installed == true ]] || howdy_version=""
 
+# A number, or zero. engine.json is root-written, but "root wrote it" is not
+# "it parses": one bad value here would make the final `jq -n --argjson` fail,
+# and this script would exit 0 with NO document at all -- which the GUI reads as
+# a helper that is not installed.
 threshold=0
 if [[ -r $ENGINE_FILE ]]; then
   threshold=$(jq -r '.threshold // 0' "$ENGINE_FILE" 2>/dev/null) || threshold=0
+  [[ $threshold =~ ^[0-9]+([.][0-9]+)?$ ]] || threshold=0
 fi
 
 install_doc='{"state":"idle","step":"","steps":["deps","fetch","build","install","configure","done"],"startedAt":0,"updatedAt":0,"error":"","notes":[]}'
@@ -368,9 +393,9 @@ fi
 pam_files=()
 for pam_file in /etc/pam.d/*; do
   [[ -f $pam_file ]] || continue
-  grep -q '^# omarchy-face begin' "$pam_file" 2>/dev/null && pam_files+=("$pam_file")
+  grep -q '^# omarchy-face begin$' "$pam_file" 2>/dev/null && pam_files+=("$pam_file")
 done
-sudo_blocks=$(grep -c '^# omarchy-face begin' /etc/pam.d/sudo 2>/dev/null) || sudo_blocks=0
+sudo_blocks=$(grep -c '^# omarchy-face begin$' /etc/pam.d/sudo 2>/dev/null) || sudo_blocks=0
 
 if [[ $config_sudo == true && $sudo_blocks == 1 ]] && ((sudo_faces > 0)); then
   add_row sudo "Face for sudo" ok "$sudo_faces face(s) can approve sudo" false ""

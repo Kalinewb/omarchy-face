@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/python3 -I
 #
 # omarchy-face v2
 # omarchy-face-version: 2.0.0-dev
@@ -7,23 +7,89 @@
 # CAP_DAC_READ_SEARCH, answering VERIFY-PERSON and VERIFY-LOCK for callers that
 # cannot hold privilege.
 #
-# Phase 6 (F5) writes it. It ships now because the socket unit is installed and
-# enabled by the first install (§5.1) and the `system` row counts seven helpers
-# (§10.1) -- an ExecStart pointing at nothing would make the unit fail on the
-# first connection with "No such file or directory", which reads as a broken
-# install rather than an unfinished one.
+# Phase 6 (F5) writes the real one. It ships now because the socket unit is
+# installed and enabled by the first install (§5.1) and the `system` row counts
+# seven helpers (§10.1).
 #
-# Until F5 it accepts the activation and exits without reading the connection.
-# A client gets EOF, which every client in this plan treats as "unavailable":
-# omarchy-face-identity answers exit 3 and the lock wrapper fails its attempt
-# quietly. Nothing here opens the camera or reads a model.
+# **It drains the socket, and that is not a stub detail.** With `Accept=no`,
+# systemd hands this process the LISTENING socket and a client's connection sits
+# in the backlog until somebody accept()s it. A daemon that exits without
+# accepting leaves that connection pending, so systemd activates it again
+# immediately -- and again, until the start-rate limit trips and BOTH this
+# service and the socket unit go to `failed`, with the socket path unlinked.
+# Any local user could do that with one connection and a loop, and getting out
+# of it needs root. So every exit path here accepts what is waiting first, and
+# **every exit path of the real daemon must do the same** -- config missing, lid
+# closed, an import that fails, a person who does not exist. It is a hard
+# requirement on F5, not a property of this placeholder.
+#
+# Until F5 the answer is `NO error`, which every client in this plan treats as
+# "unavailable": omarchy-face-identity answers exit 3 and the lock wrapper fails
+# its attempt quietly. Nothing here opens the camera or reads a model.
+#
+# `-I` (isolated) for the same reason as the other Python helper: no PYTHONPATH,
+# no PYTHONSTARTUP, no module picked up from the script's own directory.
 
-set -u
-unset IFS BASH_ENV ENV CDPATH
-PATH=/usr/local/bin:/usr/bin
-umask 077
+import os
+import socket
+import sys
 
-logger -t omarchy-face -p daemon.info -- \
-  "omarchy-faced: not implemented before phase 6; closing the connection" 2>/dev/null || true
+# §6: socket-activated and idle-exiting, so this is not a root process sitting
+# around all day waiting to be interesting to somebody.
+IDLE_TIMEOUT = 120.0
+# One request per connection, and a request is one short line (§6.1). The cap is
+# what stops a client holding the daemon open by sending no newline for ever.
+READ_TIMEOUT = 5.0
+MAX_REQUEST = 256
 
-exit 0
+ANSWER = b"NO error\n"
+
+
+def listener():
+    """The socket systemd is holding, or None when started by hand."""
+    if os.environ.get("LISTEN_PID") not in (None, str(os.getpid())):
+        return None
+    try:
+        count = int(os.environ.get("LISTEN_FDS", "0"))
+    except ValueError:
+        return None
+    if count < 1:
+        return None
+    # SD_LISTEN_FDS_START. fromfd dups, so the original stays systemd's.
+    return socket.fromfd(3, socket.AF_UNIX, socket.SOCK_STREAM)
+
+
+def serve(server):
+    server.settimeout(IDLE_TIMEOUT)
+    while True:
+        try:
+            connection, _ = server.accept()
+        except socket.timeout:
+            return 0
+        except OSError:
+            return 1
+        with connection:
+            try:
+                connection.settimeout(READ_TIMEOUT)
+                # Read and discard the request. Reading it matters even though
+                # the answer is fixed: a client that gets an answer before it
+                # has finished writing can see EPIPE instead of the answer.
+                connection.recv(MAX_REQUEST)
+                connection.sendall(ANSWER)
+            except OSError:
+                pass
+
+
+def main():
+    server = listener()
+    if server is None:
+        # Started by hand rather than by the socket unit. There is nothing to
+        # drain and nothing to serve.
+        print("omarchy-faced is socket-activated; start omarchy-faced.socket",
+              file=sys.stderr)
+        return 0
+    with server:
+        return serve(server)
+
+
+sys.exit(main())

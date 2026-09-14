@@ -39,5 +39,13 @@ RestrictNamespaces=yes
 LockPersonality=yes
 SystemCallArchitectures=native
 
-[Install]
-WantedBy=multi-user.target
+# Phase 6, when the real daemon lands, adds: SystemCallFilter=@system-service,
+# RestrictRealtime=yes, ProtectClock=yes, ProtectHostname=yes, UMask=0077.
+# They are not here yet because a stub that answers one fixed line should not
+# carry a filter nobody has tested against the code that will actually run.
+
+# No [Install] section on purpose. This service exists to be started BY the
+# socket; `systemctl enable omarchy-faced.service` would make it a root process
+# started at boot and kept alive outside the socket-activation model -- which is
+# the one shape §6 says it must never have. The socket unit is the only thing
+# that is enabled.

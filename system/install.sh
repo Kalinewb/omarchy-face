@@ -43,20 +43,42 @@ ACCOUNT=${2:-}
 
 [[ -n $PLUGIN_DIR && -n $ACCOUNT ]] || die "bad_arguments"
 [[ $PLUGIN_DIR == /* && $PLUGIN_DIR != *..* ]] || die "plugin_missing"
+# A symlink would make the ownership check below a check on the link's target.
+[[ ! -L $PLUGIN_DIR && ! -L $PLUGIN_DIR/system ]] || die "plugin_unsafe"
 [[ -d $PLUGIN_DIR/system ]] || die "plugin_missing"
 [[ $ACCOUNT != root ]] || die "unknown_account"
 account_uid=$(id -u -- "$ACCOUNT" 2>/dev/null) || die "unknown_account"
 
-# pkexec reports who authenticated, and it cannot be forged by the caller. The
-# generic exec action is auth_admin, so this is an administrator -- but it need
-# not be the account the plugin folder belongs to, and installing somebody
-# else's scripts as root is not something an administrator meant to ask for.
+# PKEXEC_UID is who INVOKED pkexec. It is not forgeable by the caller, and it is
+# not a statement about who authenticated: the generic exec action is auth_admin,
+# so an administrator approved this, but that administrator may be a different
+# person from the account the plugin folder belongs to. Installing a third
+# party's scripts as root is not what approving this dialog meant.
 [[ -z ${PKEXEC_UID:-} || ${PKEXEC_UID:-} == "$account_uid" ]] || die "not_owner"
+
+# And the account being set up must itself be an administrator.
+#
+# Face's own polkit action is auth_self (plan-engine.md §8.2): from here on, the
+# owner can run `pkexec omarchy-face-admin install-system` with THEIR OWN
+# password, and that verb installs scripts out of their own writable plugin
+# folder into /usr/local/bin -- where, from phase 5, sudo's PAM stack runs them
+# as root. Setting Face up for an ordinary user would therefore hand that user a
+# way to root that they did not have, and one administrator password typed once
+# is all it would take to arrange it. Refusing here keeps the whole design
+# honest: Face's owner is by construction an administrator, so install-system
+# grants nothing the owner's password does not already grant.
+#
+# The administrator identity is polkit's own, read from its default rules rather
+# than assumed to be wheel.
+admin_group=$(sed -n 's/.*unix-group:\([a-zA-Z0-9_.-]\+\).*/\1/p' \
+  /usr/share/polkit-1/rules.d/50-default.rules 2>/dev/null | head -1)
+: "${admin_group:=wheel}"
+id -Gn -- "$ACCOUNT" 2>/dev/null | tr ' ' '\n' | grep -qxF "$admin_group" || die "not_admin"
 
 # The plugin folder is the account's own or the system's. Anything else is a
 # third party's directory (§5.1's trust boundary is "the owner's own files",
 # not "any path handed to root").
-owner_uid=$(stat -c %u "$PLUGIN_DIR/system" 2>/dev/null) || die "plugin_missing"
+owner_uid=$(stat -Lc %u "$PLUGIN_DIR/system" 2>/dev/null) || die "plugin_missing"
 [[ $owner_uid == 0 || $owner_uid == "$account_uid" ]] || die "plugin_not_owned"
 
 # First install only. A machine that already has a config is updated with
@@ -76,7 +98,10 @@ logger -t omarchy-face -p auth.notice -- \
 tmp=$(mktemp -d /run/omarchy-face-install.XXXXXX) || die "snapshot_failed"
 trap 'rm -rf -- "$tmp"' EXIT
 chmod 0700 "$tmp" || die "snapshot_failed"
-cp -a --no-dereference "$PLUGIN_DIR/system/." "$tmp/" 2>/dev/null || die "snapshot_failed"
+# One file, because one file is installed here: the helper that installs the
+# rest. Copying the whole directory would mean judging the shape of files this
+# script never touches.
+cp -a --no-dereference "$PLUGIN_DIR/system/omarchy-face-admin" "$tmp/" 2>/dev/null || die "snapshot_failed"
 
 # Plain files only. A symlink would have been followed back out of the snapshot
 # when it was installed, and a hard link leaves the same inode writable from
@@ -92,7 +117,19 @@ head -40 "$tmp/omarchy-face-admin" 2>/dev/null | grep -q 'omarchy-face v2' || di
 head -40 "$tmp/omarchy-face-admin" 2>/dev/null | grep -q 'omarchy-face-version:' || die "snapshot_unversioned"
 
 [[ -d /usr/local/bin ]] || install -d -o root -g root -m 0755 /usr/local/bin || die "install_failed"
-install -o root -g root -m 0755 "$tmp/omarchy-face-admin" "$ADMIN" || die "install_failed"
+
+# The directory root helpers live in must be root's and writable by nobody else.
+# A group-writable /usr/local/bin is a way to replace a file that PAM will run
+# as root, and it costs one stat to refuse rather than to assume.
+dir_info=$(stat -Lc '%u %a' /usr/local/bin 2>/dev/null) || die "install_dir_unsafe"
+[[ ${dir_info%% *} == 0 ]] || die "install_dir_unsafe"
+dir_mode=${dir_info##* }
+(( (8#$dir_mode & 8#022) == 0 )) || die "install_dir_unsafe"
+
+# install(1) then rename: install does not replace atomically (unlink, create,
+# write, chmod are separate steps), and this path is about to be executed.
+install -o root -g root -m 0755 "$tmp/omarchy-face-admin" "$ADMIN.tmp" || die "install_failed"
+mv -f "$ADMIN.tmp" "$ADMIN" || { rm -f "$ADMIN.tmp"; die "install_failed"; }
 
 # `env -u PKEXEC_UID`: --first-install is refused when PKEXEC_UID is set, so
 # that entry point cannot be reached through Face's own auth_self action by a

@@ -92,6 +92,24 @@ The gate of `plan-merged.md §4` phase 2: install the system half the way the GU
 does, check what landed, refuse the things that must be refused, purge, and run
 the §10.3 checklist — with every file in `/etc/pam.d` hashed before and after.
 
+It also covers three things that have no verb yet and would otherwise go
+untested until the phase that depends on them:
+
+- **`pam_insert_block` / `pam_remove_block`**, sourced straight out of the
+  installed `omarchy-face-admin` (everything above its verb dispatch). Insert,
+  refuse a second insert, refuse a block somebody has edited, remove, and assert
+  the stack is byte-identical to what it was. Phase 5's `sudo-on`/`sudo-off`
+  call these functions; they do not get their own copy.
+- **The daemon drains its socket.** `Accept=no` hands over the *listening*
+  socket, so a daemon that exits without `accept()`ing leaves the client pending
+  and systemd re-activates it until the start-rate limit puts the socket unit
+  itself into `failed` — a denial of service any local user can run, needing
+  root to undo. Every exit path of the real daemon must keep this property.
+- **A first install for a non-administrator account is refused.** Face's own
+  polkit action is `auth_self`, so the owner can later install system files with
+  their own password; an owner who is not already an administrator would be an
+  owner who just became one.
+
 The default run is sandboxed with `unshare --map-root-user --mount`: uid 0 that
 owns nothing, tmpfs over `/etc`, `/run`, `/usr/local` and polkit's actions
 directory, and the checkout bound over the account's plugin folder so the update
