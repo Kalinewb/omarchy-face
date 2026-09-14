@@ -1,0 +1,25 @@
+#!/bin/bash
+
+# Stub engine: the read half (plan-merged.md §2.2), served from dev/fixtures.
+#
+# GUI phases are built before the engine that answers them, so the panel needs
+# something that speaks the contract without installing anything. This prints a
+# fixture and exits 0 -- as the real helper must, always (§2.2) -- and it writes
+# nothing anywhere. $OMARCHY_FACE_DEV_FIXTURE picks the fixture directory.
+
+set -uo pipefail
+
+FIXTURES=${OMARCHY_FACE_DEV_FIXTURES:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../fixtures" && pwd)}
+FIXTURE=${OMARCHY_FACE_DEV_FIXTURE:-fresh}
+FILE="$FIXTURES/$FIXTURE/status.json"
+
+if [[ ! -f $FILE ]]; then
+  # A missing fixture is a development mistake, not a machine state. Say so in
+  # the document itself rather than exiting non-zero, which the GUI would read
+  # as the helper being absent.
+  printf '{"rows":[{"id":"system","label":"Face'"'"'s system files","state":"unknown","detail":"dev stub: no fixture %s","fixable":false}],"camera":{},"config":{},"engine":{},"install":{},"lock":{},"removal":{}}\n' "$FIXTURE"
+  exit 0
+fi
+
+cat "$FILE"
+exit 0

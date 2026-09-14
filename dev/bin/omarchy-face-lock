@@ -1,0 +1,38 @@
+#!/bin/bash
+
+# Stub of the lock-screen verbs (plan-merged.md §2.5).
+#
+# It deliberately does nothing at all. `stage` and `sync` write the plugins
+# folder on a real machine, which reloads every bar widget and destroys the
+# popup (plan-engine.md E13); a stub that did it during GUI work would close the
+# window under the person testing it, for no gain.
+
+set -uo pipefail
+
+verb=${1:-}
+
+case "$verb" in
+  stage | enable | disable)
+    printf '{"ok":true,"verb":"%s","dev":true}\n' "$verb"
+    exit 0
+    ;;
+  sync)
+    printf '{"ok":true,"dev":true}\n'
+    exit 0
+    ;;
+  status)
+    FIXTURES=${OMARCHY_FACE_DEV_FIXTURES:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../fixtures" && pwd)}
+    FIXTURE=${OMARCHY_FACE_DEV_FIXTURE:-fresh}
+    FILE="$FIXTURES/$FIXTURE/status.json"
+    if [[ -f $FILE ]] && command -v jq >/dev/null 2>&1; then
+      jq -c '.lock' "$FILE"
+    else
+      printf '{"enabled":false,"compat":"n/a","missing":[],"otherLock":""}\n'
+    fi
+    exit 0
+    ;;
+  *)
+    printf '{"error":"unknown_verb","verb":"%s"}\n' "$verb"
+    exit 1
+    ;;
+esac

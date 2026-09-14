@@ -1,0 +1,19 @@
+{
+  "rows": [
+    {"id": "legacy", "label": "Old install", "state": "ok", "detail": "nothing left from the old version", "fixable": false},
+    {"id": "camera", "label": "Infrared camera", "state": "ok", "detail": "Chicony USB2.0 Camera, 400x400 infrared", "fixable": false},
+    {"id": "system", "label": "Face's system files", "state": "needs_action", "detail": "not installed", "fixable": true},
+    {"id": "engine", "label": "Face engine", "state": "needs_action", "detail": "howdy is not installed", "fixable": true},
+    {"id": "install-job", "label": "Engine build", "state": "ok", "detail": "", "fixable": false},
+    {"id": "people", "label": "People", "state": "needs_action", "detail": "record your face first", "fixable": true},
+    {"id": "sudo", "label": "Face for sudo", "state": "needs_action", "detail": "off", "fixable": false},
+    {"id": "polkit-1", "label": "polkit", "state": "ok", "detail": "no face line in /etc/pam.d/polkit-1", "fixable": false},
+    {"id": "lock", "label": "Lock screen", "state": "needs_action", "detail": "not staged", "fixable": true}
+  ],
+  "camera": {"ir": "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:8:1.0-video-index2", "irSize": "400x400", "rgb": "/dev/video0"},
+  "config": {"account": "graveklar", "sudo": false, "lock": false},
+  "engine": {"installed": false, "howdy": "", "threshold": 0},
+  "install": {"state": "idle", "step": "", "steps": ["deps", "fetch", "build", "install", "configure", "done"], "startedAt": 0, "updatedAt": 0, "error": "", "notes": []},
+  "lock": {"enabled": false, "compat": "n/a", "missing": [], "otherLock": ""},
+  "removal": {"people": [], "pam": [], "lockWrapper": false, "helpers": 0, "daemon": false, "policy": false, "packages": []}
+}

@@ -1,0 +1,44 @@
+#!/bin/bash
+
+# Stub engine: the write half (plan-merged.md §2.3), which writes nothing.
+#
+# With $OMARCHY_FACE_DEV_BIN set the GUI drops pkexec (plan-gui.md §2.1), so
+# this runs as the user and could not touch root-owned state even if it tried.
+# Every verb answers in the contract's shape; the ones the GUI cannot yet drive
+# say so rather than pretending to have succeeded.
+
+set -uo pipefail
+
+verb=${1:-}
+shift || true
+
+case "$verb" in
+  set-label | set-permission | remove-appearance | remove-person | \
+  sudo-on | sudo-off | lock-on | lock-off | regenerate | install-system | purge-legacy)
+    # Drain stdin: the real verbs take their labels there (§2 rule 4), and a
+    # GUI that writes to a helper which never reads gets EPIPE instead of a
+    # result.
+    cat >/dev/null
+    printf '{"ok":true,"verb":"%s","dev":true}\n' "$verb"
+    exit 0
+    ;;
+  install-engine)
+    printf '{"started":true,"dev":true}\n'
+    exit 0
+    ;;
+  purge)
+    printf '{"ok":true,"incomplete":[],"dev":true}\n'
+    exit 0
+    ;;
+  enroll-session)
+    # The scripted session arrives with the recording card (phase 4); until
+    # then this is a session-fatal error on the stream, then exit 1, which is
+    # the one error shape the protocol has (§2.4).
+    printf '{"event":"error","error":"store_corrupt"}\n'
+    exit 1
+    ;;
+  *)
+    printf '{"error":"unknown_verb","verb":"%s"}\n' "$verb"
+    exit 1
+    ;;
+esac

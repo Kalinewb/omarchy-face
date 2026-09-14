@@ -1,0 +1,29 @@
+#!/bin/bash
+
+# Stub of the Profiles contract (plan-merged.md §2.5, plan-engine.md §11.3).
+#
+# `list` answers from the fixture's people.json; `verify` always answers 3,
+# unavailable -- there is no camera behind this and a stub that claimed to
+# recognise someone would be the single most misleading thing in the tree.
+
+set -uo pipefail
+
+FIXTURES=${OMARCHY_FACE_DEV_FIXTURES:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../fixtures" && pwd)}
+FIXTURE=${OMARCHY_FACE_DEV_FIXTURE:-fresh}
+PEOPLE="$FIXTURES/$FIXTURE/people.json"
+
+case "${1:-}" in
+  list)
+    [[ -f $PEOPLE ]] || exit 3
+    command -v jq >/dev/null 2>&1 || exit 3
+    jq -r '.people[].name' "$PEOPLE"
+    exit 0
+    ;;
+  verify)
+    [[ -n ${2:-} ]] || exit 2
+    exit 3
+    ;;
+  *)
+    exit 2
+    ;;
+esac
