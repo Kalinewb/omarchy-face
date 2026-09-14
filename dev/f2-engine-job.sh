@@ -79,27 +79,6 @@ extract_build_script() { # extract_build_script <file>
   [[ -s $1 ]] || { echo "f2: could not find BUILD_SCRIPT in $ADMIN_SRC" >&2; return 1; }
 }
 
-# --- the PKGBUILDs ------------------------------------------------------------
-#
-# From the yay cache when it is there (the evidence note of plan-engine.md E8
-# left a v2.6.1 checkout on this machine), and from the AUR when it is not.
-# Either way these are the real files, not fixtures written to pass.
-fetch_pkgbuilds() { # fetch_pkgbuilds <dir>
-  local dir=$1 name cache
-  for name in python-dlib howdy; do
-    mkdir -p "$dir/$name" || return 1
-    cache=$HOME/.cache/yay/$name/PKGBUILD
-    if [[ -r $cache ]]; then
-      cp "$cache" "$dir/$name/PKGBUILD" || return 1
-    elif command -v git >/dev/null; then
-      git clone --quiet --depth 1 "https://aur.archlinux.org/$name.git" "$dir/$name.git" &&
-        cp "$dir/$name.git/PKGBUILD" "$dir/$name/PKGBUILD" || return 1
-    else
-      return 1
-    fi
-  done
-}
-
 # ==============================================================================
 # --build-user: plan-engine.md §5.3's uncertainty, and nothing else
 # ==============================================================================
@@ -171,13 +150,15 @@ if [[ ${1:-} == --builder ]]; then
   if [[ -d $work/python-dlib && -d $work/howdy ]]; then
     note "reusing the clones already in $work"
   else
-    bash -c "$(cat "$script")" omarchy-face-build "$work" fetch
+    bash -c "$(cat "$script")" omarchy-face-build "$work" fetch \
+      "$(sed -n 's/^AUR_PIN_PYTHON_DLIB=//p' "$ADMIN_SRC")" "$(sed -n 's/^AUR_PIN_HOWDY=//p' "$ADMIN_SRC")"
     check "fetch left a python-dlib PKGBUILD" test -f "$work/python-dlib/PKGBUILD"
     check "fetch left a howdy PKGBUILD" test -f "$work/howdy/PKGBUILD"
   fi
 
   step "build (dlib is a long compile)"
-  time bash -c "$(cat "$script")" omarchy-face-build "$work" build
+  time bash -c "$(cat "$script")" omarchy-face-build "$work" build \
+    "$(sed -n 's/^AUR_PIN_PYTHON_DLIB=//p' "$ADMIN_SRC")" "$(sed -n 's/^AUR_PIN_HOWDY=//p' "$ADMIN_SRC")"
   build_rc=$?
   check "the build script finished" test "$build_rc" -eq 0
   [[ -s $work/result ]] && note "result: $(cat "$work/result")"
@@ -262,7 +243,7 @@ if [[ ${1:-} == --detach ]]; then
 
   step "and it finishes on its own"
   for _ in $(seq 1 60); do
-    [[ $(jq -r .state "$state/install.json") == done ]] && break
+    [[ $(jq -r .state "$state/install.json") == "done" ]] && break
     sleep 1
   done
   check "state is done" bash -c "[[ \$(jq -r .state '$state/install.json') == done ]]"
@@ -300,6 +281,57 @@ if [[ ${1:-} != --sandboxed && ${OMARCHY_FACE_F2_IN_NS:-0} != 1 ]]; then
   check "the GUI's only engine verb is install-engine" \
     grep -q 'adminArgv(\["install-engine"\])' "$REPO/SetupView.qml"
 
+  # The AUR revisions are pinned, because `pacman -U` runs a package's install
+  # scriptlet as root and the .PKGINFO check cannot catch a PKGBUILD that was
+  # changed on purpose (security review M1).
+  step "the AUR revisions this release builds from"
+  pin_dlib=$(sed -n 's/^AUR_PIN_PYTHON_DLIB=//p' "$ADMIN_SRC")
+  pin_howdy=$(sed -n 's/^AUR_PIN_HOWDY=//p' "$ADMIN_SRC")
+  echo "  ${DIM}python-dlib $pin_dlib${RESET}"
+  echo "  ${DIM}howdy       $pin_howdy${RESET}"
+  check "python-dlib is pinned to a full revision" \
+    bash -c "[[ '$pin_dlib' =~ ^[0-9a-f]{40}\$ ]]"
+  check "howdy is pinned to a full revision" \
+    bash -c "[[ '$pin_howdy' =~ ^[0-9a-f]{40}\$ ]]"
+  check "the build user is given both pins, and checks out neither by name" \
+    bash -c "grep -q 'AUR_PIN_PYTHON_DLIB\" \"\$AUR_PIN_HOWDY' '$ADMIN_SRC' &&
+             grep -q 'clone_pinned' '$ADMIN_SRC'"
+  check "the GUI can say what pkgbuild_changed means" \
+    grep -q 'pkgbuild_changed' "$REPO/SetupView.qml"
+  check "and Setup says the engine is built from the AUR before the button is pressed" \
+    grep -q 'Arch User Repository' "$REPO/SetupView.qml"
+  # Not a failure when the AUR has moved on -- that is the pin doing its job --
+  # but it is the one thing a reader of this test wants to know.
+  if command -v git >/dev/null; then
+    for pair in "python-dlib:$pin_dlib" "howdy:$pin_howdy"; do
+      name=${pair%%:*}
+      pinned=${pair#*:}
+      # `ls-remote HEAD` prints HEAD twice (the symref and the branch it points
+      # at), so take one of them.
+      remote=$(timeout 30 git ls-remote "https://aur.archlinux.org/$name.git" HEAD 2>/dev/null | awk 'NR == 1 {print $1}')
+      if [[ -z $remote ]]; then
+        note "$name: could not reach the AUR to compare"
+      elif [[ $remote == "$pinned" ]]; then
+        echo "  ${GREEN}pass${RESET}  $name is pinned at the AUR's current HEAD"
+        checks=$((checks + 1))
+      else
+        note "$name has moved on in the AUR ($remote) — builds will stop with"
+        note "  pkgbuild_changed until this plugin is updated. That is the design."
+      fi
+    done
+  fi
+
+  # Locks and the start race (security review L2, L3).
+  check "the start of a job is serialised, not just checked" \
+    grep -q 'INSTALL_START_LOCK' "$ADMIN_SRC"
+  check "lock files are created 0600 before anything opens them" \
+    bash -c "grep -q 'umask 077; : >\"\$path\"' '$ADMIN_SRC' &&
+             [[ \$(grep -c '^ *open_lock [78] ' '$ADMIN_SRC') == 2 ]]"
+  check "root does not follow a symlink into the build user's directory" \
+    grep -q 'builder_file_safe' "$ADMIN_SRC"
+  check "and it does not read another program's output in another language" \
+    grep -q '^export LC_ALL=C' "$ADMIN_SRC"
+
   # The checks above ran before the namespace, and `exec` throws this process
   # away -- so the count goes with it unless it is carried across.
   exec env OMARCHY_FACE_F2_IN_NS=1 \
@@ -319,6 +351,12 @@ if [[ ${OMARCHY_FACE_F2_IN_NS:-0} == 1 ]]; then
   mount -t tmpfs tmpfs /etc || exit 1
   chmod 0755 /etc
   for real in /mnt/*; do ln -s "$real" "/etc/${real#/mnt/}"; done
+  # DNS, before /run goes away. On a systemd-resolved machine /etc/resolv.conf
+  # is a symlink into /run/systemd/resolve, and the next line replaces /run with
+  # an empty tmpfs -- so the link would dangle and nothing in here could reach
+  # the AUR. Copy the contents while they still resolve.
+  rm -f /etc/resolv.conf
+  cp -L /mnt/resolv.conf /etc/resolv.conf 2>/dev/null || :
   mount -t tmpfs tmpfs /run || exit 1
   chmod 0755 /run
   mount -t tmpfs tmpfs /usr/local || exit 1
@@ -396,11 +434,25 @@ if [[ $* == *--unit=omarchy-face-install* ]]; then
 fi
 
 if [[ $* == *DynamicUser=yes* ]]; then
-  # run_as_builder. The phase is the last argument; the build directory the one
-  # before it. Instead of compiling, leave behind exactly what the build user
-  # would have left -- or the failure the test asked for.
-  phase=${*: -1}
-  dir=${*: -2:1}
+  # run_as_builder. Read the build script's own argv out of the command line --
+  # `/bin/bash -c <script> <name> <dir> <phase> <pins…>` -- rather than counting
+  # from the end, which breaks the moment the real call grows an argument.
+  # Instead of compiling, leave behind exactly what the build user would have
+  # left, or the failure the test asked for.
+  args=("$@")
+  dir=""
+  phase=""
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    [[ ${args[i]} == /bin/bash ]] || continue
+    dir=${args[i + 4]}
+    phase=${args[i + 5]}
+    break
+  done
+  # Belt and braces: this stub creates directories and symlinks, and a
+  # mis-parsed argv once left one in the checkout. It only ever works on the
+  # path the real call uses.
+  [[ $dir == /var/lib/omarchy-face-build && -n $phase ]] ||
+    { echo "stub builder: unexpected argv ($dir $phase)" >&2; exit 64; }
   # systemd puts a DynamicUser unit's StateDirectory in /var/lib/private and
   # leaves /var/lib/<name> as a symlink to it. Root reads the private path, the
   # unit sees the link, and the test has to have both or it tests neither.
@@ -502,7 +554,9 @@ make_package() { # make_package <out> <pkgname> <depends…> -- called with EXTR
   fi
   # `.PKGINFO *` would leave a package of one file when the glob matches
   # nothing, and bsdtar would refuse the literal `*`.
-  ( cd "$root" && bsdtar -c --zstd -f "$out" $(ls -A) )
+  local entries=()
+  mapfile -t entries < <(cd "$root" && ls -A)
+  ( cd "$root" && bsdtar -c --zstd -f "$out" "${entries[@]}" )
   rm -rf "$root"
 }
 
@@ -532,6 +586,10 @@ check "…with no error" bash -c "[[ \$(jq -r .error /run/omarchy-face/install.j
 check "the step list is the contract's" \
   bash -c "[[ \$(jq -c .steps /run/omarchy-face/install.json) == '[\"deps\",\"fetch\",\"build\",\"install\",\"configure\",\"done\"]' ]]"
 check "install.log is world-readable" bash -c "[[ \$(stat -c %a /run/omarchy-face/install.log) == 644 ]]"
+# The lock is the one file here that is not (security review L3): flock needs no
+# write access, so a 0644 lock file is a handle any local process can take and
+# never give back.
+check "the job's lock is not" bash -c "[[ \$(stat -c %a /run/omarchy-face/install.lock) == 600 ]]"
 check "install.json is world-readable" bash -c "[[ \$(stat -c %a /run/omarchy-face/install.json) == 644 ]]"
 check "every step reached the log" \
   bash -c "for s in deps fetch build install configure done; do grep -q \"== \$s\" /run/omarchy-face/install.log || exit 1; done"
@@ -684,10 +742,39 @@ check "…with a startedAt for the elapsed clock" \
 
 step "while it runs, a second click is refused"
 echo 0 >"$CONTROL/unit-active"    # is-active: active
+before=$(cat /run/omarchy-face/install.json)
+log_before=$(cat /run/omarchy-face/install.log)
+echo 1 >"$CONTROL/start-fails"    # it must not get as far as systemd-run
 out=$(/usr/local/bin/omarchy-face-admin install-engine 2>&1)
 rc=$?
+rm -f "$CONTROL/start-fails"
 check "exit 3" test $rc -eq 3
 check "install_running" bash -c "[[ \$(jq -r .error <<<'$out') == install_running ]]"
+# The whole point of the start lock (security review L2): a second click must
+# not reset the running build's startedAt, truncate its log, or -- worse --
+# write `failed` over it and put a Try again button under a build that is
+# running perfectly well.
+check "the running build's document is untouched" \
+  bash -c "[[ \$(cat /run/omarchy-face/install.json) == '$before' ]]"
+check "…and so is its log" \
+  bash -c "[[ \$(cat /run/omarchy-face/install.log) == '$log_before' ]]"
+
+step "two starts at once are serialised, not raced"
+# Hold the start lock from outside and time how long install-engine takes to
+# get past it. Without the lock it would go straight through and both callers
+# would write the same document.
+echo 3 >"$CONTROL/unit-active"
+( flock 6 && sleep 3 ) 6>>/run/omarchy-face/install-start.lock &
+holder=$!
+sleep 0.3
+start=$(date +%s)
+/usr/local/bin/omarchy-face-admin install-engine >/dev/null 2>&1
+waited=$(( $(date +%s) - start ))
+wait $holder 2>/dev/null
+echo "  ${DIM}waited ${waited}s for the other start${RESET}"
+check "it waited for the other start to finish" test "$waited" -ge 2
+check "the lock is not readable by anyone else" \
+  bash -c "[[ \$(stat -c %a /run/omarchy-face/install-start.lock) == 600 ]]"
 read_status
 check "the engine row does not offer a Fix while the build runs" \
   bash -c "[[ \$(jq -r '.rows[]|select(.id==\"engine\")|.state + \" \" + (.fixable|tostring)' '$STATUS_OUT') == 'unknown false' ]]"
@@ -713,13 +800,33 @@ check "start_failed" bash -c "[[ \$(jq -r .error <<<'$out') == start_failed ]]"
 check "install.json says failed, not running" \
   bash -c "[[ \$(jq -r .state /run/omarchy-face/install.json) == failed ]]"
 
-# --- the patches, against the real PKGBUILDs ---------------------------------
+# --- the fetch and the patches, against the real PKGBUILDs -------------------
+#
+# This section runs the shipped build script for real, against the AUR. It needs
+# the network, and it is the only part of the default run that does; makepkg is
+# stubbed, so it is the clone and the two edits being tested, not the compile.
 
-step "the patches, against the PKGBUILDs the AUR ships"
+step "the fetch, pinned to the revisions this release was built against"
 work=$(mktemp -d)
 script=$work/build-script
 extract_build_script "$script"
-if fetch_pkgbuilds "$work"; then
+pin_dlib=$(sed -n 's/^AUR_PIN_PYTHON_DLIB=//p' "$ADMIN_SRC")
+pin_howdy=$(sed -n 's/^AUR_PIN_HOWDY=//p' "$ADMIN_SRC")
+
+run_build_script() { # run_build_script <dir> <phase> <dlib pin> <howdy pin>
+  PATH=/usr/local/bin:/usr/bin bash -c "$(cat "$script")" \
+    omarchy-face-build "$1" "$2" "$3" "$4" >/dev/null 2>&1
+}
+
+if timeout 90 git ls-remote https://aur.archlinux.org/howdy.git HEAD >/dev/null 2>&1; then
+  run_build_script "$work" fetch "$pin_dlib" "$pin_howdy"
+  check "python-dlib is checked out at the pin" \
+    bash -c "[[ \$(git -C '$work/python-dlib' rev-parse HEAD 2>/dev/null) == '$pin_dlib' ]]"
+  check "howdy is checked out at the pin" \
+    bash -c "[[ \$(git -C '$work/howdy' rev-parse HEAD 2>/dev/null) == '$pin_howdy' ]]"
+  check "and it wrote down what it fetched" test -s "$work/revisions"
+  check "the fetch reported no failure" bash -c "[[ ! -s '$work/result' ]]"
+
   # makepkg stubbed: this test is about the two edits, not the compile.
   cat >/usr/local/bin/makepkg <<'STUB'
 #!/bin/bash
@@ -727,24 +834,51 @@ touch "$(basename "$PWD")-1.0-1-x86_64.pkg.tar.zst"
 exit 0
 STUB
   chmod 0755 /usr/local/bin/makepkg
-  PATH=/usr/local/bin:/usr/bin bash -c "$(cat "$script")" omarchy-face-build "$work" build >/dev/null 2>&1
+
+  original=$(cat "$work/python-dlib/PKGBUILD")
+  step "the patches"
+  run_build_script "$work" build "$pin_dlib" "$pin_howdy"
   check "dlib's CUDA switch is off" grep -qx '_build_cuda=0' "$work/python-dlib/PKGBUILD"
+  # One line changed, and it is the switch: the checkout is a git checkout at a
+  # known revision, so git itself is the diff.
   check "and nothing else in that file changed" \
-    bash -c "diff <(sed 's/^_build_cuda=0$/_build_cuda=1/' '$work/python-dlib/PKGBUILD') \
-                  <(cat '$HOME/.cache/yay/python-dlib/PKGBUILD' 2>/dev/null || cat '$work/python-dlib.git/PKGBUILD')"
+    bash -c "git -C '$work/python-dlib' diff --numstat -- PKGBUILD | awk '{exit !(\$1 == 1 && \$2 == 1)}'"
   check "howdy's package() no longer installs the polkit drop-in" \
     bash -c "! grep -q '10-howdy.conf' '$work/howdy/PKGBUILD'"
+  check "…by removing two lines and nothing else" \
+    bash -c "git -C '$work/howdy' diff --numstat -- PKGBUILD | awk '{exit !(\$1 == 0 && \$2 == 2)}'"
   check "…and still installs everything else" \
     bash -c "grep -q 'cp -r src/\*' '$work/howdy/PKGBUILD' && grep -q 'bash-completion' '$work/howdy/PKGBUILD'"
   check "the patched PKGBUILD is still valid shell" bash -n "$work/howdy/PKGBUILD"
 
-  # And the refusal: no switch, no build.
+  step "the refusals"
+  # No switch, no build.
   sed -i 's/^_build_cuda=0$/_build_cuda=/' "$work/python-dlib/PKGBUILD"
-  PATH=/usr/local/bin:/usr/bin bash -c "$(cat "$script")" omarchy-face-build "$work" build >/dev/null 2>&1
+  run_build_script "$work" build "$pin_dlib" "$pin_howdy"
   check "a dlib PKGBUILD without the switch stops the build" \
     bash -c "[[ \$(cat '$work/result') == cuda_flag_missing ]]"
+
+  # A checkout that is not the pin does not get built, whatever it says.
+  printf '%s\n' "$original" >"$work/python-dlib/PKGBUILD"
+  wrong_pin=0000000000000000000000000000000000000000
+  run_build_script "$work" build "$wrong_pin" "$pin_howdy"
+  check "a checkout that is not the pinned revision stops the build" \
+    bash -c "[[ \$(cat '$work/result') == pkgbuild_changed ]]"
+  check "…and the patch was not applied to it" \
+    grep -qx '_build_cuda=1' "$work/python-dlib/PKGBUILD"
+
+  # A pin that is not 40 hex is a plugin that was edited by hand.
+  run_build_script "$work" build "not-a-revision" "$pin_howdy"
+  check "a malformed pin stops the build" \
+    bash -c "[[ \$(cat '$work/result') == pkgbuild_changed ]]"
+
+  # And a pin the AUR does not have.
+  rm -rf "$work/python-dlib" "$work/howdy"
+  run_build_script "$work" fetch "$wrong_pin" "$pin_howdy"
+  check "a pin the AUR cannot serve stops the fetch" \
+    bash -c "[[ \$(cat '$work/result') == pkgbuild_changed ]]"
 else
-  note "no PKGBUILDs available (no yay cache and no network) — patch checks skipped"
+  note "the AUR is not reachable — the fetch, the pins and the patch checks are skipped"
 fi
 rm -rf "$work"
 

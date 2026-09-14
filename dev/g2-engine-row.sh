@@ -112,7 +112,7 @@ check "…and it has moved on" bash -c "[[ \$(jq -r .install.step <<<'$after') !
 
 step "and it finishes"
 for _ in $(seq 1 120); do
-  [[ $(jq -r .state "$STATE/install.json" 2>/dev/null) == done ]] && break
+  [[ $(jq -r .state "$STATE/install.json" 2>/dev/null) == "done" ]] && break
   sleep 1
 done
 sleep 2

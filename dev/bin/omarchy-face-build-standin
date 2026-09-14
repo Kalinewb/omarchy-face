@@ -43,7 +43,7 @@ log "starting the engine build (development stand-in)"
 write_install running "" ""
 
 for step in "${STEPS[@]}"; do
-  [[ $step == done ]] && break
+  [[ $step == "done" ]] && break
   write_install running "$step" ""
   log "== $step"
 

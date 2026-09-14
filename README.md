@@ -7,8 +7,10 @@ for the people you choose.
 > built phase by phase, and **it does not authenticate anything yet**. No PAM
 > stack is edited, no camera is opened, and no face is recorded. Setup can now
 > install Face's system files and take them off again, and build the face
-> engine: howdy and a CPU-only dlib, compiled by a user systemd invents for the
-> job, in a unit that survives the popup being closed. The helpers it installs
+> engine: howdy and a CPU-only dlib, compiled **from the Arch User Repository**
+> — at two pinned revisions, by a user systemd invents for the job, and
+> installed with `pacman`, which runs a package's install scriptlet as root — in
+> a unit that survives the popup being closed. The helpers it installs
 > are in their safe state — the sudo gate always skips, the verifier never
 > authenticates, and the daemon answers nothing.
 >

@@ -166,6 +166,21 @@ a sandbox cannot: whether `makepkg` (and `fakeroot` inside it) runs under
 systemd's `DynamicUser`. If it does not, `plan-engine.md §5.3`'s fallback
 applies.
 
+### The AUR revisions are pinned
+
+`AUR_PIN_PYTHON_DLIB` and `AUR_PIN_HOWDY` at the top of
+`system/omarchy-face-admin` are the two commits Face builds from. They are not a
+convenience: `pacman -U` runs a package's install scriptlet as root, and a
+PKGBUILD can add files Face does not own, so "whatever the AUR has today" is a
+thing nobody reviewed running as root on the owner's say-so. `.PKGINFO` cannot
+help — it is generated *from* the PKGBUILD.
+
+When either package is updated in the AUR, builds stop with `pkgbuild_changed`
+until the pins here move. **Updating them is a review job**, not a bump: read
+both PKGBUILDs (and `howdy.install`, which runs as root) for what they do, run
+`./dev/f2-engine-job.sh --builder` against the new revisions, then change the two
+lines. The default run tells you when a pin has fallen behind HEAD.
+
 ## G2 — the engine row
 
 ```sh

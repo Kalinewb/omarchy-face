@@ -198,6 +198,15 @@ Column {
              "pull in a graphics toolkit behind your back. This needs a look at the package."
     if (code === "cuda_in_package")
       return "The dlib that was built still wants CUDA, so it was not installed."
+    // The pin is the point: a new revision of these packages is a change to
+    // what runs as root here, so it waits for a version of Face that has read
+    // it rather than being picked up silently.
+    if (code === "pkgbuild_changed")
+      return "howdy or dlib has been updated in the Arch User Repository since this version of " +
+             "Face was built against it. Face only builds the revisions it was tested with, so " +
+             "this needs a newer Face."
+    if (code === "systemd_unreachable")
+      return "systemd did not answer, and Face will not start a build it could not stop."
     if (code === "pacman_locked")
       return "Another package manager is running. Let it finish and try again."
     if (code === "deps_failed") return "The packages the build needs could not be installed."
@@ -374,6 +383,26 @@ Column {
         text: "Your password dialog will say it wants to run <b>/bin/bash</b> as the super user. " +
               "That is this installer: Face's own helpers cannot ask with their own message until " +
               "they exist. It is the only time you will see that dialog."
+        color: view.dim
+        font.family: view.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+
+      // What the build actually is, said before it is asked for rather than
+      // discovered in the log. It compiles two packages off the Arch User
+      // Repository and installs them as root, which is a thing to know about a
+      // button, and it takes long enough that "nothing is happening" is the
+      // wrong conclusion to leave available.
+      Text {
+        textFormat: Text.PlainText
+        width: parent.width
+        visible: !rowItem.stale && rowItem.modelData.id === "engine"
+                 && (rowItem.fixText !== "" || view.buildRunning)
+        wrapMode: Text.WordWrap
+        leftPadding: Style.space(22)
+        text: "Face builds its engine — howdy and dlib — from the Arch User Repository, at the two " +
+              "revisions this version of Face was tested against, and installs them with pacman. " +
+              "It takes several minutes and runs without a graphics toolkit."
         color: view.dim
         font.family: view.fontFamily
         font.pixelSize: Style.font.caption

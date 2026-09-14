@@ -31,6 +31,14 @@ unset IFS BASH_ENV ENV CDPATH
 PATH=/usr/local/bin:/usr/bin
 umask 022
 
+# Every decision in this file is made by matching the output of another program,
+# and several of those programs translate. `pacman -Qi`'s "Depends On" is
+# "Hängt ab von" under a German locale, and the CUDA check below would have
+# quietly matched nothing and kept a CUDA dlib. C also pins `sort -V`, awk's
+# number formatting and date's field widths, all of which end up in files other
+# code parses.
+export LC_ALL=C
+
 CONFIG_DIR=/etc/omarchy-face
 CONFIG_FILE=$CONFIG_DIR/config
 STORE_DIR=/var/lib/omarchy-face
@@ -46,6 +54,7 @@ ENGINE_FILE=$STORE_DIR/engine.json
 INSTALL_FILE=$RUN_DIR/install.json
 INSTALL_LOG=$RUN_DIR/install.log
 INSTALL_LOCK=$RUN_DIR/install.lock
+INSTALL_START_LOCK=$RUN_DIR/install-start.lock
 HOWDY_DIR=/usr/lib/security/howdy
 HOWDY_CONFIG=$HOWDY_DIR/config.ini
 HOWDY_DROPIN=/usr/lib/systemd/system/polkit-agent-helper@.service.d/10-howdy.conf
@@ -62,6 +71,26 @@ INSTALL_STEPS=(deps fetch build install configure "done")
 # with it and this list stays the one thing it is -- what is needed to *build*.
 BUILD_DEPS=(base-devel git python-opencv python-setuptools boost cmake sqlite
             cblas lapack libx11 libinih libevdev v4l-utils)
+
+# The two AUR revisions this release of Face builds from, and the reason they
+# are written down rather than taken as "whatever the AUR has today".
+#
+# A PKGBUILD is a shell script that root ends up running the results of:
+# `pacman -U` executes the package's install scriptlet as root, and a package
+# may create files nothing of ours owns -- a sudoers drop-in, a polkit rule, a
+# PAM module, a unit. Checking the built package's .PKGINFO (which is generated
+# FROM the PKGBUILD) cannot catch a PKGBUILD that was changed on purpose; it
+# only catches one that drifted honestly. Pinning the revision is what makes the
+# thing an owner approves the thing that was reviewed, and makepkg's own
+# sha256sums then cover the sources those PKGBUILDs pull in.
+#
+# When the AUR moves on, the build stops with `pkgbuild_changed` until a Face
+# release reads the new PKGBUILD and moves these two lines. That is the point:
+# a new howdy revision is a change to what runs as root on this machine.
+#
+#   python-dlib 20.0.1-2   howdy 2.6.1-3   (read and built 2026-09-14)
+AUR_PIN_PYTHON_DLIB=84910843274aa2989f0ebb3cba3347ba7c78f6b8
+AUR_PIN_HOWDY=ef1ec20b7eb7c0cdc40d371bdb0e0ef6c8641bce
 
 # The installed set (plan-engine.md §8.1). Source name : destination : mode.
 # One table, used by install, by the version check and by purge, so the three
@@ -583,6 +612,20 @@ ensure_run_dir() {
   [[ -d $RUN_DIR ]] || install -d -o root -g root -m 0755 "$RUN_DIR" 2>/dev/null
 }
 
+# A lock file, created 0600 BEFORE anything opens it. `exec 8>>path` creates it
+# at the umask -- 0644 -- and chmodding afterwards leaves a window in which any
+# local process can open it; flock(2) needs no write access, so one that got in
+# during that window could hold LOCK_EX for ever and leave every later build
+# saying "the engine is already building" until the next boot. /run is root's,
+# so this is a small window on a small surface, and it costs one line to not
+# have it. (The same shape as pam_lock above.)
+open_lock() { # open_lock <fd> <path>
+  local fd=$1 path=$2
+  [[ -e $path ]] || (umask 077; : >"$path") 2>/dev/null
+  chmod 0600 "$path" 2>/dev/null
+  eval "exec $fd>>\"\$path\"" 2>/dev/null
+}
+
 # install.json is the contract's `install` object (plan-merged.md §2.2), written
 # by same-directory temp + rename (§2 rule 5) so a reader never sees half a
 # document. 0644: the GUI runs as the owner and has to be able to read it.
@@ -633,12 +676,25 @@ engine_packages_cpu_only() {
 job_error=""
 start_install_job() {
   job_error=""
+  ensure_run_dir
+  [[ -d $RUN_DIR ]] || { job_error=install_failed; return 1; }
+
+  # Serialise the whole start, not just the check. Two clicks can both pass
+  # `is-active` before either systemd-run has run; the fixed unit name still
+  # stops a second build, but the loser would go on to truncate the winner's
+  # log, reset its startedAt and then write `failed`/`start_failed` over a build
+  # that is running perfectly well -- a false failure with a Try again button on
+  # it, for however long the winner takes to reach its next step.
+  #
+  # A lock of its own, NOT the job's: build-engine takes install.lock in its own
+  # process, and it may well do so while this one is still returning.
+  open_lock 7 "$INSTALL_START_LOCK" || { job_error=install_failed; return 1; }
+  flock -w 10 7 || { job_error=install_running; return 3; }
+
   if systemctl is-active --quiet "$INSTALL_UNIT" 2>/dev/null; then
     job_error=install_running
     return 3
   fi
-  ensure_run_dir
-  [[ -d $RUN_DIR ]] || { job_error=install_failed; return 1; }
 
   # --collect reaps the unit when it finishes, but a machine that lost systemd's
   # collection (a manager restart mid-build) can be left with a failed unit of
@@ -664,6 +720,7 @@ start_install_job() {
        --property=Type=exec \
        --property=RuntimeMaxSec=7200 \
        --property=Description="omarchy-face engine build" \
+       --setenv="OMARCHY_FACE_REQUESTER=${caller_uid:-0}" \
        /usr/local/bin/omarchy-face-admin build-engine >>"$INSTALL_LOG" 2>&1; then
     write_install failed "" start_failed
     job_error=start_failed
@@ -687,10 +744,16 @@ start_install_job() {
 # would have to join the `system` row's fixed set of ten (§8.1) to be compared
 # and installed with the rest, and it is only ever run by the lines below.
 #
-# It is NOT trusted to have done the right thing: it edits a PKGBUILD that came
-# off the AUR a minute earlier, and root verifies the *built packages* before
-# installing them (the install step below). The patch is how the build is asked
-# for CPU-only howdy; the verification is what makes it so.
+# **What this split does and does not protect against.** It stops a process
+# running as the owner from swapping the package file between `makepkg` and
+# `pacman -U`, because that directory is not theirs to write. It is NOT a
+# boundary against a bad PKGBUILD: `pacman -U` runs a package's install
+# scriptlet as root, and a package can create files Face does not own, so
+# whatever these PKGBUILDs say ends up trusted as much as this script is. That
+# is why the revisions are pinned above and why root still reads the built
+# packages back before installing them -- the pin decides *which* PKGBUILD runs,
+# and the verification catches a build that came out wrong (CUDA, the polkit
+# drop-in) rather than one that was written to lie.
 read -r -d '' BUILD_SCRIPT <<'BUILD_SCRIPT_END' || true
 set -uo pipefail
 umask 022
@@ -698,6 +761,8 @@ export PATH=/usr/bin
 
 dir=$1
 phase=$2
+pin_dlib=${3:-}
+pin_howdy=${4:-}
 cd "$dir" || { printf 'no_build_dir\n' >"$dir/result" 2>/dev/null; exit 1; }
 
 # One word, read by root. The exit status says "something went wrong"; this says
@@ -707,14 +772,36 @@ note() { printf '%s\n' "$1" >>"$dir/notes"; }
 
 : >"$dir/result"
 
+# Clone one AUR package AT a revision, not at whatever the AUR has today. A
+# shallow clone gives HEAD; when HEAD is not the pin, the AUR does serve an
+# explicit object (`fetch --depth 1 origin <sha>`), and anything that leaves the
+# checkout somewhere else stops the build.
+clone_pinned() { # clone_pinned <url> <dir> <sha>
+  local url=$1 target=$2 sha=$3
+  [[ $sha =~ ^[0-9a-f]{40}$ ]] || fail pkgbuild_changed
+  git clone --depth 1 "$url" "$target" || fail fetch_failed
+  if [[ $(git -C "$target" rev-parse HEAD 2>/dev/null) != "$sha" ]]; then
+    git -C "$target" fetch --depth 1 origin "$sha" || fail pkgbuild_changed
+    git -C "$target" checkout --quiet --detach "$sha" || fail pkgbuild_changed
+  fi
+  [[ $(git -C "$target" rev-parse HEAD 2>/dev/null) == "$sha" ]] || fail pkgbuild_changed
+  printf '%s %s\n' "${target##*/}" "$sha" >>"$dir/revisions"
+}
+
 case $phase in
   fetch)
-    rm -rf -- "$dir/python-dlib" "$dir/howdy" "$dir/notes"
-    git clone --depth 1 https://aur.archlinux.org/python-dlib.git "$dir/python-dlib" || fail fetch_failed
-    git clone --depth 1 https://aur.archlinux.org/howdy.git "$dir/howdy" || fail fetch_failed
+    rm -rf -- "$dir/python-dlib" "$dir/howdy" "$dir/notes" "$dir/revisions"
+    clone_pinned https://aur.archlinux.org/python-dlib.git "$dir/python-dlib" "$pin_dlib"
+    clone_pinned https://aur.archlinux.org/howdy.git "$dir/howdy" "$pin_howdy"
     ;;
 
   build)
+    # Still the revisions that were fetched. The two phases are two runs, and
+    # the patches below are only meaningful against the PKGBUILD that was
+    # pinned, not against whatever is in the directory now.
+    [[ $(git -C "$dir/python-dlib" rev-parse HEAD 2>/dev/null) == "$pin_dlib" ]] || fail pkgbuild_changed
+    [[ $(git -C "$dir/howdy" rev-parse HEAD 2>/dev/null) == "$pin_howdy" ]] || fail pkgbuild_changed
+
     # dlib's PKGBUILD defaults to building the CUDA package as well (E9). If the
     # flag is not where it was, stop: silently pulling ~2.7 GB of CUDA from a
     # GUI click is the wrong failure.
@@ -753,36 +840,73 @@ esac
 exit 0
 BUILD_SCRIPT_END
 
+# The phase runs in a unit of its own, and that unit is NOT in this process's
+# cgroup -- so if the job is stopped (RuntimeMaxSec, `systemctl stop`), a
+# twenty-minute makepkg would otherwise carry on with nothing left watching it.
+# BindsTo ties the two together: the build stops when the job does.
+#
+# It can only be added when this process really IS the job. A BindsTo on a unit
+# systemd cannot load refuses to start at all, so a root-by-hand run must not
+# carry one -- and `is-active` is the wrong question for that, because it is
+# also true for a *different* process watching the same job. $INVOCATION_ID is
+# set by systemd for the service it starts, and comparing it with the unit's own
+# invocation id answers exactly "am I that unit". A systemctl that will not
+# answer while we are inside a unit is not something to shrug at: the build we
+# are about to start would be one nothing can stop.
+# Sets $build_binding.
+build_binding=()
+compute_build_binding() {
+  build_binding=()
+  # $INVOCATION_ID alone proves nothing: systemd exports it into a service and
+  # every descendant inherits it, terminals included. It is only the cheap way
+  # to skip the question when there is obviously no unit.
+  [[ -n ${INVOCATION_ID:-} ]] || return 0
+  # And there is nothing to ask when systemd is not running at all (a container,
+  # a chroot, this project's test namespace). That is not a machine where a
+  # build can be left unstoppable, because there is no manager to lose it to.
+  [[ -d /run/systemd/system ]] || return 0
+  local id
+  # A systemctl that will not answer while we are inside a unit IS worth
+  # stopping for: the build we are about to start would be one nothing can stop.
+  id=$(systemctl show -p InvocationID --value "$INSTALL_UNIT" 2>/dev/null) ||
+    build_fail systemd_unreachable
+  # Empty, or somebody else's: we are not that unit, so there is nothing to bind
+  # to and a BindsTo would only stop this from starting.
+  [[ -n $id && $id == "$INVOCATION_ID" ]] || return 0
+  build_binding=(--property="BindsTo=$INSTALL_UNIT" --property="After=$INSTALL_UNIT")
+}
+
 run_as_builder() { # run_as_builder <fetch|build>
-  # The phase runs in a unit of its own, and that unit is NOT in this process's
-  # cgroup -- so if the job is stopped (RuntimeMaxSec, `systemctl stop`), a
-  # twenty-minute makepkg would otherwise carry on with nothing left watching
-  # it. BindsTo ties the two together: the build stops when the job does.
-  #
-  # Only when there IS a job: run as root by hand there is no
-  # omarchy-face-install.service to bind to, and a BindsTo on a unit systemd
-  # cannot load refuses to start at all.
-  local bound=()
-  if systemctl is-active --quiet "$INSTALL_UNIT" 2>/dev/null; then
-    bound=(--property="BindsTo=$INSTALL_UNIT" --property="After=$INSTALL_UNIT")
-  fi
   systemctl reset-failed "$BUILD_PHASE_UNIT" >/dev/null 2>&1
   systemd-run --wait --pipe --quiet --collect --unit="${BUILD_PHASE_UNIT%.service}" \
     --property=DynamicUser=yes \
     --property=StateDirectory=omarchy-face-build \
     --property=WorkingDirectory=/var/lib/omarchy-face-build \
     --property=Description="omarchy-face engine build ($1)" \
-    "${bound[@]}" \
+    ${build_binding[@]+"${build_binding[@]}"} \
     --setenv=HOME=/var/lib/omarchy-face-build \
     --setenv=LANG=C \
+    --setenv=LC_ALL=C \
     /bin/bash -c "$BUILD_SCRIPT" omarchy-face-build /var/lib/omarchy-face-build "$1" \
+    "$AUR_PIN_PYTHON_DLIB" "$AUR_PIN_HOWDY" \
     >>"$INSTALL_LOG" 2>&1
+}
+
+# Files the build user wrote, read by root. Both go through this: `-f` alone
+# follows a symlink, so a link left at one of these names would have root read
+# whatever it points at and put a filtered copy of it into the world-readable
+# install.json. Nothing should be able to plant one -- the directory is the
+# dynamic user's -- but root reading a name it did not create is exactly the
+# habit that stops being harmless later.
+builder_file_safe() { # builder_file_safe <path>
+  [[ -f $1 && ! -L $1 ]]
 }
 
 # The word the build user left behind, if any. `tr -cd` because this file is
 # written by a uid that is not root's and is about to become an error code in a
 # JSON document.
 builder_result() {
+  builder_file_safe "$BUILD_STATE/result" || return 0
   head -1 "$BUILD_STATE/result" 2>/dev/null | tr -cd 'a-z_'
 }
 
@@ -803,7 +927,7 @@ run_builder_phase() { # run_builder_phase <fetch|build>
 
 collect_builder_notes() {
   local line
-  [[ -r $BUILD_STATE/notes ]] || return 0
+  builder_file_safe "$BUILD_STATE/notes" || return 0
   while IFS= read -r line; do
     [[ -n $line ]] || continue
     install_notes+=("$(printf '%s' "$line" | tr -cd '\040-\176' | cut -c1-120)")
@@ -1049,14 +1173,20 @@ case $verb in
     # One build at a time, whoever asked. The flock is taken before any state is
     # written, so a second job cannot stamp `running` over the first one's step.
     ensure_run_dir
-    exec 8>>"$INSTALL_LOCK" 2>/dev/null || die "install_failed"
+    open_lock 8 "$INSTALL_LOCK" || die "install_failed"
     flock -n 8 || die "install_running" 3
-    chmod 0600 "$INSTALL_LOCK" 2>/dev/null
 
     trap build_interrupted TERM INT HUP
     read_install_started
     install_step=""
-    audit "engine build running"
+    # PKEXEC_UID is gone by the time the unit runs (this is root starting root),
+    # so the uid is carried in for the journal only -- install-engine's own line
+    # is the authenticated one, and this is what ties the two together.
+    audit "engine build running (requested by uid ${OMARCHY_FACE_REQUESTER:-unknown})"
+    # Decided once, before any step: it needs systemd to answer, and a machine
+    # where it does not is one to stop on rather than to start an unstoppable
+    # build on.
+    compute_build_binding
 
     # Everything the build needs is already there, and it is the CPU-only build:
     # then deps, fetch, build and install have nothing to do and the job is one

@@ -28,6 +28,11 @@ set -uo pipefail
 unset IFS
 umask 077
 
+# Every row here is a decision made by matching another program's output, and
+# several of those translate under a non-English locale. C also pins `sort -V`,
+# which is what decides whether the plugin is newer than the installed files.
+export LC_ALL=C
+
 PLUGIN_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 SYSTEM_SRC=$PLUGIN_DIR/system
 MANIFEST=$PLUGIN_DIR/manifest.json
