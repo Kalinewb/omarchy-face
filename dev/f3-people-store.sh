@@ -513,6 +513,32 @@ same "turning off the last Sudo face reports the unwire" "True" \
 check "…the block is gone from /etc/pam.d/sudo" bash -c "! grep -q omarchy-face /etc/pam.d/sudo"
 same "…and the config says so" "sudo=false" "$(grep '^sudo=' /etc/omarchy-face/config)"
 check "…and the sudo set was deleted" test ! -e "$MODELS/omarchy-face.sudo.$ACCOUNT.dat"
+
+# And the same rule when the edit cannot be made. A block holding a line Face
+# did not write is refused by pam_remove_block, which leaves the file exactly as
+# it was -- so the caller must say so rather than claim an unwire and write
+# sudo=false over a stack that still runs the verifier.
+printf 'account=%s\nsudo=true\nlock=false\n' "$ACCOUNT" >/etc/omarchy-face/config
+"$ADMIN" set-permission "$ACCOUNT" sudo on >/dev/null 2>&1
+FACE_FN=pam_insert_block FACE_ARG=/etc/pam.d/sudo FACE_ADMIN=$ADMIN bash -c '
+  set -- purge
+  source <(sed -n "1,/^# --- the people store/p" "$FACE_ADMIN") >/dev/null
+  "$FACE_FN" "$FACE_ARG"'
+sed -i "/^# omarchy-face begin\$/a auth  required  pam_permit.so" /etc/pam.d/sudo
+out=$("$ADMIN" set-permission "$ACCOUNT" sudo off 2>&1)
+same "a refused PAM edit is reported, not swallowed" "pam_edit_failed" \
+  "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("error"))' "$out")"
+same "…and the unwire is never claimed" "failed" \
+  "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("unwired"))' "$out")"
+same "…so the config still says sudo is on" "sudo=true" "$(grep '^sudo=' /etc/omarchy-face/config)"
+check "…and the stack is untouched" grep -q '^auth  required  pam_permit.so$' /etc/pam.d/sudo
+# Back to the stack and the config the rest of the run expects.
+sed -i '/^auth  required  pam_permit.so$/d' /etc/pam.d/sudo
+FACE_FN=pam_remove_block FACE_ARG=/etc/pam.d/sudo FACE_ADMIN=$ADMIN bash -c '
+  set -- purge
+  source <(sed -n "1,/^# --- the people store/p" "$FACE_ADMIN") >/dev/null
+  "$FACE_FN" "$FACE_ARG"'
+printf 'account=%s\nsudo=false\nlock=false\n' "$ACCOUNT" >/etc/omarchy-face/config
 "$ADMIN" set-permission "$ACCOUNT" sudo on >/dev/null 2>&1
 
 step "GATE: names in argv are validated (plan-merged.md §2 rule 4)"
@@ -620,6 +646,69 @@ for verb in enroll-session set-label remove-person regenerate; do
   out=$(PKEXEC_UID=$other "$ADMIN" "$verb" anna 2>&1 </dev/null)
   same "$verb from another uid → not_owner" '{"error":"not_owner"}' "$(head -1 <<<"$out")"
 done
+
+# The three below are about what a session does when nobody is driving it and
+# what it does when the store moved underneath it (plan-engine.md §12 risk 9,
+# §3.2). They are last because the third one empties the store.
+
+step "GATE: a session does not stay authorised for ever (risk 9)"
+reset_stub
+stub_face 2
+before=$(fingerprint)
+# The real deadline is two minutes; the helper takes an override that can only
+# make it shorter, so the gate watches the same code path in three seconds.
+export OMARCHY_FACE_SESSION_SECONDS=3
+started=$(date +%s)
+out=$(session anna "await ready 30" 'send {"cmd":"capture","appearance":"No glasses"}' \
+  "await captured 60" "await discarded 40")
+elapsed=$(( $(date +%s) - started ))
+unset OMARCHY_FACE_SESSION_SECONDS
+echo "${DIM}$(sed 's/^/  /' <<<"$out" | head -8)${RESET}"
+same "a session nobody drives expires and discards" "ready capturing captured discarded " \
+  "$(event_codes <<<"$out")"
+same "…exiting 0, like the EOF cancel it is" "EXIT 0" "$(grep '^EXIT' <<<"$out")"
+check "…within its deadline" test "$elapsed" -lt 30
+same "…and the capture it was holding is NOT committed" "$before" "$(fingerprint)"
+
+step "GATE: a person removed mid-session is not brought back by the commit"
+reset_stub
+stub_face 5
+record bob Bob "No glasses" new >/dev/null
+check "Bob is in the store" test -f "$STORE/people/bob.json"
+( sleep 2; "$ADMIN" remove-person bob >/dev/null 2>&1 ) &
+remover=$!
+out=$(session bob "await ready 30" 'send {"cmd":"capture","appearance":"Everyday glasses"}' \
+  "await captured 60" "sleep 3" 'send {"cmd":"done"}' "await error 30")
+wait $remover 2>/dev/null
+same "the commit refuses rather than re-appending what ready read" "ready capturing captured error:no_person " \
+  "$(event_codes <<<"$out")"
+check "…and Bob stays removed" test ! -e "$STORE/people/bob.json"
+check "…derived set and all" test ! -e "$MODELS/omarchy-face.person.bob.dat"
+
+step "GATE: two first-time sessions cannot both become the owner"
+rm -f "$STORE"/people/*.json
+"$ADMIN" regenerate >/dev/null 2>&1
+reset_stub
+stub_face 6
+# One session opens against an empty store and holds. A whole second session
+# commits inside that window, so the first one's pre-lock read ("nobody is
+# here, I am the owner") is stale by the time it takes the lock.
+( sleep 2; stub_face 7; record two Two "No glasses" new >/dev/null 2>&1 ) &
+racer=$!
+out=$(session one "await ready 30" 'send {"cmd":"create","label":"One"}' "sleep 5" \
+  'send {"cmd":"capture","appearance":"No glasses"}' "await captured 60" \
+  'send {"cmd":"done"}' "await saved 30")
+wait $racer 2>/dev/null
+same "the session that lost the race still commits" "ready capturing captured saved " \
+  "$(event_codes <<<"$out")"
+same "…as an ordinary person" "false" "$(json_field "$STORE/people/one.json" owner)"
+same "…without Sudo" "false" "$(json_field "$STORE/people/one.json" sudo)"
+same "the store has exactly one owner" "1" \
+  "$(python3 -c 'import json,sys; print(sum(1 for p in json.load(open(sys.argv[1]))["people"] if p["owner"]))' "$PEOPLE")"
+same "…and it is the one that committed first" "\"two\"" "$(json_field "$PEOPLE" people.0.name)"
+out=$("$ADMIN" regenerate 2>&1)
+same "…so the store is not corrupt" "True" \
+  "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["ok"])' "$out")"
 
 fi   # end of the stub suite
 

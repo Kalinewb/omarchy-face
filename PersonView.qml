@@ -113,6 +113,12 @@ Column {
       // (plan-merged.md §2.3).
       if (result.parsed && result.parsed.unwired === "sudo")
         view.note = "Nobody has Sudo now, so sudo asks for passwords only."
+      // The same call, when the PAM edit itself was refused: the permission is
+      // gone but the stack still points at Face's helpers, and only the person
+      // in front of it can decide what to do about that.
+      else if (result.parsed && result.parsed.unwired === "failed")
+        view.note = "Nobody has Sudo now, but /etc/pam.d/sudo could not be changed back. " +
+                    "Turn Face for sudo off in Settings."
     })
   }
 
@@ -135,6 +141,12 @@ Column {
       if (!result.ok) { view.note = view.outcomeText(result); return }
       if (result.parsed && result.parsed.unwired === "sudo")
         view.note = "Nobody has Sudo now, so sudo asks for passwords only."
+      // The same call, when the PAM edit itself was refused: the permission is
+      // gone but the stack still points at Face's helpers, and only the person
+      // in front of it can decide what to do about that.
+      else if (result.parsed && result.parsed.unwired === "failed")
+        view.note = "Nobody has Sudo now, but /etc/pam.d/sudo could not be changed back. " +
+                    "Turn Face for sudo off in Settings."
     })
   }
 

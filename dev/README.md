@@ -222,6 +222,15 @@ the engine is stubbed — two small scripts that speak howdy's model format and 
 be told to fail the way `add.py` does — which is what lets `no_face`,
 `multiple_faces`, `too_dark`, `black_frames` and a busy camera all be tested.
 
+Three of its steps are about a session being a **standing authorisation**
+(`plan-engine.md §12` risk 9): one nobody drives expires and discards the
+captures it was holding rather than committing them, a commit re-decides
+`owner`/`sudo` from the locked read so two first-time sessions cannot both become
+the owner, and a person removed while their session is open is not brought back
+by it. The expiry is watched through `OMARCHY_FACE_SESSION_SECONDS`, which the
+helper clamps **downwards** — it can only shorten a session, never lengthen one,
+and pkexec drops the caller's environment anyway.
+
 `--real` unpacks the howdy and python-dlib **packages the engine build produced**
 into the sandbox (`/tmp/omarchy-face-f2.*`, from `f2-engine-job.sh --builder`)
 and runs them against `/dev/video2`: a real capture, a real `compare.py`, and E8
@@ -248,6 +257,13 @@ Two knobs exist for it, both GUI-side and both development-only:
 (argv[0] is what decides whether a stream is cancelled by closing stdin or by a
 signal), and the harness puts a stand-in `pkexec` earlier in `PATH` that sleeps
 for ten seconds and then `exec`s — the dialog, without the password.
+
+The fourth clause added here is the other half of risk 9: the `record-orphan`
+case destroys a running session the way closing a card does and checks the
+stand-in's transcript says `discarded`. The session's `Process` belongs to
+`common/Ask.qml`, not to the session item, so a session that did not close its
+own stdin on the way out would leave an authorised root `enroll-session` reading
+a pipe nothing will ever close.
 
 The recording card itself (`RecordCard.qml`) is a layer-shell window and is not
 covered offscreen: what it draws is checked by opening it. Everything it decides

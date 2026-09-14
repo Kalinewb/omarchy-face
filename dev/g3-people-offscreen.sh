@@ -204,6 +204,15 @@ check "people.json is byte-identical" "$people_before" "$(sha256sum "$state/peop
 check "…and was not even touched" "$people_mtime_before" "$(stat -c '%y' "$state/people.json")"
 
 echo
+echo "${DIM}== GATE: a session destroyed with its card cannot be orphaned${RESET}"
+rm -f "$state/session.log"
+out=$(run_case record-orphan OMARCHY_FACE_DEV_PKEXEC=1)
+echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
+check "the session object is gone" "true" "$(field sessionGone "$out")"
+check "…and it closed its stdin on the way out, rather than leaving root reading" \
+  "discarded" "$(grep -E '^(done|discarded|killed)' "$state/session.log" | head -1)"
+
+echo
 echo "${DIM}== the card and the service compile${RESET}"
 out=$(run_case card)
 echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"

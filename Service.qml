@@ -53,10 +53,34 @@ Item {
   property string previewDevice: ""
   property var appearanceLabels: ["No glasses", "Everyday glasses", "Reading glasses"]
 
+  // Closing a card ends the session inside it, in that order and never the
+  // other way round.
+  //
+  // The session's Process belongs to `engine` below, not to the session item,
+  // so destroying the item alone leaves an authorised root `enroll-session`
+  // running with its stdin still open -- blocked in a read, invisible to
+  // `state()`, and with nothing left in this file that can reach it to cancel
+  // it. That is one password still buying captures with no card on screen
+  // (plan-engine.md §12 risk 9), so the stdin is closed first.
+  //
+  // `closing` is not tidiness either: discard() on a session that has already
+  // exited emits `finished`, whose handler calls this function again.
+  property bool closing: false
+
   function closeCard() {
-    if (card) { card.destroy(); card = null }
-    if (session) { session.destroy(); session = null }
-    cardName = ""
+    if (root.closing) return
+    root.closing = true
+    var goingCard = root.card
+    var goingSession = root.session
+    root.card = null
+    root.session = null
+    root.cardName = ""
+    if (goingCard) goingCard.destroy()
+    if (goingSession) {
+      if (goingSession.running) goingSession.discard()
+      goingSession.destroy()
+    }
+    root.closing = false
   }
 
   // The card returns to the popup on the person it just recorded
@@ -118,11 +142,20 @@ Item {
     function record(name: string, appearance: string, label: string, isNew: string): string {
       var who = String(name || "")
       if (who === "") return "record needs a name"
+      // A card that is already open is never replaced. Any process running as
+      // this account can send this call, and swapping the card out from under a
+      // live session would leave that session's root process running with
+      // nothing able to cancel it -- an authorisation for one person paying for
+      // a recording of another (plan-engine.md §12 risk 9). The same name is
+      // the card that is already on screen, so it answers ok.
+      if (root.card) return root.cardName === who ? "ok" : "busy"
       // The preview device first, then the card: a card that opened before the
       // read answered would show "no preview on this laptop" for a second on a
       // laptop that has one.
       root.refreshPreviewDevice(function () {
-        if (root.cardName === who && root.card) return
+        // The read is asynchronous, so a second `record` can have landed while
+        // it was out. Whoever got a card up first keeps it.
+        if (root.card) return
         root.startRecording(who, appearance, label, isNew === "new" || isNew === "true")
       })
       return "ok"

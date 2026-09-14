@@ -31,6 +31,15 @@ unset IFS BASH_ENV ENV CDPATH
 PATH=/usr/local/bin:/usr/bin
 umask 022
 
+# Root inherits the caller's working directory -- pkexec keeps it -- and every
+# path in this file is absolute, so there is nothing to lose by leaving it. What
+# there is to gain: `python3 -c` puts the current directory at the front of
+# sys.path, so a `sudo omarchy-face-admin …` run by hand from a directory
+# holding a file called json.py or re.py would have root import it. The store
+# script is run with `-I` for the same reason; this is the half that also covers
+# anything else here that ever shells out.
+cd / 2>/dev/null || true
+
 # Every decision in this file is made by matching the output of another program,
 # and several of those programs translate. `pacman -Qi`'s "Depends On" is
 # "Hängt ab von" under a German locale, and the CUDA check below would have
@@ -1065,6 +1074,7 @@ import json
 import os
 import re
 import secrets
+import select
 import subprocess
 import sys
 import time
@@ -1115,6 +1125,26 @@ ADD_SECONDS = 40
 COMPARE_SECONDS = 8
 CAMERA_LOCK_WAIT = 5.0
 STORE_LOCK_WAIT = 5.0
+
+# How long a session may stand still, and how long it may last at all
+# (plan-engine.md §12 risk 9).
+#
+# A session is a standing authorisation: one password opens it, and every
+# capture and the commit inside it are unprompted. A root process blocked in a
+# read on stdin for ever is therefore an open way to add a face -- including to
+# a person with Sudo -- for whoever walks up to an unlocked machine. So the read
+# has a deadline: no command for IDLE_SECONDS, or SESSION_SECONDS from `ready`
+# whatever happens, and the session discards. **Never a commit**: an expiry
+# writes nothing, exactly like the EOF cancel it is treated as.
+#
+# IDLE_SECONDS is longer than anything the GUI does between commands (the card's
+# own idle bound is shorter, so in normal use the card closes first and says
+# why), and long enough that a person reading the card is not cut off.
+IDLE_SECONDS = 120
+SESSION_SECONDS = 300
+# A command line is a small JSON object. Anything past this is not a protocol
+# this file speaks, and buffering it would be a way to make root allocate.
+MAX_LINE = 65536
 
 # Debris from a session that was killed between taking a frame and committing
 # (plan-engine.md §3.3).
@@ -1245,6 +1275,16 @@ def is_number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def rule_ok(rule, value):
+    """A rule of §3.2, applied the way the GUI applies it.
+
+    `re.match(r"…$", x)` is NOT that: in python `$` also matches just before a
+    trailing newline, so `re.match(LABEL_RULE, "Anna\\n")` succeeds and a label
+    with a line break in it would be accepted by the engine and refused by the
+    GUI. fullmatch has to consume the whole string, newline included."""
+    return isinstance(value, str) and re.fullmatch(rule, value) is not None
+
+
 def validate_record(path, doc):
     """Every rule of plan-engine.md §3.2, or store_corrupt naming the file."""
 
@@ -1254,14 +1294,14 @@ def validate_record(path, doc):
     if not isinstance(doc, dict):
         bad()
     name = doc.get("name")
-    if not isinstance(name, str) or not re.match(NAME_RULE, name):
+    if not rule_ok(NAME_RULE, name):
         bad()
     # The file name is the key the rest of the store is indexed by; a record
     # that says it is somebody else would make `regenerate` write a derived set
     # under one name from a record stored under another.
     if os.path.basename(path) != name + ".json":
         bad()
-    if not isinstance(doc.get("label"), str) or not re.match(LABEL_RULE, doc["label"]):
+    if not rule_ok(LABEL_RULE, doc.get("label")):
         bad()
     for key in ("owner", "sudo", "lock"):
         if not isinstance(doc.get(key), bool):
@@ -1276,7 +1316,7 @@ def validate_record(path, doc):
         if not isinstance(appearance, dict):
             bad()
         label = appearance.get("label")
-        if not isinstance(label, str) or not re.match(LABEL_RULE, label):
+        if not rule_ok(LABEL_RULE, label):
             bad()
         if label in seen:
             bad()
@@ -1403,6 +1443,14 @@ def regenerate(people=None):
     """Rebuild every derived file from people/*.json alone. Caller holds the lock."""
     if people is None:
         people = read_all()
+    # At most one owner, asked of the list that is about to be WRITTEN and not
+    # only of what read_all() returned. Every other caller hands in a list it
+    # has just changed -- a commit added to it, a removal taken out -- and a
+    # second owner in one of those is a store that read_all() refuses from the
+    # next verb onwards, after the derived sets have already been rebuilt from
+    # it (plan-engine.md §3.1: the owner is set once and never moved).
+    if len([person for person in people if person.get("owner")]) > 1:
+        raise Fatal("store_corrupt", file=PEOPLE_DIR)
     who = account()
     if not os.path.isdir(MODELS):
         # howdy's own directory. Without it there is nothing to derive into, and
@@ -1517,8 +1565,14 @@ def run_engine(argv, seconds):
     """One engine call under `timeout -k 2` (plan-merged.md §2 rule 9)."""
     command = ["timeout", "-k", "2", str(seconds)] + argv
     try:
+        # howdy writes the temp model itself, with its own idea of a mode. The
+        # directory is 0700 root's, so nothing local can read what lands there
+        # -- but that is the AUR package's chmod, not ours, and a face is being
+        # written for the few seconds between `add` and the unlink. One umask
+        # costs nothing and does not depend on somebody else's packaging.
         done = subprocess.run(command, env=engine_env(), stdin=subprocess.DEVNULL,
-                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              preexec_fn=lambda: os.umask(0o077))
     except OSError:
         return 127, ""
     return done.returncode, done.stdout.decode("utf-8", "replace")
@@ -1581,8 +1635,13 @@ def capture(appearance, threshold):
         match = re.match(r"^Certainty of winning frame:\s*([0-9.]+)", line)
         if match:
             # compare.py:277 prints match * 10; every number in the contract is
-            # on howdy's 0-1 distance scale (plan-merged.md §2 rule 8).
-            certainty = float(match.group(1)) / 10.0
+            # on howdy's 0-1 distance scale (plan-merged.md §2 rule 8). The
+            # pattern admits "1.2.3", which float() does not: this is output
+            # being parsed, so it is caught rather than trusted.
+            try:
+                certainty = float(match.group(1)) / 10.0
+            except ValueError:
+                certainty = None
         # E8: the winning model's label is the attribution the sudo journal
         # line and the indicator are built on, and it is only correct because
         # each model file here holds exactly one encoding.
@@ -1606,7 +1665,12 @@ def capture(appearance, threshold):
         cleanup()
         return {"event": "capture_failed", "code": "no_face"}
     cleanup()
-    if not isinstance(encoding, list) or len(encoding) != 128:
+    # 128 of them AND all numbers: this is JSON another program wrote, and a
+    # string or a null in there would be caught by validate_record at the commit
+    # (store_corrupt, session-fatal) rather than here, where it is one retryable
+    # capture that found nothing usable.
+    if not isinstance(encoding, list) or len(encoding) != 128 or \
+       not all(is_number(value) for value in encoding):
         return {"event": "capture_failed", "code": "no_face"}
 
     return {
@@ -1622,13 +1686,13 @@ def capture(appearance, threshold):
 # --- verbs --------------------------------------------------------------------
 
 def check_name(name):
-    if not isinstance(name, str) or not re.match(NAME_RULE, name):
+    if not rule_ok(NAME_RULE, name):
         raise Fatal("invalid_name")
     return name
 
 
 def check_label(label):
-    if not isinstance(label, str) or not re.match(LABEL_RULE, label):
+    if not rule_ok(LABEL_RULE, label):
         raise Fatal("invalid_label")
     return label
 
@@ -1708,10 +1772,94 @@ def cmd_remove_person(name):
         # it true, because IPC and the helper itself can both be called directly.
         if person["owner"]:
             raise Fatal("is_owner")
-        os.unlink(record_path(name))
         people = [p for p in people if p["name"] != name]
-        summary = regenerate(people)
+        # The derived sets are rebuilt BEFORE the record goes, so a derivation
+        # that fails leaves the person intact rather than leaving their
+        # encodings in the sudo and lock sets with no record behind them -- a
+        # face that can still authenticate somebody the store has forgotten.
+        #
+        # Moved aside rather than deleted, because regenerate's orphan sweep
+        # decides what to delete by asking whether the record is there: with the
+        # record still in place it would keep this person's own derived file.
+        removed_path = record_path(name) + ".removing"
+        os.rename(record_path(name), removed_path)
+        try:
+            summary = regenerate(people)
+        except BaseException:
+            os.rename(removed_path, record_path(name))
+            raise
+        os.unlink(removed_path)
     emit({"ok": True, "removed": name, "sudo_faces": summary["sudo_faces"]})
+
+
+def session_bounds():
+    """The two deadlines, with a test override that can only make them SHORTER.
+
+    dev/f3-people-store.sh has to watch a session expire, and a gate that takes
+    two minutes to reach its first assertion is a gate nobody runs. Clamped
+    downwards on purpose: an environment variable that could LENGTHEN a standing
+    authorisation would be the very thing these deadlines bound. (It cannot
+    arrive through the GUI either -- pkexec drops the caller's environment.)"""
+    idle, whole = float(IDLE_SECONDS), float(SESSION_SECONDS)
+    try:
+        asked = float(os.environ.get("OMARCHY_FACE_SESSION_SECONDS", ""))
+    except ValueError:
+        return idle, whole
+    if asked > 0:
+        return min(idle, asked), min(whole, asked)
+    return idle, whole
+
+
+class line_reader(object):
+    """stdin, one line at a time, with a deadline.
+
+    Not `sys.stdin.readline()`: that blocks until a line arrives, for ever, and
+    for this verb "for ever" is how long one password keeps authorising captures
+    (plan-engine.md §12 risk 9). A buffered readline cannot be given a deadline
+    at all -- select() on the file object would answer "nothing to read" with a
+    whole line sitting in python's own buffer -- so the buffering is here."""
+
+    def __init__(self, fd):
+        self.fd = fd
+        self.buffer = b""
+        self.eof = False
+
+    def line(self, deadline):
+        """The next line · "" at EOF · None when the deadline passed.
+
+        The newline is kept, so the answers mean what readline's do: an empty
+        string is end of input and never a blank line somebody sent."""
+        while True:
+            cut = self.buffer.find(b"\n")
+            if cut >= 0:
+                line = self.buffer[:cut + 1]
+                self.buffer = self.buffer[cut + 1:]
+                return line.decode("utf-8", "replace")
+            if self.eof:
+                line, self.buffer = self.buffer, b""
+                return line.decode("utf-8", "replace") if line else ""
+            if len(self.buffer) > MAX_LINE:
+                raise Fatal("bad_input")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            # A second at a time, so a clock that jumps or a signal that
+            # interrupts the wait costs a second rather than the whole deadline.
+            try:
+                ready = select.select([self.fd], [], [], min(remaining, 1.0))[0]
+            except (OSError, ValueError):
+                self.eof = True
+                continue
+            if not ready:
+                continue
+            try:
+                chunk = os.read(self.fd, 4096)
+            except OSError:
+                chunk = b""
+            if chunk:
+                self.buffer += chunk
+            else:
+                self.eof = True
 
 
 def cmd_enroll_session(name):
@@ -1730,8 +1878,26 @@ def cmd_enroll_session(name):
     captured = {}           # appearance label -> appearance, this session only
     committed = False
 
+    # The two bounds on a standing authorisation (risk 9). `idle_until` is
+    # pushed out after every command, including a capture that took its whole
+    # forty seconds, so the clock measures a person who has gone away rather
+    # than an engine that is busy.
+    reader = line_reader(sys.stdin.fileno())
+    idle_seconds, whole_seconds = session_bounds()
+    idle_until = time.monotonic() + idle_seconds
+    ends_at = time.monotonic() + whole_seconds
+
     while True:
-        line = sys.stdin.readline()
+        line = reader.line(min(idle_until, ends_at))
+        if line is None:
+            # Expired. Treated exactly as the EOF cancel is -- `discarded`,
+            # nothing written -- even with captures in hand: a session nobody is
+            # driving must never commit a face on its own (§2.4).
+            reason = "idle" if time.monotonic() >= idle_until else "the session limit"
+            prose("the session expired (%s); nothing was written" % reason)
+            audit("enroll-session for %s expired (%s) with %d uncommitted capture(s)"
+                  % (name, reason, len(captured)))
+            break
         if line == "":
             break
         line = line.strip()
@@ -1753,10 +1919,15 @@ def cmd_enroll_session(name):
             created = {
                 "name": name,
                 "label": label,
-                # The owner is the first person committed into an empty store,
-                # and no verb ever sets or moves it (plan-engine.md §3.1).
-                "owner": len(people) == 0,
-                "sudo": len(people) == 0,
+                # The owner is the first person committed into an empty store
+                # (plan-engine.md §3.1) -- and "first" is a question only the
+                # locked read at `done` can answer, so both flags are decided
+                # there and left false here. Deciding them from this read would
+                # let two sessions opened against an empty store each commit as
+                # owner, and a store with two owners is `store_corrupt` for
+                # every verb until root deletes a file by hand.
+                "owner": False,
+                "sudo": False,
                 "lock": False,
                 "created": int(time.time()),
                 "appearances": [],
@@ -1787,17 +1958,36 @@ def cmd_enroll_session(name):
                 # person with no appearances is exactly what "no empty people"
                 # rules out (plan-merged.md §1 row 5).
                 break
-            target = person if person is not None else created
             with store_lock():
                 # Re-read under the lock: this is the first moment the store is
-                # being written, and it may have changed since `ready`.
+                # being written, and it may have changed since `ready`. Every
+                # decision below is made from THIS read -- the one in hand is
+                # minutes old, and a session is the one verb here that is open
+                # long enough for the store to move underneath it.
                 people = read_all()
                 fresh = find(people, name)
                 if person is None and fresh is not None:
                     raise Fatal("exists")
+                if person is not None and fresh is None:
+                    # The person was removed while this session was open.
+                    # Re-appending the copy `ready` read would resurrect them
+                    # with the flags they had when they were deleted -- Sudo
+                    # included -- which is not a recording, it is an undelete.
+                    raise Fatal("no_person")
                 if fresh is not None:
                     target = fresh
                 else:
+                    if created is None:
+                        raise Fatal("invalid_name")
+                    if len(people) >= MAX_PEOPLE:
+                        raise Fatal("person_limit")
+                    # Owner and Sudo, decided here and nowhere else: whoever
+                    # takes the lock with an empty store in front of them is the
+                    # owner, and the session that loses the race is an ordinary
+                    # second person rather than a second owner.
+                    target = created
+                    target["owner"] = not people
+                    target["sudo"] = not people
                     people.append(target)
                 for appearance in captured.values():
                     kept = [a for a in target["appearances"]
@@ -1805,6 +1995,10 @@ def cmd_enroll_session(name):
                     if len(kept) >= MAX_APPEARANCES:
                         raise Fatal("appearance_limit")
                     target["appearances"] = kept + [appearance]
+                # The same validation every record is read back through, applied
+                # before this one is written: a record that would not survive
+                # read_all() must not be what makes the store corrupt.
+                validate_record(record_path(name), target)
                 write_json(record_path(name), target, 0o600)
                 summary = regenerate(people)
             committed = True
@@ -1819,10 +2013,17 @@ def cmd_enroll_session(name):
         else:
             prose("ignoring an unknown command")
 
+        # A command was handled, so the idle clock starts again -- from AFTER
+        # the work, or a capture that took its full forty seconds would spend
+        # forty seconds of the allowance for being slow rather than absent. The
+        # `continue`s above deliberately do not reach this line: a stream of
+        # lines that are not commands must not hold the authorisation open.
+        idle_until = time.monotonic() + idle_seconds
+
     if not committed:
-        # EOF, or `done` with nothing captured. Nothing was written: the store
-        # lock was never taken, and the temp models were deleted as they were
-        # read (plan-merged.md §2.4).
+        # EOF, an expired deadline, or `done` with nothing captured. Nothing was
+        # written in any of the three: the store lock was never taken, and the
+        # temp models were deleted as they were read (plan-merged.md §2.4).
         emit({"event": "discarded"})
     return 0
 
@@ -1889,7 +2090,37 @@ require_python() {
   command -v python3 >/dev/null 2>&1 || die "python_missing"
 }
 
-store_py() { python3 -c "$STORE_PY" "$@"; }
+# -I: isolated. No PYTHONPATH, no user site-packages, and -- the one that
+# matters here -- no current directory at the front of sys.path, so a `json.py`
+# in whatever directory a by-hand `sudo omarchy-face-admin …` was run from is
+# not what root imports. (`cd /` at the top of this file is the other half.)
+# The store script needs nothing but the standard library; the engine calls in
+# it are a different matter and are NOT isolated -- howdy's own code needs the
+# site-packages dlib and cv2 live in.
+store_py() { python3 -I -c "$STORE_PY" "$@"; }
+
+# One or more keys added to a document the store printed.
+#
+# It used to be `doc="${doc%\}}"',"unwired":"sudo"}'`, which is correct for
+# every shape the store emits today and stops being correct the first time one
+# of them ends in anything else -- a nested object, a trailing newline inside
+# the document, a verb that answers with an array. This parses instead, and
+# falls back to the original document if that fails, because a store change that
+# has already happened must not be reported as a failure by its own annotation.
+json_merge() { # json_merge <document> <key> <value>…
+  local doc=$1 merged
+  shift
+  merged=$(python3 -I -c '
+import json, sys
+doc = json.load(sys.stdin)
+if not isinstance(doc, dict):
+    raise SystemExit(1)
+argv = sys.argv[1:]
+doc.update(dict(zip(argv[0::2], argv[1::2])))
+sys.stdout.write(json.dumps(doc, separators=(",", ":")))
+' "$@" <<<"$doc" 2>/dev/null) && [[ -n $merged ]] || merged=$doc
+  printf '%s' "$merged"
+}
 
 # Names arrive in argv and are validated here as well as in the store
 # (plan-merged.md §2 rule 4). The shell check is first because it decides what a
@@ -1905,10 +2136,25 @@ name_rule_ok() { [[ $1 =~ ^[a-z][a-z0-9-]{0,23}$ ]]; }
 # Nothing here is reached before phase 5 has wired sudo at least once: on a
 # machine where `sudo=false` (every machine until then) the caller does not call
 # it at all.
+#
+# 0 unwired · 1 the PAM edit was refused, and the config still says sudo is on.
+# The status is the whole point: pam_remove_block returns 1 when the block is
+# not the shape we wrote, and leaves the file exactly as it was -- so a caller
+# that ignored it would write `sudo=false` and report `"unwired":"sudo"` while
+# /etc/pam.d/sudo still ran the verifier. (2 is "there was nothing of ours in
+# it", which is not a failure: the stack is already what the config is about to
+# say it is.)
 unwire_sudo() {
+  local status
   pam_remove_block "$PAM_DIR/sudo"
+  status=$?
+  if ((status == 1)); then
+    audit "sudo could NOT be unwired: $PAM_DIR/sudo is not the shape face wrote"
+    return 1
+  fi
   config_set sudo false
   audit "sudo unwired: no face can approve sudo any more"
+  return 0
 }
 
 # One key of /etc/omarchy-face/config, rewritten in place. Same temp + rename as
@@ -1951,9 +2197,14 @@ store_verb() { # store_verb <verb> [args…]  (stdin is passed through)
     exit "$status"
   fi
   if [[ $(config_get sudo false) == true ]] && [[ $(sudo_faces_now) == 0 ]]; then
-    unwire_sudo
-    if [[ $doc == \{*\} ]]; then
-      doc="${doc%\}}"',"unwired":"sudo"}'
+    if unwire_sudo; then
+      doc=$(json_merge "$doc" unwired sudo)
+    else
+      # The store change stands -- it is written and the derived sets are
+      # rebuilt -- but sudo is still wired to a helper with no faces behind it,
+      # and saying so is the only way the owner finds out. The sudo row's own
+      # check is what reports it afterwards; this is what reports it now.
+      doc=$(json_merge "$doc" unwired failed error pam_edit_failed)
     fi
   fi
   printf '%s\n' "$doc"
@@ -2485,7 +2736,7 @@ case $verb in
     # exec, so python owns the standard streams this process was given: the
     # session is a conversation on stdin, and a bash layer in the middle is a
     # buffer between the GUI and the engine for no reason at all.
-    exec python3 -c "$STORE_PY" enroll-session "$name"
+    exec python3 -I -c "$STORE_PY" enroll-session "$name"
     ;;
 
   set-label)

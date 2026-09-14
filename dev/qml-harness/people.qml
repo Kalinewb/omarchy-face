@@ -147,6 +147,15 @@ ShellRoot {
             if (phase === "capturing" && rootObj.captureAt === 0) rootObj.captureAt = now
             if (phase === "countdown" && rootObj.caseName === "record-esc")
               sessionItem.requestClose()
+            // The session object destroyed while its process is still running,
+            // which is what closing a card used to do (the Process belongs to
+            // Ask, not to the session). Nothing is left to cancel it, so the
+            // session itself has to close its stdin on the way out
+            // (plan-engine.md §12 risk 9).
+            if (phase === "countdown" && rootObj.caseName === "record-orphan") {
+              sessionLoader.active = false
+              orphanTimer.start()
+            }
             if (phase === "verdict" && rootObj.caseName === "record-slow") sessionItem.done()
             // A session-fatal error leaves the card up in `framing` with its
             // reason on it, so nothing finishes: the run ends here instead.
@@ -255,6 +264,19 @@ ShellRoot {
 
         rootObj.startedAt = Date.now()
         sessionLoader.item.start()
+      }
+    }
+
+    // The destroyed session's own exit, which nothing else can report: its
+    // callbacks went with it, so `finished` never arrives. What the run is
+    // after is in the stand-in's transcript -- `discarded`, not `killed`.
+    Timer {
+      id: orphanTimer
+      interval: 1500
+      onTriggered: {
+        rootObj.log("case", rootObj.caseName)
+        rootObj.log("sessionGone", sessionLoader.item === null)
+        Qt.exit(0)
       }
     }
 

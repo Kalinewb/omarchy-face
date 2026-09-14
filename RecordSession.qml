@@ -56,6 +56,16 @@ Item {
   readonly property int countdownFrom: 3
   readonly property int countdownStep: 800
 
+  // The card's half of the bound on a standing authorisation (plan-engine.md
+  // §12 risk 9). One password opens the session and every capture inside it is
+  // unprompted, so a card left open on an unlocked machine is a way for whoever
+  // walks up to add their face -- to a Sudo person, at that. The engine has
+  // deadlines of its own (IDLE_SECONDS, SESSION_SECONDS); these are shorter, so
+  // in normal use the card is what closes, with a reason on it, rather than the
+  // session dying under it.
+  readonly property int idleSeconds: 75
+  readonly property int sessionSeconds: 240
+
   // --- copy, in one place ---------------------------------------------------
 
   readonly property var failText: ({
@@ -104,7 +114,10 @@ Item {
     if (!session.proc) {
       session.phase = "framing"
       session.message = "Face's system files are not installed."
+      return
     }
+    idleTimer.restart()
+    lifeTimer.restart()
   }
 
   function send(object) {
@@ -113,6 +126,9 @@ Item {
 
   function onEvent(event) {
     if (!event || typeof event !== "object") return
+    // Something happened, so the idle clock starts again. It measures a card
+    // nobody is using, not an engine taking its time over a capture.
+    if (session.proc) idleTimer.restart()
 
     // A caller-check refusal ({"error":…} with no `event`) and a session-fatal
     // error event are the same thing to the card: the session is over and the
@@ -175,6 +191,8 @@ Item {
   function onExit(result) {
     session.proc = null
     countdownTimer.stop()
+    idleTimer.stop()
+    lifeTimer.stop()
     if (session.saved) { session.finished(true); return }
     if (session.phase === "closing") { session.finished(false); return }
     if (result && result.outcome === "owner_declined") {
@@ -208,7 +226,21 @@ Item {
   // (plan-merged.md §1 row 4). The appearance may have changed in the picker.
   function again() {
     if (session.phase !== "verdict") return
+    idleTimer.restart()
     session.beginCountdown()
+  }
+
+  // A session that stood still for too long, or has simply been open too long.
+  // It ends the way stdin closing does -- discarded, nothing written -- and
+  // never with a commit: a card nobody is driving must not save a face on its
+  // own, whatever it has in hand (plan-engine.md §12 risk 9).
+  function expire(reason) {
+    if (!session.proc) return
+    console.log("graveklar.face", "the recording session expired:", reason)
+    session.message = reason === "idle"
+                      ? "Recording closed — nothing happened for a while."
+                      : "Recording closed — a session does not stay open."
+    session.discard()
   }
 
   function done() {
@@ -223,6 +255,8 @@ Item {
   // means nothing was written (plan-merged.md §2 rule 7, §2.4).
   function discard() {
     countdownTimer.stop()
+    idleTimer.stop()
+    lifeTimer.stop()
     if (!session.proc) { session.finished(false); return }
     session.phase = "closing"
     session.ask.cancel(session.proc)
@@ -252,5 +286,34 @@ Item {
       // opened only on `capture`).
       session.send({cmd: "capture", appearance: session.appearance})
     }
+  }
+
+  Timer {
+    id: idleTimer
+    interval: session.idleSeconds * 1000
+    onTriggered: session.expire("idle")
+  }
+
+  Timer {
+    id: lifeTimer
+    interval: session.sessionSeconds * 1000
+    onTriggered: session.expire("the session limit")
+  }
+
+  // The backstop, for a session item destroyed while its process still runs.
+  //
+  // The Process is parented to the Ask instance, not to this item, so it does
+  // not go when this does: without this line a destroyed session leaves an
+  // authorised root `enroll-session` blocked on a stdin nothing will ever close
+  // (plan-engine.md §12 risk 9). The callbacks are dropped first -- they are
+  // methods of an object that is on its way out, and Ask calls the exit one
+  // when the process finally goes.
+  Component.onDestruction: {
+    if (!session.proc) return
+    var going = session.proc
+    session.proc = null
+    going.eventCb = null
+    going.exitCb = null
+    if (session.ask) session.ask.cancel(going)
   }
 }
