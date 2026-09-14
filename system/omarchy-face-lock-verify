@@ -1,19 +1,113 @@
-#!/bin/bash
+#!/usr/bin/python3 -I
 #
 # omarchy-face v2
 # omarchy-face-version: 2.0.0-dev
 #
 # "Is anyone with Lock screen in front of the camera?" -- VERIFY-LOCK, for the
-# lock wrapper and nothing else (plan-engine.md §6.3).
+# lock wrapper and nothing else (plan-engine.md §6.3, §9.2).
 #
-# Exit 0 opens a lock screen. Phase 7 (F6) writes the socket client; until then
-# the answer is no, which is the answer that keeps a password field in front of
-# whoever is sitting there. Nothing calls it yet either: the wrapper is staged
-# by F6.
+#   omarchy-face-lock-verify   exit 0 and the person's name on stdout, or exit 1
+#
+# TWO EXIT CODES, and that is the whole surface. Every "no" is the same no: not
+# recognised, camera busy, rate limited, lid closed, daemon down, Face not set
+# up, lock screen face unlock turned off. The wrapper does nothing with any of
+# them except leave the lock locked, and a lock screen is the one place where
+# telling the difference out loud would be telling it to whoever is standing
+# there. The reasons are in the journal, written by the daemon.
+#
+# **Exit 0 opens a lock screen.** That is the whole reason this file is as short
+# as it is, and why it is a separate file from omarchy-face-identity rather than
+# a verb of it (§6.3): the file that Profiles reads as its contract and the file
+# that can open a locked session should not be able to be confused for each
+# other.
+#
+# It holds no privilege. The check happens in omarchy-faced, which is root,
+# decides from SO_PEERCRED that this process belongs to the account Face is set
+# up for, refuses unless `lock=true` in /etc/omarchy-face/config, and compares
+# against the derived lock set -- so this file is a socket client with two exit
+# codes, and that is all it may ever be.
+#
+# **A killed check frees the camera within 300 ms** (plan-merged.md §2.5). That
+# is not code here: the guarantee is that this process's death closes the
+# socket, and the daemon polls for exactly that while the engine runs. So there
+# is deliberately no SIGTERM handler -- the default action closes the fd
+# fastest, and the wrapper's safety timer signals this process when a check
+# stops answering.
+#
+# `-I` (isolated: implies -E -s, and drops the script's directory from
+# sys.path) matters because this runs as the user: without it PYTHONPATH,
+# PYTHONSTARTUP and a socket.py dropped next to the script would all be
+# honoured -- which would be code injection into the thing that decides a lock
+# screen opens.
 
-set -u
-unset IFS BASH_ENV ENV CDPATH
-PATH=/usr/local/bin:/usr/bin
-umask 077
+import re
+import socket
+import sys
 
-exit 1
+SOCKET = "/run/omarchy-face/verify.sock"
+
+# The same 20 s as omarchy-face-identity, and for the same reason: the daemon is
+# allowed to take up to about fifteen seconds in the worst case (identifying the
+# camera, waiting for it, the engine, the `-k 2` kill), and a client that gave
+# up earlier would turn a slow success into a no. Nothing waits this long in
+# practice -- the wrapper's own safety timer is 30 s and howdy's scan ends at 5.
+TIMEOUT = 20.0
+
+MATCHED, NOT_MATCHED = 0, 1
+
+# What the daemon may answer with. A name is printed only when it is one, so the
+# journal line the wrapper writes cannot be made to carry anything else by a
+# daemon answering oddly.
+NAME_RULE = re.compile(r"^[a-z][a-z0-9-]{0,23}$")
+
+
+def ask():
+    """One request, one answer line. Returns the line, or "" when it could not ask."""
+    try:
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    except OSError:
+        return ""
+    try:
+        connection.settimeout(TIMEOUT)
+        connection.connect(SOCKET)
+        connection.sendall(b"VERIFY-LOCK\n")
+        blob = b""
+        while b"\n" not in blob and len(blob) < 256:
+            piece = connection.recv(256 - len(blob))
+            if not piece:
+                break
+            blob += piece
+    except (OSError, UnicodeError):
+        # No socket, nobody listening, or the daemon went away mid-check. All of
+        # them leave the lock screen exactly as it was.
+        return ""
+    finally:
+        try:
+            connection.close()
+        except OSError:
+            pass
+    return blob.split(b"\n", 1)[0].decode("utf-8", "replace").strip()
+
+
+def main():
+    line = ask()
+    if not line:
+        return NOT_MATCHED
+    words = line.split()
+    if not words or words[0] != "OK":
+        return NOT_MATCHED
+    # A match is a match; attribution is a record (§4.3 step 5). The daemon can
+    # answer `OK` with no name when howdy matched but reported no label, and
+    # that still opens the lock -- the journal line just says "unattributed".
+    if len(words) > 1 and NAME_RULE.match(words[1]):
+        print(words[1])
+    return MATCHED
+
+
+# Every path ends in an explicit exit, including the one where something above
+# raised (plan-engine.md §4.2). An unhandled exception here would exit 1, which
+# is the safe answer, but saying so explicitly is what keeps it true.
+try:
+    sys.exit(main())
+except Exception:  # noqa: BLE001 - a lock screen never opens on a traceback
+    sys.exit(NOT_MATCHED)

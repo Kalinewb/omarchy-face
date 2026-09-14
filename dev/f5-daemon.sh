@@ -139,6 +139,7 @@ echo "${DIM}sandbox: uid $(id -u), /etc /run /var/lib /usr/lib/security /usr/loc
 # The shipped helpers, installed the way the installer installs them.
 install -o root -g root -m 0755 "$REPO/system/omarchy-faced" /usr/local/bin/
 install -o root -g root -m 0755 "$REPO/system/omarchy-face-identity" /usr/local/bin/
+install -o root -g root -m 0755 "$REPO/system/omarchy-face-lock-verify" /usr/local/bin/
 
 # The config. `account=root` looks odd and is deliberate: inside this namespace
 # the process running the tests IS uid 0, and the daemon's rule is "the caller's
@@ -528,6 +529,27 @@ check "…said at notice level, so it is in the journal by default" \
   grep -q '<5>lock verify matched' "$ACTIVATOR_LOG"
 reset_rate
 same "VERIFY-LOCK takes no arguments" "NO error" "$(say 'VERIFY-LOCK anna')"
+
+# The client the lock wrapper actually runs (§6.3, F6). Two exit codes and
+# nothing else: every reason for a no is the same no, because a lock screen is
+# the one place where telling them apart is telling whoever is standing there.
+lock_verify() { /usr/local/bin/omarchy-face-lock-verify >"$LAB/lock-out" 2>"$LAB/lock-err"; echo $?; }
+
+reset_rate
+same "omarchy-face-lock-verify exits 0 on a match" "0" "$(lock_verify)"
+same "…and prints the name, for the wrapper's journal line" "anna" "$(cat "$LAB/lock-out")"
+same "…and says nothing on stderr" "" "$(cat "$LAB/lock-err")"
+reset_rate; stub no_match
+same "a face that does not match is exit 1" "1" "$(lock_verify)"
+same "…with no name to attribute anything to" "" "$(cat "$LAB/lock-out")"
+reset_rate; stub ok
+write_config root false
+same "the feature being off is the same no (the daemon answers disabled)" "1" "$(lock_verify)"
+write_config root true
+reset_rate
+same "and so is a rate limit — nothing on the lock screen tells them apart" "0" "$(lock_verify)"
+same "…the second inside two seconds is refused, silently" "1" "$(lock_verify)"
+
 rm -f "$MODELS/omarchy-face.lock.root.dat"
 write_config root false
 
