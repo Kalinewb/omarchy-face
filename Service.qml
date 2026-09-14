@@ -17,9 +17,10 @@ import "common"
 //     30 s wrapper health check, and the single notification per new reason
 //     (G6, plan-merged.md §1 row 13 and §3)
 //
-// Phase 4 builds the recording card. The rest still do nothing: in particular
-// this does NOT run `sync` yet -- that call stages the wrapper into the plugins
-// folder, and staging before the wrapper exists would be a reload for nothing.
+// Phase 4 builds the recording card and phase 5 the indicator. The lock duties
+// still do nothing: in particular this does NOT run `sync` yet -- that call
+// stages the wrapper into the plugins folder, and staging before the wrapper
+// exists would be a reload for nothing.
 Item {
   id: root
 
@@ -180,7 +181,18 @@ Item {
       return JSON.stringify({
         loaded: true,
         omarchyPath: root.omarchyPath,
-        duties: root.card ? ["record"] : [],
+        duties: (root.card ? ["record"] : []).concat(indicator.visibleNow ? ["indicator"] : []),
+        // What the indicator is saying, which is how a test asks a card that has
+        // no window it could be questioned about any other way. It is also the
+        // phase-5 gate's only handle on "the card names the program".
+        indicator: {
+          showing: indicator.visibleNow,
+          state: indicator.authState,
+          service: indicator.service,
+          person: indicator.person,
+          headline: indicator.headline,
+          detail: indicator.detail
+        },
         card: root.card ? {
           name: root.cardName,
           phase: root.session ? String(root.session.phase) : "",
@@ -192,6 +204,15 @@ Item {
         } : null
       })
     }
+  }
+
+  // The indicator (G5). It draws only while an authentication is actually in
+  // flight, and it stands down while the recording card is up: the two would
+  // otherwise be two cards in the same place on the same screen, and the card
+  // is the one saying more (plan-gui.md §6.2).
+  Indicator {
+    id: indicator
+    suppressed: root.card !== null
   }
 
   Component { id: sessionComponent; RecordSession {} }

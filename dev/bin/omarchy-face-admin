@@ -36,6 +36,14 @@ start_standin() {
 verb=${1:-}
 shift || true
 
+# Every verb, as it was called, in the order it was called. A view that says it
+# turned sudo on has to be shown to have asked for `sudo-on` and not for
+# something adjacent, and a test cannot see the argv of a process the GUI
+# started any other way.
+if [[ -n ${OMARCHY_FACE_DEV_STATE:-} && -d ${OMARCHY_FACE_DEV_STATE:-} ]]; then
+  printf '%s %s\n' "$verb" "$*" >>"$OMARCHY_FACE_DEV_STATE/verbs.log"
+fi
+
 case "$verb" in
   set-label | set-permission | remove-appearance | remove-person | \
   sudo-on | sudo-off | lock-on | lock-off | regenerate | purge-legacy)
@@ -43,6 +51,13 @@ case "$verb" in
     # GUI that writes to a helper which never reads gets EPIPE instead of a
     # result.
     cat >/dev/null
+    # One error on demand, in the contract's shape (§2 rule 3): the error copy
+    # in a view is as much a part of it as the happy path, and `no_sudo_faces`
+    # is the one the sudo switch is most likely to meet.
+    if [[ -n ${OMARCHY_FACE_DEV_VERB_ERROR:-} ]]; then
+      printf '{"error":"%s"}\n' "$OMARCHY_FACE_DEV_VERB_ERROR"
+      exit 1
+    fi
     printf '{"ok":true,"verb":"%s","dev":true}\n' "$verb"
     exit 0
     ;;

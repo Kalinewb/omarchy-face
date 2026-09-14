@@ -129,9 +129,13 @@ step "no terminal anywhere in the GUI (plan-merged.md §4 phase 2)"
 # The gate says the whole flow runs through the popup. The GUI has exactly one
 # way to run anything -- common/Ask.qml's bash -c 'exec "$@"' -- so the check is
 # that no view reaches for a terminal emulator or one of Omarchy's launchers.
+# Comment lines are stripped first. The indicator's second line is "sudo ·
+# pacman, from foot" (plan-gui.md §6.2), so the plan's own example copy names a
+# terminal in a comment -- and a word in a comment is not a launch. Anything on
+# a line of code, including a trailing comment on one, still counts.
 check "no terminal launcher in any .qml" \
-  bash -c "! grep -rnE '\\b(foot|alacritty|kitty|ghostty|wezterm|xterm)\\b|launch-floating-terminal|launch-editor|x-terminal-emulator' \
-           '$REPO'/*.qml '$REPO'/common/*.qml"
+  bash -c "! sed 's#^[[:space:]]*//.*##' '$REPO'/*.qml '$REPO'/common/*.qml |
+           grep -nE '\\b(foot|alacritty|kitty|ghostty|wezterm|xterm)\\b|launch-floating-terminal|launch-editor|x-terminal-emulator'"
 check "the first install is the pkexec /bin/bash form, not a terminal" \
   bash -c "grep -q 'firstInstallArgv' '$REPO/common/Ask.qml'"
 

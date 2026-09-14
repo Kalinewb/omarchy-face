@@ -28,9 +28,13 @@ With `OMARCHY_FACE_DEV_BIN` set, the GUI takes every helper from that directory
 and drops `pkexec` (`plan-gui.md §2.1`). It grants nothing: a stub running as
 the user cannot write root-owned state.
 
-`OMARCHY_FACE_DEV_STATE` does the same for the two files the panel watches
-directly (`people.json`, `install.json`), which on a real machine live under
-root-owned paths a stub cannot write. Point it at a fixture directory.
+`OMARCHY_FACE_DEV_STATE` does the same for the files the GUI watches directly
+(`people.json`, `install.json`, and from phase 5 `state.json`), which on a real
+machine live under root-owned paths a stub cannot write. Point it at a fixture
+directory. The admin stub also appends every verb it was called with to
+`verbs.log` in there — a view that says it turned sudo on has to be shown to have
+asked for `sudo-on` — and `OMARCHY_FACE_DEV_VERB_ERROR=<code>` makes the next
+write verb answer with that error, so the error copy in a view is testable too.
 
 The shell is spawned by Hyprland and inherits *its* environment, not a
 terminal's, so exporting the variables in a shell does nothing. `./install.sh
@@ -72,7 +76,8 @@ unprivileged helpers that ship with the plugin (`plan-engine.md §8.1`):
 | `system/install.sh` | the first install. The GUI reads it and passes its **text** to `pkexec /bin/bash -c`, so what polkit authorised is what runs. It installs `omarchy-face-admin` from a root-owned snapshot and hands over. |
 | `system/omarchy-face-admin` | every privileged verb, behind `no.graveklar.face.owner`. Phase 2 implements `install-system`, `purge` and `purge-legacy`; the rest answer `not_implemented`. |
 | `system/omarchy-face-camera` | which V4L2 node is the infrared one. Runs as anybody, and the status script runs the plugin's own copy before anything is installed. |
-| `system/omarchy-face-{gate,verify,lock-verify}`, `system/omarchy-faced` | phases 5 to 7. They ship in their safe state — skip, never authenticate, answer nothing — because the `system` row installs and compares all seven helpers as a set. |
+| `system/omarchy-face-{gate,verify}` | phase 5: the two lines `sudo-on` puts in `/etc/pam.d/sudo`. The gate decides whether asking the camera is worth it (exit 0 = skip); the verifier is the only file in this project whose exit 0 authenticates somebody. |
+| `system/omarchy-face-lock-verify`, `system/omarchy-faced` | phases 6 and 7. They ship in their safe state — answer nothing — because the `system` row installs and compares all seven helpers as a set. |
 | `bin/omarchy-face-status` | the whole read half of the contract. |
 
 Every installed file carries two headers, `omarchy-face v2` and
@@ -268,6 +273,73 @@ a pipe nothing will ever close.
 The recording card itself (`RecordCard.qml`) is a layer-shell window and is not
 covered offscreen: what it draws is checked by opening it. Everything it decides
 is in `RecordSession.qml`, which is.
+
+## F4 — sudo's PAM stack
+
+```sh
+./dev/f4-sudo-pam.sh
+```
+
+**There is no `--here`, and there will not be.** The file under test is
+`/etc/pam.d/sudo`, and a bug in it is a machine nobody can become root on. The
+whole run happens in the same private namespace the other suites use, where
+`/etc/pam.d` is a **copy** — the real one is not reachable from inside at all,
+by construction rather than by care.
+
+It proves clauses 2 and 3 of the phase-5 gate five times over: the machine's own
+`sudo` stack, stock Arch with `pam_systemd.so class=none`, a stack whose `auth`
+lines are in the middle of the file, one with no trailing newline, and one
+carrying somebody else's `pam_exec` line. Each is round-tripped, and each time
+the assertions are the same two: with the block in, `grep -v omarchy-face` is the
+file we started from, byte for byte; with it out, `sha256sum` is.
+
+Then the gate's nine skip reasons, the verifier's fail-closed paths, and the two
+things this phase is really for:
+
+- **one authentication attempt per sudo call.** The gate, the verifier and the
+  gate again are run from **one** process wearing sudo's argv, which is what a
+  password retry is: same pid, same start time, same attempt key. The second
+  gate must skip, and the engine must have been asked exactly once.
+- **attribution.** The verifier's parent is a process whose
+  `/proc/<pid>/cmdline` really is `sudo -s -u root pacman` (`os.execv` can set a
+  whole argv), and *its* parent is `timeout`, standing in for the terminal. So
+  `requester.command` is parsed from the same shape of data as on a live
+  machine, and the ancestor walk really has a shell to skip. The parser is also
+  driven directly over eleven argv shapes, including the two a "last letter
+  decides" rule gets wrong (`-Hu root` and `-uroot`).
+
+`logger` is stood in for in `/usr/local/bin` — first in the helpers' pinned
+`PATH` — because the attribution line in the journal is one of the things this
+phase is for, and a namespace has no journal to read it back from.
+
+**What it cannot prove, and what needs a person:** that `sudo` itself runs these
+lines, that `pam_exec … seteuid` hands them root, and that the card appears while
+the password prompt is up. Those need a live `sudo` and a face.
+
+## G5 — the indicator and the sudo switch
+
+```sh
+./dev/g5-indicator-offscreen.sh
+```
+
+The real `Indicator.qml` and `SettingsView.qml` in a QML runtime, fed state
+documents in exactly the shape `omarchy-face-verify` writes (`plan-merged.md
+§2.6`). It reads the card's text off its properties rather than off a screen: the
+gate's GUI half is "the card names the requesting program", which is a question
+about a string, and a test that opened an overlay on somebody's display to answer
+it would be a worse test.
+
+Covered: the requester line in all three of its shapes (`sudo · pacman, from
+foot`, `sudo` alone for `sudo -v`, and `sudo · from foot`), `Approved · Anna`
+against `people.json`'s label, the 10 s stale filter, the 12 s safety timer,
+`skipped` and `lock` drawing nothing, standing down while the recording card is
+up, and the Settings switch calling exactly `sudo-on`/`sudo-off` with the pending
+value snapping back when the verb answers.
+
+Three things in it are asserted as *text* rather than exercised, because an
+offscreen runtime has no compositor to ask: the built-in screen filter
+(`/^(eDP|LVDS|DSI)/`), `WlrKeyboardFocus.None` and the empty input region. The
+card on a real screen is checked by looking at it.
 
 ## F0
 

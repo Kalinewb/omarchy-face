@@ -71,6 +71,10 @@ Column {
       // user is about to do, not the one they did before it failed.
       return view.buildState === "failed" ? "Try again" : "Build the face engine"
     }
+    // The sudo row's own switch lives in Settings; here it is a repair, and the
+    // words say which way it goes rather than "Fix" (plan-gui.md §4 row 6).
+    if (row.fix === "sudo-on") return "Turn on Face for sudo"
+    if (row.fix === "sudo-off") return "Turn off Face for sudo"
     return ""
   }
 
@@ -185,6 +189,13 @@ Column {
     if (code === "plugin_not_owned" || code === "plugin_missing" || code === "plugin_unsafe")
       return "Face could not read its own system files from the plugin folder."
     if (code === "install_running") return "The engine is already building."
+    // The sudo row's repair, in the words of plan-merged.md §2.3.
+    if (code === "no_sudo_faces") return "Give someone Sudo first."
+    if (code === "helper_unsafe")
+      return "Face's own helpers in /usr/local/bin are not owned by root, or can be written by " +
+             "somebody else — sudo will not be pointed at them."
+    if (code === "pam_edit_failed")
+      return "/etc/pam.d/sudo is not the shape Face wrote, so it was left exactly as it is."
     if (code === "start_failed")
       return "The engine build could not be started — systemd would not take the job."
     return "It did not work: " + code + "."
@@ -234,6 +245,8 @@ Column {
       argv = panel.ask.adminArgv(["install-system"])
     } else if (row.fix === "install-engine") {
       argv = panel.ask.adminArgv(["install-engine"])
+    } else if (row.fix === "sudo-on" || row.fix === "sudo-off") {
+      argv = panel.ask.adminArgv([String(row.fix)])
     } else if (row.fix === "install-first") {
       var script = String(installScript.text() || "")
       if (script.trim() === "") {
