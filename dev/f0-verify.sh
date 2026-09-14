@@ -45,6 +45,18 @@ no_helpers() {
   (( ${#left[@]} == 0 )) || { echo "left: ${left[*]}" >&2; return 1; }
 }
 
+no_packages() {
+  # One `pacman -Q` per package, not one call with three names: a single call
+  # exits non-zero as soon as ANY of them is missing, so `! pacman -Q a b c`
+  # passes while a is still installed. That is the same trap as the helper list
+  # above, and it would have hidden exactly the package this rewrite rebuilds.
+  local p left=()
+  for p in howdy python-dlib python-dlib-cuda; do
+    pacman -Q "$p" >/dev/null 2>&1 && left+=("$p")
+  done
+  (( ${#left[@]} == 0 )) || { echo "installed: ${left[*]}" >&2; return 1; }
+}
+
 no_glob() { ! compgen -G "$1" >/dev/null; }
 
 echo "F0 — old install verification (plan-engine.md §2)"
@@ -60,8 +72,7 @@ check "no face lines in any PAM stack" \
   bash -c '! grep -lE "omarchy-face-(gate|verify)" /etc/pam.d/* 2>/dev/null'
 check "no state, store or config directory" \
   bash -c '[[ ! -e /run/omarchy-face && ! -e /var/lib/omarchy-face && ! -e /etc/omarchy-face ]]'
-check "howdy and python-dlib are not installed" \
-  bash -c '! pacman -Q howdy python-dlib python-dlib-cuda 2>/dev/null'
+check "howdy and python-dlib are not installed" no_packages
 check "no howdy polkit drop-in, no /usr/lib/security/howdy" \
   bash -c '[[ ! -e /usr/lib/systemd/system/polkit-agent-helper@.service.d/10-howdy.conf && ! -d /usr/lib/security/howdy ]]'
 check "no build temp directory" no_glob '/tmp/omarchy-face-build.*'

@@ -62,8 +62,11 @@ Item {
     return ["bash", "-c", "exec \"$@\"", "--"].concat(argv)
   }
 
+  // Whether this argv draws polkit's owner dialog. It decides two things: what
+  // 126/127 mean (below), and whether the call can be cancelled with a signal
+  // at all (cancel(), §2 rule 7).
   function isPrompting(argv) {
-    return argv.length > 0 && String(argv[0]) === "pkexec"
+    return !!argv && argv.length > 0 && String(argv[0]) === "pkexec"
   }
 
   // What an exit code means (plan-merged.md §2 rule 3):
@@ -72,10 +75,19 @@ Item {
   //   1        error     {"error":code,…} on stdout
   //   3        busy      the store flock or the install job is held
   //   126/127  pkexec    the dialog was dismissed or nothing authorised it
-  //            otherwise the helper is not there at all -- "missing", so the
-  //            GUI can say "not installed" instead of "Checking…" forever
+  //            otherwise the helper cannot be run -- "missing", so the GUI can
+  //            say "not installed" instead of "Checking…" forever
   //            (plan-gui.md §2.3's gate). pkexec is the only caller for which
   //            §2 assigns these codes a meaning, so this split is by argv[0].
+  //
+  // Collapsing 126 (the file is there but not executable) and 127 (there is no
+  // such file) into one outcome is deliberate: every view renders both the same
+  // way, because in both cases the helper cannot run and the fix is to install
+  // the system half. The distinction is not lost -- the caller's warning logs
+  // the raw code, so the journal reads `missing 126` or `missing 127` -- and a
+  // 126 on an installed machine is the `system` row's business (a helper that
+  // is not root:root 0755 is `broken` there, plan-engine.md §10.1), not a
+  // second outcome string for every switch in the GUI to carry.
   function classify(argv, code) {
     if (code === 0) return "ok"
     if (code === 3) return "busy"
@@ -117,8 +129,17 @@ Item {
       try { parsed = JSON.parse(out) } catch (e) { parsed = null }
     }
     var outcome = root.classify(job ? job.argv : [], code)
-    if (outcome !== "ok" && (!parsed || typeof parsed !== "object" || parsed.error === undefined))
-      parsed = { error: outcome === "ok" ? "failed" : outcome, code: code }
+    // A failure always arrives with an `error` key, because that is what every
+    // caller switches on. But the helper may have printed a perfectly good
+    // document without one (§2.3's `{ok,incomplete:[]}` shapes, or an error
+    // document carrying context beside the code), so fill the gap rather than
+    // replacing the payload -- discarding it would throw away the only thing
+    // that says *what* was incomplete.
+    if (outcome !== "ok") {
+      if (!parsed || typeof parsed !== "object") parsed = {}
+      if (parsed.error === undefined) parsed.error = outcome
+      if (parsed.code === undefined) parsed.code = code
+    }
 
     // The slot is handed on before the callback runs: a callback that throws
     // must not strand whatever was queued behind it.
@@ -133,9 +154,9 @@ Item {
   // stream(argv, onEvent, onExit) -> the running process.
   //
   // stdin is left open: the caller writes command lines with send() and ends
-  // the session with closeStdin(). For a pkexec'd verb that is the ONLY cancel
-  // there is -- it runs as root and the user cannot signal it (§2 rule 7), so
-  // nothing here offers a kill for admin verbs.
+  // the session with closeStdin(). To stop one, call cancel(proc) rather than
+  // signalling it directly -- that is the function that knows a pkexec'd verb
+  // runs as root and can only be cancelled by closing its stdin (§2 rule 7).
   function stream(argv, onEvent, onExit) {
     var proc = streamComponent.createObject(root, {
       command: root.launchArgv(argv),
@@ -151,6 +172,29 @@ Item {
     root.live = root.live.concat([proc])
     proc.running = true
     return proc
+  }
+
+  // cancel(proc): stop a running stream, by the only means that works for it.
+  //
+  // plan-merged.md §2 rule 7 splits these two cases and the split is load
+  // bearing, not stylistic:
+  //
+  //   user-side helper (omarchy-face-identity, -lock, -status)
+  //       SIGTERM. `bash -c 'exec "$@"'` means the signal reaches the helper
+  //       itself rather than a wrapper, and a killed `verify` frees the camera
+  //       within 300 ms (§2.5) -- which is what Profiles' TERM-cancel test in
+  //       phase 6 exercises.
+  //
+  //   pkexec'd admin verb
+  //       NOT a signal. It runs as root; the user cannot signal it, and trying
+  //       is not a no-op but a silent failure that leaves the GUI believing it
+  //       cancelled something still running. Closing stdin is the only cancel,
+  //       and for enroll-session it is also the documented one: EOF before
+  //       `done` discards the session and writes nothing (§2.4).
+  function cancel(proc) {
+    if (!proc) return
+    if (root.isPrompting(proc.argvCopy)) proc.closeStdin()
+    else proc.signal(15)
   }
 
   // Live streams are held here as well as parented: a Process built at call

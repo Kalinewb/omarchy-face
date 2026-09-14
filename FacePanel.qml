@@ -35,10 +35,15 @@ Panel {
   // than assembled from $HOME: the shell strips __sourceDir from third-party
   // manifests, and a hardcoded path is wrong the moment the plugin is checked
   // out anywhere else.
+  // A URL is percent-encoded; a path is not. Without the decode, a checkout
+  // under "~/Work/omarchy face" or a directory containing "#" hands the helper
+  // argv a path with "%20" in it, which resolves to nothing at all -- and the
+  // failure reads as "helper missing", the one diagnosis that sends you looking
+  // in the wrong place.
   readonly property string pluginDir: {
     var url = String(Qt.resolvedUrl("."))
     if (url.indexOf("file://") === 0) url = url.substring(7)
-    return url.replace(/\/+$/, "")
+    return decodeURIComponent(url).replace(/\/+$/, "")
   }
 
   // --- state (plan-gui.md §2.3) -------------------------------------------
@@ -156,6 +161,16 @@ Panel {
   property var people: null
   property var install: null
 
+  // The raw text each parsed object came from. `reload()` re-emits `loaded`
+  // whether or not the bytes changed, so without this the once-a-second reload
+  // below hands every view a NEW object identity every second: a Repeater sees
+  // a different model each tick and destroys and recreates every delegate.
+  // Harmless for the Text rows here; once phase 4 puts a label field and an
+  // appearance picker in these lists, it would swallow focus and typed text
+  // once a second. So: keep the bytes, and only reassign when they differ.
+  property string peopleRaw: ""
+  property string installRaw: ""
+
   FileView {
     id: peopleFile
     path: root.peoplePath
@@ -166,12 +181,15 @@ Panel {
     printErrors: false
     onFileChanged: reload()
     onLoaded: {
-      try { root.people = JSON.parse(text()) } catch (e) {
+      var raw = String(text())
+      if (raw === root.peopleRaw) return
+      root.peopleRaw = raw
+      try { root.people = JSON.parse(raw) } catch (e) {
         console.warn("graveklar.face", "ignoring bad people.json", root.peoplePath, e)
       }
     }
     // Absent is the normal state before Setup has run; it is not a warning.
-    onLoadFailed: root.people = null
+    onLoadFailed: { root.peopleRaw = ""; root.people = null }
   }
 
   FileView {
@@ -181,11 +199,14 @@ Panel {
     printErrors: false
     onFileChanged: reload()
     onLoaded: {
-      try { root.install = JSON.parse(text()) } catch (e) {
+      var raw = String(text())
+      if (raw === root.installRaw) return
+      root.installRaw = raw
+      try { root.install = JSON.parse(raw) } catch (e) {
         console.warn("graveklar.face", "ignoring bad install.json", root.installPath, e)
       }
     }
-    onLoadFailed: root.install = null
+    onLoadFailed: { root.installRaw = ""; root.install = null }
   }
 
   Timer {
@@ -227,15 +248,24 @@ Panel {
     function toggle(): void { root.toggle() }
 
     // open(view, name): how the recording card comes back to the popup when a
-    // session commits (plan-gui.md §1). Both arguments are optional in effect
-    // -- empty strings just open the popup where it was -- because the same
-    // verb is what a keybind or a menu entry calls.
+    // session commits (plan-gui.md §1).
+    //
+    // BOTH arguments must be passed. Quickshell enforces arity strictly, so
+    // `omarchy-shell graveklar.face open people` is an error, not a call with a
+    // defaulted second argument; the form is `open people ""`. Empty strings are
+    // accepted *values* -- an empty view means "just open, wherever you were" --
+    // which is what a keybind or a menu entry sends.
     function open(view: string, name: string): string {
       var v = String(view || "")
+      var who = String(name || "")
       if (v !== "" && root.viewChrome[v] === undefined) return "unknown view: " + v
       if (v === "person") {
+        // A person view with no person is a page that can only say "No such
+        // person: ". Open the popup where it was and say why, rather than
+        // rendering that.
+        if (who === "") { root.open(); return "person needs a name" }
         root.resetView("setup")
-        root.openPerson(name)
+        root.openPerson(who)
       } else if (v !== "") {
         root.resetView(v)
       }

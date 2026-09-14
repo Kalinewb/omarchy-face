@@ -48,13 +48,19 @@ need them.
 ## Asking the popup what it is doing
 
 ```sh
-omarchy-shell graveklar.face state        # {"open":true,"view":"setup",…}
-omarchy-shell graveklar.face open people  # open on a view
-omarchy-shell graveklar.face.card state   # the keepLoaded service
+omarchy-shell graveklar.face state             # {"open":true,"view":"setup",…}
+omarchy-shell graveklar.face open people ""    # open on a view
+omarchy-shell graveklar.face open person anna  # open on one person
+omarchy-shell graveklar.face.card state        # the keepLoaded service
 ```
 
+**Both arguments of `open` are required.** Quickshell checks arity, so
+`… open people` fails with "Too few arguments provided"; the empty string is how
+you say "no name".
+
 `state` is how the plugins-folder proof is observed: a destroyed popup cannot be
-asked, and a reload takes the popup with it.
+asked, and a reload takes the popup with it. `dev/g1-plugins-folder-proof.sh`
+runs that proof end to end.
 
 ## F0
 

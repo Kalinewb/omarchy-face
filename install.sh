@@ -27,19 +27,36 @@ SRC="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 MODE=${1:-}
 
-mkdir -p "$DEST"
+# Validate a staging copy BEFORE anything lands in the watched folder. Validating
+# $DEST afterwards is validating the damage: by then the broken plugin is
+# installed and the reload has already run, and the exit code only tells you so.
+# The staging directory is a dot name, which the plugin watcher ignores
+# (PluginRegistry.qml:735), so building it costs no reload either.
+STAGE=$(mktemp -d "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/.graveklar.face.stage.XXXXXX")
+trap 'rm -rf "$STAGE"' EXIT
 
 # dev/ stays out of the installed copy: the stubs are run from the repo through
 # $OMARCHY_FACE_DEV_BIN, and a plugin folder should not ship a second set of
-# helpers that answer differently from the real ones.
-rsync -a --delete \
-  --exclude '.git' --exclude 'install.sh' --exclude 'dev' \
-  --exclude '*.bak' --exclude '*.bak.*' \
-  "$SRC/" "$DEST/"
+# helpers that answer differently from the real ones. The excludes are
+# --exclude with --delete-excluded, not bare --exclude: bare excludes also
+# protect a file of that name AT THE DESTINATION from --delete, so a dev/ left
+# by an older revision would sit in the installed plugin for ever, unreachable
+# by any later install.
+RSYNC_EXCLUDES=(--exclude '.git' --exclude 'install.sh' --exclude 'dev'
+                --exclude '*.bak' --exclude '*.bak.*')
+
+rsync -a "${RSYNC_EXCLUDES[@]}" "$SRC/" "$STAGE/"
 
 if command -v omarchy >/dev/null; then
-  omarchy plugin validate "$DEST" || { echo "install.sh: plugin failed validation" >&2; exit 1; }
+  omarchy plugin validate "$STAGE" || { echo "install.sh: plugin failed validation" >&2; exit 1; }
 fi
+
+mkdir -p "$DEST"
+# One rsync from the validated staging copy, --delete-excluded so a stale dev/
+# or install.sh at the destination goes too.
+rsync -a --delete --delete-excluded "${RSYNC_EXCLUDES[@]}" "$STAGE/" "$DEST/"
+rm -rf "$STAGE"
+trap - EXIT
 echo "installed $ID -> $DEST"
 
 if [[ $MODE == --no-restart ]]; then
@@ -55,16 +72,47 @@ if [[ $MODE == --dev ]]; then
   # variable for one session, kill it the way the restart script does and ask
   # Hyprland to exec the launcher with the variable in front of it.
   FIXTURE=${OMARCHY_FACE_DEV_FIXTURE:-fresh}
-  SHELL_PATH=${OMARCHY_PATH:-$(systemctl --user show-environment 2>/dev/null | sed -n 's/^OMARCHY_PATH=//p' | tail -n 1)}
+
+  # The session's value first, this process's OMARCHY_PATH only as a fallback --
+  # upstream's precedence (omarchy-restart-shell:8-9). A terminal opened after a
+  # dev link/unlink disagrees with the desktop that is actually running, and
+  # killing "the shell at $OMARCHY_PATH" then kills nothing while the launcher
+  # starts a second one.
+  SHELL_PATH=$(systemctl --user show-environment 2>/dev/null | sed -n 's/^OMARCHY_PATH=//p' | tail -n 1)
+  : "${SHELL_PATH:=${OMARCHY_PATH:-}}"
+  [[ -f $SHELL_PATH/shell/shell.qml ]] || {
+    echo "install.sh: Omarchy shell config not found: ${SHELL_PATH:-<unset>}/shell" >&2
+    exit 1
+  }
+
+  # Never restart a shell that is holding a lock screen: killing a live locker
+  # strands the session behind Hyprland's failsafe, which outlives its client.
+  # `omarchy restart shell` refuses for this reason (omarchy-restart-shell:28-37)
+  # and a development convenience has no business being the one path that does
+  # not. The compositor flag alone is enough here: unlike the recovery in
+  # plan-engine.md §9.3a, this is not trying to rescue a stranded lock -- it is
+  # declining to make one.
+  if command -v omarchy-hyprland-session-locked >/dev/null && omarchy-hyprland-session-locked; then
+    echo "install.sh: refusing while the session is locked" >&2
+    exit 1
+  fi
+
   echo "restarting the shell with OMARCHY_FACE_DEV_BIN=$SRC/dev/bin (fixture: $FIXTURE)"
   while timeout 5 quickshell kill -p "$SHELL_PATH/shell" --any-display >/dev/null 2>&1; do :; done
   hyprctl dispatch "hl.dsp.exec_cmd(\"env OMARCHY_FACE_DEV_BIN=$SRC/dev/bin OMARCHY_FACE_DEV_FIXTURE=$FIXTURE OMARCHY_FACE_DEV_STATE=$SRC/dev/fixtures/$FIXTURE omarchy-launch-shell\")" >/dev/null
+
+  # Only claim the restart worked when the new shell actually answers. Printing
+  # success unconditionally is worse than printing nothing: the one case that
+  # matters is the shell that never came back.
   for _ in $(seq 1 40); do
-    omarchy-shell shell ping >/dev/null 2>&1 && break
+    if omarchy-shell shell ping >/dev/null 2>&1; then
+      echo "shell restarted in development mode"
+      exit 0
+    fi
     sleep 0.25
   done
-  echo "shell restarted in development mode"
-  exit 0
+  echo "install.sh: the shell did not answer within 10 s of the restart" >&2
+  exit 1
 fi
 
 # A reload re-instantiates the entry point but does not recompile the other QML
