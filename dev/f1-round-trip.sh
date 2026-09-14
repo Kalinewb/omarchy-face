@@ -387,6 +387,10 @@ pid = os.fork()
 if pid == 0:
     os.dup2(server.fileno(), 3)
     os.set_inheritable(3, True)
+    # The daemon says what it refuses, at syslog priorities, because on a real
+    # machine that goes to the journal. Here it would go to this suite's output.
+    null = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(null, 2)
     os.environ["LISTEN_FDS"] = "1"
     os.environ["LISTEN_PID"] = str(os.getpid())
     os.execv(daemon, [daemon])

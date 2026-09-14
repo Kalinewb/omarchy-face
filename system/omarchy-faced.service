@@ -38,11 +38,27 @@ RestrictAddressFamilies=AF_UNIX
 RestrictNamespaces=yes
 LockPersonality=yes
 SystemCallArchitectures=native
+RestrictRealtime=yes
+ProtectClock=yes
+ProtectHostname=yes
+# Everything this process writes is root-only by construction; state.json is the
+# one exception and it is chmod'd 0644 explicitly, because the GUI that draws it
+# runs as the owner.
+UMask=0077
 
-# Phase 6, when the real daemon lands, adds: SystemCallFilter=@system-service,
-# RestrictRealtime=yes, ProtectClock=yes, ProtectHostname=yes, UMask=0077.
-# They are not here yet because a stub that answers one fixed line should not
-# carry a filter nobody has tested against the code that will actually run.
+# The filter the stub deliberately did not carry, now that there is code to test
+# it against. @system-service covers what the daemon actually does: accept on a
+# unix socket, flock, fork and exec `timeout python3 compare.py`, kill its
+# process group, rename a file. Anything outside that set is a daemon doing
+# something this file was not written to do.
+SystemCallFilter=@system-service
+# EPERM rather than the default SIGSYS kill, and that is a considered choice:
+# a killed daemon is an exit path that did not drain the socket, which is the
+# one failure this unit must never have -- systemd would re-activate it for the
+# connection still pending, hit the start-rate limit, and put the SOCKET into
+# `failed` (see omarchy-faced's header). An EPERM comes back as an OSError, the
+# request answers `NO error`, and the next one still works.
+SystemCallErrorNumber=EPERM
 
 # No [Install] section on purpose. This service exists to be started BY the
 # socket; `systemctl enable omarchy-faced.service` would make it a root process

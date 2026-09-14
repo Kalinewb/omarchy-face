@@ -5,45 +5,732 @@
 #
 # The verification daemon (plan-engine.md §6): socket-activated, root with only
 # CAP_DAC_READ_SEARCH, answering VERIFY-PERSON and VERIFY-LOCK for callers that
-# cannot hold privilege.
+# cannot hold privilege -- Profiles through omarchy-face-identity, and the lock
+# wrapper through omarchy-face-lock-verify.
 #
-# Phase 6 (F5) writes the real one. It ships now because the socket unit is
-# installed and enabled by the first install (§5.1) and the `system` row counts
-# seven helpers (§10.1).
+#   VERIFY-PERSON <name>\n   ->  OK <name>\n | NO <reason>\n
+#   VERIFY-LOCK\n            ->  OK [<name>]\n | NO <reason>\n
 #
-# **It drains the socket, and that is not a stub detail.** With `Accept=no`,
-# systemd hands this process the LISTENING socket and a client's connection sits
-# in the backlog until somebody accept()s it. A daemon that exits without
-# accepting leaves that connection pending, so systemd activates it again
-# immediately -- and again, until the start-rate limit trips and BOTH this
-# service and the socket unit go to `failed`, with the socket path unlinked.
-# Any local user could do that with one connection and a loop, and getting out
-# of it needs root. So every exit path here accepts what is waiting first, and
-# **every exit path of the real daemon must do the same** -- config missing, lid
-# closed, an import that fails, a person who does not exist. It is a hard
-# requirement on F5, not a property of this placeholder.
+# `sudo` never comes here. Its verifier runs inside the auth stack as root and
+# takes the camera itself (§4.3); this daemon exists for the two callers that
+# have no privilege of their own, and **nothing it answers authenticates
+# anybody**. `OK` means "the camera saw this person just now"; what a caller
+# does with that is the caller's decision, made in the caller's own security
+# domain. That is why a bug here costs a profile switch or a lock screen face
+# attempt, never a root shell.
 #
-# Until F5 the answer is `NO error`, which every client in this plan treats as
-# "unavailable": omarchy-face-identity answers exit 3 and the lock wrapper fails
-# its attempt quietly. Nothing here opens the camera or reads a model.
+# Three properties are load bearing, in this order:
 #
-# `-I` (isolated) for the same reason as the other Python helper: no PYTHONPATH,
-# no PYTHONSTARTUP, no module picked up from the script's own directory.
+# **1. Peer credentials before anything real.** The socket is mode 0666 -- any
+# local process can connect -- because "only this account" is not something a
+# mode bit can say: it is a question about the process on the other end, and
+# SO_PEERCRED is the kernel's answer. Every connection is checked against the
+# config's account uid before the request is even read. Phase 2's security
+# review made this a gate on this phase and it is the first thing handle() does.
+#
+# **2. Every exit path drains the socket.** With `Accept=no`, systemd hands this
+# process the LISTENING socket and a client's connection sits in the backlog
+# until somebody accept()s it. A daemon that exits without accepting leaves that
+# connection pending, so systemd activates it again immediately -- and again,
+# until the start-rate limit trips and BOTH this service and the socket unit go
+# to `failed`, with the socket path unlinked. Any local user could do that with
+# one connection and a loop, and getting out of it needs root. So serve() never
+# lets an error out of a single request, and main()'s `finally` accepts and
+# answers whatever is pending on the way out, including on SIGTERM.
+#
+# **3. A caller that goes away takes its camera with it.** The client is polled
+# every 100 ms while the engine runs; its EOF kills compare.py's whole process
+# group and releases the camera lock. That is what makes Profiles' TERM on a
+# cancelled `set` (plan-merged.md §2.5: "a killed verify frees the camera within
+# 300 ms") true rather than aspirational -- the client's death closes the socket,
+# and this loop is what notices.
+#
+# `-I` (isolated) for the same reason as the other Python helpers: no
+# PYTHONPATH, no PYTHONSTARTUP, no module picked up from the script's own
+# directory. This one runs as root.
 
+import errno
+import fcntl
 import os
+import pwd
+import re
+import select
+import signal
 import socket
+import stat
+import struct
+import subprocess
 import sys
+import time
+
+CONFIG_FILE = "/etc/omarchy-face/config"
+RUN_DIR = "/run/omarchy-face"
+STATE_FILE = RUN_DIR + "/state.json"
+CAMERA_LOCK = RUN_DIR + "/camera.lock"
+HOWDY_DIR = "/usr/lib/security/howdy"
+MODELS = HOWDY_DIR + "/models"
+CAMERA = "/usr/local/bin/omarchy-face-camera"
+LID_GLOB = "/proc/acpi/button/lid"
 
 # §6: socket-activated and idle-exiting, so this is not a root process sitting
 # around all day waiting to be interesting to somebody.
 IDLE_TIMEOUT = 120.0
-# One request per connection, and a request is one short line (§6.1). The cap is
-# what stops a client holding the daemon open by sending no newline for ever.
-READ_TIMEOUT = 5.0
+
+# One request per connection, and a request is one short line (§6.1). The cap
+# and the timeout together are what stop a client holding the daemon open by
+# sending no newline for ever: requests are served one at a time, so a client
+# that could block here could block everybody.
+READ_TIMEOUT = 2.0
 MAX_REQUEST = 256
 
-ANSWER = b"NO error\n"
+# howdy scans for its own `timeout` (5 s, set by configure) and this is the
+# backstop around it, the same shape the sudo verifier uses: `-k 2` because a
+# V4L ioctl stuck in the kernel ignores TERM (plan-merged.md §2 rule 9).
+COMPARE_SECONDS = 8
+# ...and the wall-clock stop for the whole thing, because `timeout` itself is a
+# process that can be stopped, and this daemon holding the camera lock for ever
+# would take sudo's face down with it.
+ENGINE_DEADLINE = COMPARE_SECONDS + 4
 
+# The plan says poll the client every 250 ms (§6.2). It is 100 ms here because
+# the budget the poll has to fit inside is 300 ms *including* the kill and the
+# reap (§6.4 test 3), and 250 + kill does not reliably fit in 300.
+POLL_SECONDS = 0.1
+KILL_GRACE = 0.15
+
+# One camera user (§6.2). The same lock the sudo verifier and the enrol session
+# take, so a face check never lands in the middle of an authentication.
+CAMERA_WAIT = 2.0
+
+# The rate limit (§6.2): at least 2 s between checks per caller uid, and at most
+# 20 in a rolling 10 minutes. The lock wrapper and Profiles share the budget.
+# It protects the IR emitter, and it bounds a hostile same-user process polling
+# "is Anna here?" -- which is a question this daemon answers and no other part of
+# Face does.
+MIN_INTERVAL = 2.0
+BUDGET = 20
+BUDGET_WINDOW = 600.0
+BUDGET_KEEP = BUDGET * 2
+
+# The reasons of §6.1, as constants because each one is a documented answer that
+# a client maps to an exit code.
+NOT_ALLOWED = "not_allowed"
+UNKNOWN_PERSON = "unknown_person"
+DISABLED = "disabled"
+LID_CLOSED = "lid_closed"
+NO_CAMERA = "no_camera"
+CAMERA_BUSY = "camera_busy"
+RATE_LIMITED = "rate_limited"
+TIMEOUT = "timeout"
+NO_MATCH = "no_match"
+TOO_DARK = "too_dark"
+ERROR = "error"
+
+NAME_RULE = re.compile(r"^[a-z][a-z0-9-]{0,23}$")
+ACCOUNT_RULE = re.compile(r"^[a-z_][a-z0-9_-]*$")
+# E8: `Winning model: <i> ("<name>/<appearance>")`, printed because configure
+# sets end_report, and correct as attribution only because each model in a
+# derived set holds exactly one encoding.
+WINNING = re.compile(r'^Winning model:\s*\d+\s*\("([a-z][a-z0-9-]{0,23})/(.*)"\)\s*$')
+
+# The engine is run through a environment built from nothing, for the reason the
+# sudo helpers give: nothing inherited steers a decision made as root. These are
+# the variables howdy's compare.py needs and no more.
+CLEAN_ENV = {
+    "PATH": "/usr/bin:/usr/local/bin",
+    "HOME": "/root",
+    "LC_ALL": "C",
+    "PYTHONDONTWRITEBYTECODE": "1",
+}
+
+
+# --- saying things -----------------------------------------------------------
+#
+# systemd reads the `<N>` prefix as a syslog priority, so the journal gets the
+# right level without this process linking anything. stderr, not stdout: stdout
+# is for nobody here.
+
+def log(priority, message):
+    try:
+        sys.stderr.write("<%d>%s\n" % (priority, message))
+        sys.stderr.flush()
+    except OSError:
+        pass
+
+
+def notice(message):
+    log(5, message)
+
+
+def debug(message):
+    log(7, message)
+
+
+def warn(message):
+    log(4, message)
+
+
+# --- the clock ---------------------------------------------------------------
+#
+# CLOCK_BOOTTIME, not the wall clock: the rate limit must not be widened by an
+# NTP step or by somebody setting the date, and it must not be *narrowed* into
+# uselessness by a suspend either -- BOOTTIME counts suspended time, MONOTONIC
+# does not. The attempt file lives in /run, which is empty at boot, so the two
+# always agree about what zero means.
+
+def now():
+    return time.clock_gettime(time.CLOCK_BOOTTIME)
+
+
+# --- config ------------------------------------------------------------------
+#
+# Parsed, never executed: the file is root-owned, but treating a key=value file
+# as a program is a habit that stops being safe the moment somebody adds a path
+# to it (the same rule the PAM helpers state).
+
+def config():
+    values = {}
+    try:
+        with open(CONFIG_FILE, "r") as handle:
+            for line in handle:
+                line = line.split("#", 1)[0].strip()
+                if "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip()
+    except (OSError, ValueError):
+        return {}
+    return values
+
+
+def account_uid(account):
+    """The uid the config's account has now, or None."""
+    if not account or not ACCOUNT_RULE.match(account):
+        return None
+    try:
+        return pwd.getpwnam(account).pw_uid
+    except KeyError:
+        return None
+
+
+# --- the state document (plan-merged.md §2.6) --------------------------------
+#
+# What the indicator draws. It never influences an answer -- every failure in
+# here is swallowed -- and it is written by same-directory temp + rename at 0644,
+# because the GUI that reads it runs as the owner and the daemon runs as root.
+
+def json_safe(text, width=64):
+    out = []
+    for char in str(text):
+        if char in '"\\':
+            continue
+        if " " <= char <= "~":
+            out.append(char)
+    return "".join(out)[:width]
+
+
+def state_write(state, service, person="", detail=""):
+    try:
+        if not os.path.isdir(RUN_DIR):
+            os.makedirs(RUN_DIR, 0o755)
+        temp = RUN_DIR + "/.state.faced.%d" % os.getpid()
+        document = ('{"state":"%s","service":"%s","requester":{},"person":"%s",'
+                    '"detail":"%s","at":%d}\n'
+                    % (json_safe(state, 16), json_safe(service, 16),
+                       json_safe(person, 24), json_safe(detail),
+                       int(time.time() * 1000)))
+        handle = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        try:
+            os.write(handle, document.encode("ascii", "replace"))
+        finally:
+            os.close(handle)
+        os.chmod(temp, 0o644)
+        os.rename(temp, STATE_FILE)
+    except OSError:
+        try:
+            os.unlink(temp)
+        except (OSError, NameError):
+            pass
+
+
+# --- the rate limit ----------------------------------------------------------
+#
+# One file per caller uid, root-only, in /run so it is gone at boot. Each line
+# is one check: the time it started and the time it finished. Both matter --
+# the 2 s minimum is measured from the end of the last check, because requests
+# are served one at a time and two callers racing would otherwise both be "2 s
+# since the last start" the moment the first one's eight seconds were up.
+#
+# A slot is spent when a check is STARTED, never when it ends, so a caller that
+# kills its own client mid-check cannot run the emitter for free.
+
+def attempts_path(uid):
+    return RUN_DIR + "/identity-attempts.%d" % int(uid)
+
+
+def attempts_read(uid):
+    records = []
+    try:
+        with open(attempts_path(uid), "r") as handle:
+            for line in handle:
+                parts = line.split()
+                if len(parts) != 2:
+                    continue
+                try:
+                    records.append((float(parts[0]), float(parts[1])))
+                except ValueError:
+                    continue
+    except OSError:
+        return []
+    return records
+
+
+def attempts_write(uid, records):
+    records = records[-BUDGET_KEEP:]
+    path = attempts_path(uid)
+    temp = path + ".new"
+    try:
+        if not os.path.isdir(RUN_DIR):
+            os.makedirs(RUN_DIR, 0o755)
+        handle = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(handle, "".join("%.3f %.3f\n" % record for record in records).encode("ascii"))
+        finally:
+            os.close(handle)
+        os.rename(temp, path)
+    except OSError:
+        try:
+            os.unlink(temp)
+        except OSError:
+            pass
+
+
+def rate_refused(uid):
+    """None when the caller may check now, the reason when it may not."""
+    moment = now()
+    records = [record for record in attempts_read(uid)
+               if record[0] <= moment and moment - record[0] <= BUDGET_WINDOW]
+    if records:
+        last = max(record[1] for record in records)
+        # A clock that went backwards (the file survived something odd) is not
+        # evidence of a recent check; it is evidence of a bad record.
+        if 0 <= moment - last < MIN_INTERVAL:
+            return RATE_LIMITED
+    if len(records) >= BUDGET:
+        return RATE_LIMITED
+    return None
+
+
+def rate_start(uid):
+    moment = now()
+    records = [record for record in attempts_read(uid)
+               if record[0] <= moment and moment - record[0] <= BUDGET_WINDOW]
+    records.append((moment, moment))
+    attempts_write(uid, records)
+
+
+def rate_finish(uid):
+    moment = now()
+    records = attempts_read(uid)
+    if not records:
+        return
+    records[-1] = (records[-1][0], moment)
+    attempts_write(uid, records)
+
+
+# --- the cheap refusals ------------------------------------------------------
+
+def lid_closed():
+    """The sudo gate's check 5, made here too (§6.2).
+
+    The IR camera is in the lid. A closed one -- clamshell mode on an external
+    monitor, or a suspend that did not resume the way the lock wrapper expects --
+    sees nothing, so without this both callers would burn a rate-budget slot and
+    five seconds of IR emitter for a guaranteed miss. Read here rather than
+    through an Omarchy script, for the reason the gate gives: those live outside
+    this file's idea of where its tools are.
+    """
+    try:
+        buttons = sorted(os.listdir(LID_GLOB))
+    except OSError:
+        # Not a laptop, or no ACPI lid button. Nothing to refuse.
+        return False
+    for button in buttons:
+        try:
+            with open(LID_GLOB + "/" + button + "/state", "r") as handle:
+                if "closed" in handle.read().lower():
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def camera_present():
+    """Whether there is an infrared node at all, bounded.
+
+    A wedged UVC device can make an ioctl take as long as it likes, so this is
+    the gate's shape: three seconds, and anything that is not a clean answer is
+    "no camera" rather than a wait.
+    """
+    try:
+        found = subprocess.run([CAMERA, "--ir-node"], timeout=3, env=CLEAN_ENV,
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if found.returncode != 0:
+        return False
+    node = found.stdout.decode("utf-8", "replace").strip()
+    if not node:
+        return False
+    try:
+        return stat.S_ISCHR(os.stat(node).st_mode)
+    except OSError:
+        return False
+
+
+# --- the camera lock ---------------------------------------------------------
+
+def camera_open():
+    """The lock file, created 0600 before anything opens it.
+
+    Creating it with `open(..., "a")` would create it at the umask and a chmod
+    afterwards leaves a window in which any local process can open it and hold
+    LOCK_EX for ever -- the same reasoning, and the same fix, as the verifier's.
+    """
+    if not os.path.isdir(RUN_DIR):
+        os.makedirs(RUN_DIR, 0o755)
+    return os.open(CAMERA_LOCK, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+
+
+def camera_take(handle, connection):
+    """flock -w 2, without stopping watching the client (§6.2)."""
+    deadline = now() + CAMERA_WAIT
+    while True:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError as problem:
+            if problem.errno not in (errno.EACCES, errno.EAGAIN):
+                return False
+        if client_gone(connection):
+            return False
+        if now() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+# --- the client on the other end ---------------------------------------------
+
+def client_gone(connection):
+    """True once the caller has closed its end (E11).
+
+    A peek, not a read: the protocol is one request per connection, so anything
+    still arriving is noise -- but noise has to be consumed, or select() reports
+    the socket readable for ever and this turns into a busy loop.
+    """
+    try:
+        ready, _, _ = select.select([connection], [], [], 0)
+    except (OSError, ValueError):
+        return True
+    if not ready:
+        return False
+    try:
+        blob = connection.recv(MAX_REQUEST, socket.MSG_DONTWAIT)
+    except BlockingIOError:
+        return False
+    except OSError:
+        return True
+    return blob == b""
+
+
+# --- the engine --------------------------------------------------------------
+
+def stop(child):
+    """Kill compare.py's whole process group, and be sure it is gone.
+
+    The group, because the child is `timeout`, and a SIGKILL to `timeout` alone
+    would leave compare.py holding the camera with nothing left to signal it.
+    `start_new_session` below is what makes the group ours to kill.
+    """
+    for number in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(child.pid, number)
+        except OSError:
+            pass
+        deadline = now() + KILL_GRACE
+        while child.poll() is None and now() < deadline:
+            time.sleep(0.01)
+        if child.poll() is not None:
+            break
+    try:
+        child.wait(timeout=1)
+    except subprocess.SubprocessError:
+        pass
+
+
+# The engine run that is in flight, if any, so SIGTERM can take it with it. A
+# daemon that exits while compare.py is still looking would leave the camera in
+# use with the lock already released -- the one arrangement that can make the
+# sudo verifier's `flock -n` say "free" about a busy sensor.
+RUNNING = None
+
+
+def compare(model, connection):
+    """Run one check. Returns (status, output, cancelled).
+
+    The camera lock fd is NOT inherited (close_fds, the default): this process
+    holds the lock for the whole call and releases it only once the child is
+    reaped, which is the same guarantee the sudo verifier gets by passing its fd
+    down, without a lock that can outlive the thing that took it.
+    """
+    global RUNNING
+    argv = ["/usr/bin/timeout", "-k", "2", str(COMPARE_SECONDS),
+            "/usr/bin/python3", HOWDY_DIR + "/compare.py", model]
+    try:
+        child = subprocess.Popen(argv, env=CLEAN_ENV, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
+    except OSError:
+        return (None, "", False)
+    RUNNING = child
+
+    cancelled = False
+    deadline = now() + ENGINE_DEADLINE
+    while child.poll() is None:
+        if client_gone(connection):
+            cancelled = True
+            stop(child)
+            break
+        if now() >= deadline:
+            stop(child)
+            break
+        time.sleep(POLL_SECONDS)
+
+    # Read what it printed, bounded. `child.stdout.read()` would block until
+    # every copy of the write end is closed, and a killed `timeout` can leave a
+    # grandchild holding one -- which would hang this daemon, holding the camera
+    # lock, with the caller waiting. compare.py prints two short lines.
+    blob = b""
+    deadline = now() + 1.0
+    try:
+        os.set_blocking(child.stdout.fileno(), False)
+        while len(blob) < 64 * 1024 and now() < deadline:
+            ready, _, _ = select.select([child.stdout], [], [], 0.05)
+            if not ready:
+                if child.poll() is not None:
+                    break
+                continue
+            piece = child.stdout.read(4096)
+            if piece is None:
+                # Non-blocking and nothing there after all; not EOF.
+                continue
+            if not piece:
+                break
+            blob += piece
+    except (OSError, ValueError):
+        pass
+    finally:
+        try:
+            child.stdout.close()
+        except OSError:
+            pass
+    try:
+        status = child.wait(timeout=1)
+    except subprocess.SubprocessError:
+        status = None
+    RUNNING = None
+    return (status, blob.decode("utf-8", "replace"), cancelled)
+
+
+def attribution(output):
+    """The winning model's person, or "" when howdy did not report one."""
+    for line in output.splitlines():
+        found = WINNING.match(line.strip())
+        if found:
+            return found.group(1)
+    return ""
+
+
+# --- one request -------------------------------------------------------------
+
+def check(verb, model, service, expected, uid, connection):
+    """The camera half, shared by both verbs. Returns an answer line."""
+    # The order is the plan's, and each step is cheaper than the one after it:
+    # a closed lid costs a file read, the rate limit costs a file read, the
+    # camera probe costs a fork, and only then does the emitter fire.
+    if lid_closed():
+        debug("%s refused: the lid is closed" % verb)
+        return "NO " + LID_CLOSED
+
+    refused = rate_refused(uid)
+    if refused:
+        debug("%s refused: %s" % (verb, refused))
+        return "NO " + refused
+
+    # The slot is spent here, before anything forks. A caller that can make this
+    # daemon start work can make it start work at some rate, and that rate is
+    # what the budget is; counting only the checks that reached the emitter
+    # would leave "ask for a check every millisecond and have it refused
+    # expensively" outside the ceiling.
+    rate_start(uid)
+
+    if not camera_present():
+        rate_finish(uid)
+        debug("%s refused: no infrared camera" % verb)
+        return "NO " + NO_CAMERA
+
+    try:
+        handle = camera_open()
+    except OSError:
+        rate_finish(uid)
+        warn("%s could not open the camera lock" % verb)
+        return "NO " + ERROR
+
+    try:
+        if not camera_take(handle, connection):
+            rate_finish(uid)
+            debug("%s refused: the camera is busy" % verb)
+            return "NO " + CAMERA_BUSY
+
+        state_write("start", service, expected, "looking")
+        status, output, cancelled = compare(model, connection)
+    finally:
+        os.close(handle)
+    rate_finish(uid)
+
+    if cancelled:
+        # The caller went away. Nothing happened as far as anybody watching is
+        # concerned, and `skipped` is the one state the indicator draws nothing
+        # for -- which is right: a cancelled profile switch must not leave "not
+        # recognised" on the screen.
+        state_write("skipped", service, "", "cancelled")
+        debug("%s cancelled by the caller" % verb)
+        # The client is gone; the answer goes nowhere, and saying so is for the
+        # journal rather than for it.
+        return "NO " + ERROR
+
+    if status == 0:
+        who = attribution(output)
+        state_write("matched", service, who or expected, "")
+        if service == "lock":
+            # The daemon cannot know whether a lock was opened; only that a face
+            # with Lock screen matched. The "unlocked" record is the wrapper's,
+            # and it is advisory (§6.2, risk 5).
+            notice("lock verify matched: %s" % (who or "unattributed"))
+        else:
+            debug("%s matched: %s" % (verb, who or "unattributed"))
+        # VERIFY-PERSON was asked about one name and answers with it.
+        # VERIFY-LOCK asked "is anyone with Lock screen here" and answers with
+        # whoever howdy reported -- or with no name at all, when a howdy that
+        # changed its report still matched. A match is a match; attribution is a
+        # record (§4.3 step 5, the same rule the sudo verifier follows).
+        named = expected or who
+        if named:
+            return "OK " + named
+        return "OK"
+
+    state_write("failed", service, "", "engine exit %s" % status)
+    if status == 11:
+        return "NO " + TIMEOUT
+    if status == 12:
+        return "NO " + TOO_DARK
+    if status is None:
+        return "NO " + ERROR
+    return "NO " + NO_MATCH
+
+
+# The last refusal said out loud, so a process connecting in a loop cannot
+# write the journal for us. Once a minute per uid is enough to notice a thing
+# that should never happen at all; more is somebody else deciding how much of
+# the disk Face uses.
+REFUSAL_SAID = {}
+REFUSAL_INTERVAL = 60.0
+
+
+def refusal_worth_saying(uid):
+    moment = now()
+    said = REFUSAL_SAID.get(uid)
+    if said is not None and 0 <= moment - said < REFUSAL_INTERVAL:
+        return False
+    REFUSAL_SAID[uid] = moment
+    return True
+
+
+def handle(connection):
+    """One connection, one request. Returns (answer line, whether it was ours).
+
+    The second half of that tuple is not about the answer: it is how serve()
+    tells a caller it may talk to from one it may not, so that a stranger
+    connecting in a loop cannot keep a root process resident by resetting the
+    idle timer (§6, "exits after 120 s idle").
+    """
+    # 1. Who is asking, before the request is even read (§6.2). The socket is
+    #    world-connectable on purpose; this is the access decision.
+    try:
+        blob = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
+                                     struct.calcsize("3i"))
+        peer_pid, peer_uid, _ = struct.unpack("3i", blob)
+    except OSError:
+        return ("NO " + NOT_ALLOWED, False)
+
+    settings = config()
+    account = settings.get("account", "")
+    uid = account_uid(account)
+    if uid is None:
+        # Face is not set up, or its config names an account this machine does
+        # not have. Nothing to check against, so nothing is answered.
+        warn("no usable account in %s" % CONFIG_FILE)
+        return ("NO " + ERROR, False)
+    if peer_uid != uid:
+        if refusal_worth_saying(peer_uid):
+            notice("refused a connection from uid %d (pid %d): Face answers %s only"
+                   % (peer_uid, peer_pid, account))
+        return ("NO " + NOT_ALLOWED, False)
+
+    # 2. The request. One short line, and a slow client cannot hold the daemon.
+    try:
+        connection.settimeout(READ_TIMEOUT)
+        request = b""
+        while b"\n" not in request and len(request) < MAX_REQUEST:
+            blob = connection.recv(MAX_REQUEST - len(request))
+            if not blob:
+                break
+            request += blob
+    except OSError:
+        return ("NO " + ERROR, True)
+
+    line = request.split(b"\n", 1)[0].decode("utf-8", "replace").strip()
+    words = line.split()
+    verb = words[0] if words else ""
+
+    if verb == "VERIFY-PERSON":
+        if len(words) != 2 or not NAME_RULE.match(words[1]):
+            return ("NO " + UNKNOWN_PERSON, True)
+        name = words[1]
+        model = "omarchy-face.person." + name
+        if not os.path.exists(MODELS + "/" + model + ".dat"):
+            # Nobody by that name has a face on this machine. Deliberately the
+            # same answer as a person with no appearances: both mean "there is
+            # nothing to compare against", and neither is "not that person".
+            return ("NO " + UNKNOWN_PERSON, True)
+        return (check(verb, model, "identity", name, uid, connection), True)
+
+    if verb == "VERIFY-LOCK":
+        if len(words) != 1:
+            return ("NO " + ERROR, True)
+        if settings.get("lock", "false") != "true":
+            return ("NO " + DISABLED, True)
+        model = "omarchy-face.lock." + account
+        if not os.path.exists(MODELS + "/" + model + ".dat"):
+            # Lock is on but nobody has the permission. Fail safe rather than
+            # ask the camera a question with no possible yes (§2.3 `lock-on`).
+            return ("NO " + DISABLED, True)
+        return (check(verb, model, "lock", "", uid, connection), True)
+
+    return ("NO " + ERROR, True)
+
+
+# --- the socket --------------------------------------------------------------
 
 def listener():
     """The socket systemd is holding, or None when started by hand."""
@@ -59,8 +746,23 @@ def listener():
     return socket.fromfd(3, socket.AF_UNIX, socket.SOCK_STREAM)
 
 
+def answer(connection, line):
+    try:
+        connection.settimeout(READ_TIMEOUT)
+        connection.sendall((line + "\n").encode("ascii", "replace"))
+    except OSError:
+        # The caller hung up. Expected on every cancelled check, and not worth
+        # a word in the journal.
+        pass
+
+
 def serve(server):
     server.settimeout(IDLE_TIMEOUT)
+    # When this daemon last did something for the account it exists for. A
+    # connection from anybody else does not count: without that, any local
+    # process could keep a root daemon resident for as long as it liked by
+    # connecting once a minute, which is precisely the shape §6 idles out of.
+    useful = now()
     while True:
         try:
             connection, _ = server.accept()
@@ -70,17 +772,60 @@ def serve(server):
             return 1
         with connection:
             try:
-                connection.settimeout(READ_TIMEOUT)
-                # Read and discard the request. Reading it matters even though
-                # the answer is fixed: a client that gets an answer before it
-                # has finished writing can see EPIPE instead of the answer.
-                connection.recv(MAX_REQUEST)
-                connection.sendall(ANSWER)
-            except OSError:
-                pass
+                line, served = handle(connection)
+                if served:
+                    useful = now()
+                answer(connection, line)
+            except Exception as problem:  # noqa: BLE001 -- see below
+                # Deliberately everything. A request that raises must cost that
+                # request and nothing else: an exception escaping here would
+                # leave the next client pending in the backlog and hand systemd
+                # the activation loop described at the top of this file.
+                warn("request failed: %r" % (problem,))
+                answer(connection, "NO " + ERROR)
+        if now() - useful >= IDLE_TIMEOUT:
+            return 0
+
+
+def drain(server):
+    """Answer whatever is already pending, on the way out.
+
+    Bounded twice over: a caller that reconnects as fast as this accepts must
+    not be able to keep the daemon alive here for ever, and the *pending*
+    connections are the only ones that matter -- anything arriving after this
+    starts a fresh activation, which is the normal path.
+    """
+    try:
+        server.setblocking(False)
+    except OSError:
+        return
+    deadline = now() + 2.0
+    drained = 0
+    while drained < 64 and now() < deadline:
+        try:
+            connection, _ = server.accept()
+        except (BlockingIOError, socket.timeout):
+            return
+        except OSError:
+            return
+        drained += 1
+        with connection:
+            answer(connection, "NO " + ERROR)
+
+
+def on_term(_number, _frame):
+    # The engine first: an exit that left compare.py looking would release the
+    # camera lock with the sensor still in use.
+    if RUNNING is not None and RUNNING.poll() is None:
+        stop(RUNNING)
+    # Then raise rather than exit: an exception unwinds through main()'s
+    # `finally`, which is where the drain is. A bare os._exit here would be
+    # exactly the undrained exit path the top of this file is about.
+    raise SystemExit(0)
 
 
 def main():
+    signal.signal(signal.SIGTERM, on_term)
     server = listener()
     if server is None:
         # Started by hand rather than by the socket unit. There is nothing to
@@ -89,7 +834,10 @@ def main():
               file=sys.stderr)
         return 0
     with server:
-        return serve(server)
+        try:
+            return serve(server)
+        finally:
+            drain(server)
 
 
 sys.exit(main())

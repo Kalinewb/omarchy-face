@@ -12,26 +12,70 @@
 #                                         | 4 rate limited or camera busy
 #
 # Both READMEs publish that table verbatim, so nothing else may ever be added
-# here: the whole surface of this file is the contract.
+# here: the whole surface of this file is the contract. Profiles treats any
+# non-zero as "not verified", so the four failure codes are a courtesy -- they
+# are what lets a caller say "try again in a moment" (4) rather than "that is
+# not you" (1), and getting one of them wrong is a message, never a decision.
+#
+# It runs as the user and holds no privilege. The check itself happens in
+# omarchy-faced, which is root, decides from SO_PEERCRED that this process
+# belongs to the account Face is set up for, and takes the camera. So this file
+# is a socket client with a lookup table, and that is all it should ever be.
+#
+# **A killed `verify` frees the camera within 300 ms** (§2.5). That is not code
+# here: the guarantee is that this process's death closes the socket, and the
+# daemon polls for exactly that while the engine runs. So there is deliberately
+# no SIGTERM handler -- the default action is what closes the fd fastest, and a
+# handler that tried to be tidy could only be slower. Profiles' `set` kills this
+# process when the user starts typing a password instead.
 #
 # `-I` (isolated: implies -E -s and drops the script's directory from sys.path)
 # matters because this runs as the user. Without it PYTHONPATH, PYTHONSTARTUP
 # and a socket.py dropped next to the script would all be honoured.
-#
-# Phase 6 (F5) adds the omarchy-faced socket client that `verify` needs. Until
-# then `list` is real -- people.json is the world-readable summary it reads
-# (§11.4) -- and `verify` answers 3, unavailable, for any name it recognises.
-# It never answers 0 before there is a daemon to ask.
 
 import json
 import re
+import socket
 import sys
 
 PEOPLE = "/var/lib/omarchy-face/people.json"
+SOCKET = "/run/omarchy-face/verify.sock"
 NAME_RULE = re.compile(r"^[a-z][a-z0-9-]{0,23}$")
+
+# The daemon may sit through howdy's whole scan plus its own backstop (§6.2:
+# `timeout -k 2 8`), so ten seconds is the receive timeout the plan gives and it
+# is comfortably more than the longest real answer.
+TIMEOUT = 10.0
 
 # The exit codes, named, because every one of them is a documented answer.
 PRESENT, ABSENT, BAD_NAME, UNAVAILABLE, TRY_AGAIN = 0, 1, 2, 3, 4
+
+# Every reason the daemon can give (§6.1), and what it means to a caller that
+# only wanted to know whether a named person is sitting there (§6.3):
+#
+#   nothing is wrong with the name or the person, the check simply cannot run
+#   now                                              -> 3, unavailable
+#   the check ran and the answer was no              -> 1
+#   there is no such face to compare against         -> 2
+#   the camera was not free, or too soon             -> 4
+#
+# `not_allowed` is 3 rather than 1: it means the daemon would not talk to this
+# process at all, which is a machine that cannot answer, not a person who is
+# absent. Reporting it as "not present" would be Face telling Profiles that
+# somebody is away when it never looked.
+REASONS = {
+    "no_match": ABSENT,
+    "timeout": ABSENT,
+    "too_dark": ABSENT,
+    "unknown_person": BAD_NAME,
+    "disabled": UNAVAILABLE,
+    "no_camera": UNAVAILABLE,
+    "lid_closed": UNAVAILABLE,
+    "not_allowed": UNAVAILABLE,
+    "error": UNAVAILABLE,
+    "rate_limited": TRY_AGAIN,
+    "camera_busy": TRY_AGAIN,
+}
 
 
 def people():
@@ -49,6 +93,66 @@ def people():
     return names
 
 
+def ask(request):
+    """One request, one answer line. Returns the line, or "" when it could not ask."""
+    try:
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    except OSError:
+        return ""
+    try:
+        connection.settimeout(TIMEOUT)
+        connection.connect(SOCKET)
+        connection.sendall(request.encode("ascii", "strict"))
+        blob = b""
+        while b"\n" not in blob and len(blob) < 256:
+            piece = connection.recv(256 - len(blob))
+            if not piece:
+                break
+            blob += piece
+    except (OSError, UnicodeError):
+        # No socket, nobody listening, or the daemon went away mid-check. All of
+        # them are "cannot check right now", and none of them is an answer about
+        # a person.
+        return ""
+    finally:
+        try:
+            connection.close()
+        except OSError:
+            pass
+    return blob.split(b"\n", 1)[0].decode("utf-8", "replace").strip()
+
+
+def verify(name):
+    if not NAME_RULE.match(name):
+        return BAD_NAME
+    names = people()
+    if names is None:
+        return UNAVAILABLE
+    if name not in names:
+        # Checked here as well as in the daemon, so a name that was never in the
+        # store costs no camera and no rate-limit slot. The daemon repeats it
+        # against the derived models, which are the authority.
+        return BAD_NAME
+
+    line = ask("VERIFY-PERSON %s\n" % name)
+    if not line:
+        # A missing daemon is "cannot check right now", never "not that person":
+        # the difference is what stops Profiles reporting a stranger when the
+        # socket is down.
+        return UNAVAILABLE
+    words = line.split()
+    if words and words[0] == "OK":
+        # The daemon was asked about one name and answers with it. A different
+        # name would be a daemon answering a question nobody asked, and is
+        # refused rather than reported as a match.
+        if len(words) > 1 and words[1] != name:
+            return UNAVAILABLE
+        return PRESENT
+    if len(words) == 2 and words[0] == "NO":
+        return REASONS.get(words[1], UNAVAILABLE)
+    return UNAVAILABLE
+
+
 def main(argv):
     if len(argv) == 1 and argv[0] == "list":
         names = people()
@@ -61,18 +165,7 @@ def main(argv):
         return PRESENT
 
     if len(argv) == 2 and argv[0] == "verify":
-        name = argv[1]
-        if not NAME_RULE.match(name):
-            return BAD_NAME
-        names = people()
-        if names is None:
-            return UNAVAILABLE
-        if name not in names:
-            return BAD_NAME
-        # F5 opens /run/omarchy-face/verify.sock here. A missing daemon is
-        # "cannot check right now", never "not that person": the difference is
-        # what stops Profiles reporting a stranger when the socket is down.
-        return UNAVAILABLE
+        return verify(argv[1])
 
     print("usage: omarchy-face-identity list | verify <name>", file=sys.stderr)
     return BAD_NAME
