@@ -89,6 +89,71 @@ Panel {
     })
   }
 
+  // --- the bar button's state (plan-gui.md §3) ----------------------------
+  //
+  // Five states, and only the last two are at full strength: the glyph is bright
+  // when a face could actually authenticate someone, or when something is
+  // broken. A button that looked "on" while nothing was set up would be the one
+  // lie on the surface that is always visible.
+
+  // The rows that mean "this machine is not set up yet" (plan-merged.md §1
+  // row 3). `sudo`, `polkit-1` and `lock` are deliberately not among them:
+  // they are settings and failures, not steps.
+  readonly property var setupRowIds: ["legacy", "camera", "system", "engine", "people"]
+
+  readonly property bool setupNeeded: {
+    for (var i = 0; i < setupRowIds.length; i++) {
+      var r = row(setupRowIds[i])
+      if (!r || String(r.state) !== "ok") return true
+    }
+    return false
+  }
+
+  readonly property var brokenRow: {
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i] && String(rows[i].state) === "broken") return rows[i]
+    }
+    return null
+  }
+
+  readonly property string lockCompat: lockState && lockState.compat ? String(lockState.compat) : ""
+  readonly property bool installFailed: status && status.install && String(status.install.state) === "failed"
+  readonly property bool lockAttention: lockCompat === "incompatible" || lockCompat === "failed"
+  readonly property bool attention: brokenRow !== null || lockAttention || installFailed
+
+  readonly property int sudoFaces: people && typeof people.sudo_faces === "number" ? people.sudo_faces : 0
+
+  readonly property string barState: {
+    if (status === null) return "unknown"
+    if (attention) return "attention"
+    if (setupNeeded) return "setup"
+    if (!config.sudo) return "off"
+    return sudoFaces > 0 ? "on" : "off"
+  }
+
+  // Where a click goes. Face's own failures open Setup; a lock screen that
+  // stopped working opens Settings, which is where its switch and its reason
+  // both live (plan-gui.md §3, §6.1).
+  readonly property string barTarget: {
+    if (barState === "attention") return brokenRow === null && lockAttention ? "settings" : "setup"
+    if (barState === "off" || barState === "on") return "people"
+    return "setup"
+  }
+
+  readonly property string barTooltip: {
+    if (barState === "unknown")
+      return statusOutcome === "missing" ? "Face Unlock — not installed" : "Face Unlock — checking"
+    if (barState === "attention") {
+      if (brokenRow) return "Face Unlock — " + String(brokenRow.detail || brokenRow.label || "something is wrong")
+      if (installFailed) return "Face Unlock — the engine build failed"
+      return "Face Unlock — face is off on the lock screen"
+    }
+    if (barState === "setup") return "Face Unlock — set up"
+    if (barState === "off") return "Face Unlock — off"
+    return "Face Unlock — sudo · " + sudoFaces + (sudoFaces === 1 ? " face" : " faces")
+           + (config.lock ? " · lock screen" : "")
+  }
+
   // --- view stack (plan-gui.md §2.2) --------------------------------------
 
   // Profiles' stack: every view is reached from somewhere, and "back" means the
@@ -283,6 +348,9 @@ Panel {
         stack: root.viewStack,
         statusOutcome: root.statusOutcome,
         rows: root.rows.length,
+        barState: root.barState,
+        barTarget: root.barTarget,
+        barTooltip: root.barTooltip,
         dev: engine.dev
       })
     }
@@ -295,15 +363,36 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    // nf-md-face (a front-facing face; nf-md-face_recognition renders as a card in the installed Nerd Font). The bar button carries no state yet: which of the
-    // five states of plan-gui.md §3 it is in needs the rows that phase 2 makes
-    // real, and a button that claimed "on" from stub data would be a lie on the
-    // one surface that is always visible.
+    // nf-md-face (a front-facing face; nf-md-face_recognition renders as a card
+    // in the installed Nerd Font).
     text: "\u{f0643}"
-    tooltipText: root.statusOutcome === "" ? "Face Unlock — checking"
-                 : root.statusOutcome === "missing" ? "Face Unlock — not installed"
-                 : "Face Unlock"
-    onPressed: function (buttonCode) { root.toggle() }
+    tooltipText: root.barTooltip
+    // Full strength only for `on` and `attention`; everything else is dimmed
+    // (plan-gui.md §3). `active` paints the glyph in the bar's urgent colour,
+    // which is the accent this kit has.
+    dimmed: root.barState !== "on" && root.barState !== "attention"
+    active: root.barState === "attention"
+    onPressed: function (buttonCode) {
+      // Opening from the bar starts where the button said it would. Closing
+      // leaves the stack alone, so reopening returns to the same place.
+      if (!root.opened && root.viewStack.length === 1 && root.view !== root.barTarget)
+        root.resetView(root.barTarget)
+      root.toggle()
+    }
+
+    // The accent dot of the `attention` state. A colour change alone is a
+    // theme's business; a dot is still there when the theme is monochrome.
+    Rectangle {
+      visible: root.barState === "attention"
+      width: Style.space(4)
+      height: width
+      radius: width / 2
+      color: root.accent
+      anchors.right: parent.right
+      anchors.top: parent.top
+      anchors.rightMargin: Style.space(3)
+      anchors.topMargin: Style.space(3)
+    }
   }
 
   KeyboardPanel {

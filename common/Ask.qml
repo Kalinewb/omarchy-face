@@ -52,6 +52,25 @@ Item {
     return (dev ? [helper] : ["pkexec", helper]).concat(args || [])
   }
 
+  // The first install, and the only call that does not go through our own
+  // polkit action -- the helper it would be annotated on does not exist yet
+  // (plan-engine.md §5.1).
+  //
+  // The script's TEXT is passed inline rather than its path, so what polkit
+  // authorised is exactly what runs: a `pkexec /bin/bash <path>` would have
+  // authorised a path whose contents can change between the dialog and the
+  // exec. The dialog says "run /bin/bash as the super user", with no message of
+  // Face's own; Setup warns about that wording before the click
+  // (plan-gui.md §4 row 3).
+  //
+  // In development there is nothing to install and nothing that may run as
+  // root, so this becomes the stub's install-system.
+  function firstInstallArgv(scriptText, targetDir, account) {
+    if (dev) return [devBin + "/omarchy-face-admin", "install-system"]
+    return ["pkexec", "/bin/bash", "-c", String(scriptText),
+            "omarchy-face-install", String(targetDir), String(account)]
+  }
+
   // --- launching ----------------------------------------------------------
 
   // `bash -c 'exec "$@"'` (Profiles' house form, plan-gui.md §0): argv stays an
