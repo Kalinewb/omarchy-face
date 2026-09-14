@@ -21,6 +21,17 @@ for the people you choose.
 > file is touched, and turning the switch off is what makes the check stop,
 > whether or not the lines can be removed. The lock screen is still untouched.
 >
+> **Other programs can now ask "who is at the camera?"** A root daemon answers
+> that question over a socket in `/run`, for callers that hold no privilege of
+> their own — the Profiles plugin, which can open a profile with a bound face
+> instead of its password, and the lock screen wrapper that arrives in the next
+> phase. The socket is reachable by every local process on purpose; the daemon
+> asks the kernel who is on the other end and answers **only** this account.
+> Nothing it says authenticates anybody: `sudo` never goes near it, and the worst
+> a wrong answer can cost is a profile that opens or a lock screen that does not.
+> Each person's page has a **Test** button that asks the same question and says
+> what came back; nothing is unlocked by it.
+>
 > **What the card on screen is, and is not.** When something asks for root, a card
 > appears under the camera saying a check is happening and naming what asked.
 > Treat it as *a check is happening*, not as proof of who asked: the command comes
@@ -42,6 +53,7 @@ for the people you choose.
 | `SetupView.qml` … `RemoveView.qml` | one view each |
 | `RecordSession.qml`, `RecordCard.qml` | one `enroll-session`: the state machine, and the card on screen |
 | `Indicator.qml` | the card that appears while a face is being checked, and what asked |
+| `TestCard.qml` | "does it recognise Anna now?" — one `omarchy-face-identity verify`, and what it answered |
 | `common/Ask.qml` | every call to the engine: `ask()` and `stream()`, and what the exit codes mean |
 | `common/names.js` | the name Profiles binds to, derived from the display name |
 | `bin/omarchy-face-status` | the read half of the contract: one JSON document, no privilege, always exit 0 |

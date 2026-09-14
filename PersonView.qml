@@ -12,8 +12,10 @@ import "common/names.js" as Names
 // name is shown but never editable: it is the key Profiles binds to, and a
 // rename would silently retarget somebody else's binding (§1 row 6).
 //
-// Test ("does it recognise Anna now?") arrives with `omarchy-face-identity` in
-// phase 6; a button that cannot answer is worse than no button.
+// Test ("does it recognise Anna now?") is the one control here that changes
+// nothing: it runs `omarchy-face-identity verify <name>` -- the same call
+// Profiles makes -- in a card under the webcam, and reports the exit code. It
+// opens no door and needs no password.
 Column {
   id: view
 
@@ -173,6 +175,24 @@ Column {
       if (!result.ok) view.note = "The recording card could not be opened."
     })
     panel.close()
+  }
+
+  // Test: one IPC call to the service, which owns the card (plan-gui.md §5.2).
+  // The popup stays open behind it -- the card takes no keyboard focus and its
+  // input region is the card itself, so this is the one card that does not cost
+  // the person the view they were reading.
+  //
+  // `busy` comes back when a recording card is already up, or a test of
+  // somebody else is running; there is nothing to retry and nothing to undo, so
+  // it is said plainly and the button stays live.
+  function test() {
+    if (!panel) return
+    view.note = ""
+    panel.ask.ask(panel.ask.cardArgv(["testMatch", view.name]), "", function (result) {
+      if (!result.ok) { view.note = "The test card could not be opened."; return }
+      if (String(result.stdout || "").trim() === "busy")
+        view.note = "Face is showing another card — close it and try again."
+    })
   }
 
   function dateText(seconds) {
@@ -473,6 +493,40 @@ Column {
     font.family: view.fontFamily
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap
+  }
+
+  // --- test -----------------------------------------------------------------
+  //
+  // Between the permissions and Remove, where plan-gui.md §5.2 puts it: it is
+  // the answer to "did that recording actually work", asked right under the
+  // switches that decide what a working one is allowed to do.
+
+  Column {
+    width: parent.width
+    visible: view.person !== null
+    spacing: Style.space(2)
+    topPadding: Style.space(6)
+
+    Button {
+      id: testButton
+      text: "Test — does it recognise " + view.shown + " now?"
+      // With nothing recorded there is nothing to compare against, and the
+      // helper would answer 2 ("not set up") after a round trip to the daemon.
+      enabled: view.appearances.length > 0
+      foreground: view.foreground
+      fontFamily: view.fontFamily
+      onClicked: view.test()
+    }
+
+    Text {
+      textFormat: Text.PlainText
+      width: parent.width
+      text: "Looks at the camera and says who it sees. Nothing is unlocked."
+      color: view.dim
+      font.family: view.fontFamily
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.WordWrap
+    }
   }
 
   // --- remove ---------------------------------------------------------------

@@ -17,10 +17,10 @@ import "common"
 //     30 s wrapper health check, and the single notification per new reason
 //     (G6, plan-merged.md §1 row 13 and §3)
 //
-// Phase 4 builds the recording card and phase 5 the indicator. The lock duties
-// still do nothing: in particular this does NOT run `sync` yet -- that call
-// stages the wrapper into the plugins folder, and staging before the wrapper
-// exists would be a reload for nothing.
+// Phase 4 builds the recording card, phase 5 the indicator and phase 6 the Test
+// card. The lock duties still do nothing: in particular this does NOT run
+// `sync` yet -- that call stages the wrapper into the plugins folder, and
+// staging before the wrapper exists would be a reload for nothing.
 Item {
   id: root
 
@@ -127,6 +127,78 @@ Item {
     return "ok"
   }
 
+  // --- the Test card (plan-gui.md §5.2) ---------------------------------------
+  //
+  // One `omarchy-face-identity verify <name>` behind a card under the webcam.
+  // It is a read of the world, not a change to it: nothing is unlocked, nothing
+  // is written, and the only privilege involved is the daemon's own -- the
+  // helper here runs as the user and is told apart from any other caller by
+  // SO_PEERCRED at the far end (plan-engine.md §6.2).
+  //
+  // The verdict is an exit code and nothing else (§2.5). That is the whole
+  // reason this can be a user-side helper: there is no output to trust.
+
+  property var testCard: null
+  property var testProcess: null
+  property string testName: ""
+
+  // The helper's own worst case is howdy's timeout plus the daemon's backstop;
+  // twice that is a fault, and the answer to a fault is to stop looking rather
+  // than leave a card on somebody's screen.
+  readonly property int testSafetyMs: 20000
+  readonly property int testDismissMs: 3200
+
+  function startTest(name) {
+    root.testName = String(name)
+    // The label, from the same people.json the indicator already watches, so
+    // the card says "Recognised Anna" rather than "Recognised anna".
+    var shown = indicator.labelFor(root.testName)
+    root.testCard = testComponent.createObject(root, {
+      label: shown,
+      phase: "checking",
+      code: -1
+    })
+    if (!root.testCard) { root.testName = ""; return "the card could not be created" }
+    root.testCard.stopped.connect(function () { root.closeTest() })
+    root.testCard.closed.connect(function () { root.closeTest() })
+
+    root.testProcess = engine.stream(engine.identityArgv(["verify", root.testName]),
+                                     null, function (result) {
+      root.testProcess = null
+      if (!root.testCard) return
+      testSafety.stop()
+      root.testCard.code = result.code
+      root.testCard.phase = "done"
+      testDismiss.restart()
+    })
+    if (!root.testProcess) { root.closeTest(); return "the check could not be started" }
+    testSafety.restart()
+    return "ok"
+  }
+
+  // Closing the card stops the check, in that order and by the only means that
+  // works: `verify` runs as the user, so it takes a signal -- and its death is
+  // what makes the daemon let go of the camera (plan-merged.md §2.5).
+  property bool closingTest: false
+
+  function closeTest() {
+    if (root.closingTest) return
+    root.closingTest = true
+    testSafety.stop()
+    testDismiss.stop()
+    var goingCard = root.testCard
+    var goingProcess = root.testProcess
+    root.testCard = null
+    root.testProcess = null
+    root.testName = ""
+    if (goingProcess) engine.cancel(goingProcess)
+    if (goingCard) goingCard.destroy()
+    root.closingTest = false
+  }
+
+  Timer { id: testSafety; interval: root.testSafetyMs; onTriggered: root.closeTest() }
+  Timer { id: testDismiss; interval: root.testDismissMs; onTriggered: root.closeTest() }
+
   // The preview node and the standard appearance labels both come from reads the
   // GUI already makes; asking for them when the card opens keeps this service
   // free of timers of its own.
@@ -167,17 +239,27 @@ Item {
       return "ok"
     }
 
-    // "Test — does it recognise Anna now?" (G4/G6).
+    // "Test — does it recognise Anna now?" (plan-gui.md §5.2).
     function testMatch(name: string): string {
-      return "not built yet: Test arrives with omarchy-face-identity"
+      var who = String(name || "")
+      if (who === "") return "testMatch needs a name"
+      // A recording card owns the same piece of screen and is mid-session; a
+      // test would be a second card in one place and a second claim on the
+      // camera, which the daemon would refuse as `camera_busy` anyway.
+      if (root.card) return "busy"
+      // The card that is already up for this person is the answer to asking
+      // again; a different person replaces nothing while a check is running.
+      if (root.testCard) return root.testName === who ? "ok" : "busy"
+      return root.startTest(who)
     }
 
     // Close whatever card is on screen. For a pkexec'd session that means
     // closing its stdin, never a signal: it runs as root and the user cannot
     // signal it (plan-merged.md §2 rule 7).
     function cancel(): void {
+      if (root.testCard) root.closeTest()
       if (root.session) root.session.requestClose()
-      else root.closeCard()
+      else if (root.card) root.closeCard()
     }
 
     // What this service is doing, as JSON. It is how a test observes a card
@@ -186,7 +268,9 @@ Item {
       return JSON.stringify({
         loaded: true,
         omarchyPath: root.omarchyPath,
-        duties: (root.card ? ["record"] : []).concat(indicator.visibleNow ? ["indicator"] : []),
+        duties: (root.card ? ["record"] : [])
+          .concat(root.testCard ? ["test"] : [])
+          .concat(indicator.visibleNow ? ["indicator"] : []),
         // What the indicator is saying, which is how a test asks a card that has
         // no window it could be questioned about any other way. It is also the
         // phase-5 gate's only handle on "the card names the program".
@@ -199,6 +283,16 @@ Item {
           detail: indicator.detail,
           suppressedNotice: indicator.suppressedNotice
         },
+        // The Test card, in the same shape and for the same reason: it has no
+        // window a test could ask about any other way, and what it says is the
+        // whole of what this phase adds to the GUI.
+        test: root.testCard ? {
+          name: root.testName,
+          label: String(root.testCard.label),
+          phase: String(root.testCard.phase),
+          code: root.testCard.code,
+          headline: String(root.testCard.headline)
+        } : null,
         card: root.card ? {
           name: root.cardName,
           phase: root.session ? String(root.session.phase) : "",
@@ -213,16 +307,18 @@ Item {
   }
 
   // The indicator (G5). It draws only while an authentication is actually in
-  // flight, and it stands down while the recording card is up: the two would
-  // otherwise be two cards in the same place on the same screen, and the card
-  // is the one saying more (plan-gui.md §6.2).
+  // flight, and it stands down while either card is up: the Test card is a card
+  // in the same place saying more about the same check -- the daemon writes
+  // `identity` states for it, and the indicator drawing them too would be the
+  // same event reported twice, once badly (plan-merged.md §1 row 11).
   Indicator {
     id: indicator
-    suppressed: root.card !== null
+    suppressed: root.card !== null || root.testCard !== null
   }
 
   Component { id: sessionComponent; RecordSession {} }
   Component { id: cardComponent;    RecordCard {} }
+  Component { id: testComponent;    TestCard {} }
 
   Component.onCompleted: console.log("graveklar.face", "service loaded")
 }

@@ -22,7 +22,7 @@ the four helpers, answering from `dev/fixtures/<name>/`:
 | `omarchy-face-status` | prints `dev/fixtures/$OMARCHY_FACE_DEV_FIXTURE/status.json`, exit 0 always |
 | `omarchy-face-admin` | answers in the contract's shape, writes nothing outside the fixture directory; `enroll-session` is not scripted yet. Setup's **first install** also lands here in development (`Ask.firstInstallArgv`), so the `pkexec /bin/bash` form never runs against a fixture. `install-engine` and `install-system` start the stand-in build below |
 | `omarchy-face-lock` | answers `{ok}` and deliberately never touches the plugins folder |
-| `omarchy-face-identity` | `list` from the fixture; `verify` always exits 3, unavailable |
+| `omarchy-face-identity` | `list` from the fixture; `verify` exits 3 (unavailable) unless `OMARCHY_FACE_DEV_VERIFY=<code>` says otherwise, and `OMARCHY_FACE_DEV_VERIFY_SECONDS=N` makes it take that long first, so a test can watch the Test card while it checks and stop it |
 
 With `OMARCHY_FACE_DEV_BIN` set, the GUI takes every helper from that directory
 and drops `pkexec` (`plan-gui.md §2.1`). It grants nothing: a stub running as
@@ -77,7 +77,8 @@ unprivileged helpers that ship with the plugin (`plan-engine.md §8.1`):
 | `system/omarchy-face-admin` | every privileged verb, behind `no.graveklar.face.owner`. Phase 2 implements `install-system`, `purge` and `purge-legacy`; the rest answer `not_implemented`. |
 | `system/omarchy-face-camera` | which V4L2 node is the infrared one. Runs as anybody, and the status script runs the plugin's own copy before anything is installed. |
 | `system/omarchy-face-{gate,verify}` | phase 5: the two lines `sudo-on` puts in `/etc/pam.d/sudo`. The gate decides whether asking the camera is worth it (exit 0 = skip); the verifier is the only file in this project whose exit 0 authenticates somebody. |
-| `system/omarchy-face-lock-verify`, `system/omarchy-faced` | phases 6 and 7. They ship in their safe state — answer nothing — because the `system` row installs and compares all seven helpers as a set. |
+| `system/omarchy-faced` | phase 6: the socket daemon, and the one listening thing in the project. It is the only root process that opens the camera for a caller holding no privilege, which is why peer credentials and draining are gates on it rather than details. |
+| `system/omarchy-face-lock-verify` | phase 7. Ships in its safe state — answers nothing — because the `system` row installs and compares all seven helpers as a set. |
 | `bin/omarchy-face-status` | the whole read half of the contract. |
 
 Every installed file carries two headers, `omarchy-face v2` and
@@ -382,6 +383,78 @@ Three things in it are asserted as *text* rather than exercised, because an
 offscreen runtime has no compositor to ask: the built-in screen filter
 (`/^(eDP|LVDS|DSI)/`), `WlrKeyboardFocus.None` and the empty input region. The
 card on a real screen is checked by looking at it.
+
+## F5 — the daemon, the client, and the Profiles gate
+
+```sh
+./dev/f5-daemon.sh              # omarchy-faced and omarchy-face-identity
+./dev/f5-profiles-contract.sh   # THE PHASE-6 GATE: Profiles' bound-face `set`
+```
+
+Phase 6 adds the first thing in this project that **listens**: a socket in
+`/run` any local process can connect to, answered by a root daemon that opens
+the infrared camera. So `f5-daemon.sh` is written around the three properties
+that make that safe rather than around the happy path —
+
+- **peer credentials.** The socket is `0666` because "only this account" is not
+  something a mode bit can say; `SO_PEERCRED` is. A connection whose uid is not
+  the config account's is refused before the request is read, and costs no
+  camera, no fork and no rate-limit slot. The sandbox cannot become a second
+  uid, so the refusal is expressed the other way round: the config names an
+  account whose uid is not the caller's, which is the same check answering the
+  same way.
+- **draining.** `Accept=no` means a connection nobody accepted stays pending and
+  re-activates the unit; a loop of those puts the **socket** into `failed`,
+  which any local user could do and only root could undo. Every exit path
+  accepts what is waiting first — including SIGTERM, which is why the handler
+  raises instead of exiting.
+- **hangup.** A client that goes away takes `compare.py` and the camera lock
+  with it inside 300 ms, which is what `plan-merged.md §2.5` promises Profiles.
+
+systemd is not reachable from the sandbox, so `dev/socket-activate.py` plays it:
+it holds the listening socket, hands it over on fd 3 with `LISTEN_FDS`, and
+starts the daemon again for the next connection. That is what lets idle-exit and
+re-activation be tested at all. `dev/socket-say.py` is the raw protocol client
+for the cases the two shipped clients cannot express (a connection that says
+nothing, one that hangs up mid-check).
+
+`f5-profiles-contract.sh` is the gate, and it is the only suite here that runs
+**somebody else's code**: the installed `graveklar.profiles`, unmodified,
+switching into a profile with a bound face. Its two halves are Profiles' own
+sentences — `set` with empty stdin opens the profile by face, and a SIGTERM
+during the face wait exits 143 within ~100 ms leaving nothing behind — with the
+camera and the journal checked from this side. A temporary `HOME` and stand-ins
+for `omarchy`, `omarchy-shell` and `hyprctl` keep a real profile switch inside
+the sandbox; nothing on the machine moves.
+
+Both stub the engine, for the reason `f3` gives and one more: **this machine's
+IR emitter is not driven**, so a real `compare.py` ends in `black_frames`
+whoever is sitting in front of it. Everything about the protocol, the
+refusals, the timing and Profiles' side of the contract is real; "howdy
+recognised Anna" is the one sentence only a live run can say.
+
+## Phase 6 GUI — the Test card
+
+```sh
+./dev/g5b-test-card-offscreen.sh
+```
+
+Numbered after `g5` rather than after the phase because it is the same
+machinery: the Test card is the indicator's card with a different sentence in
+it, and the indicator's `identity` states — built in phase 5 — finally have a
+producer. It drives the real `Service.qml` through the same `testMatch(name)`
+the popup calls, with the dev stub told which of the five contract exit codes to
+answer with, and reads the card's text out of the service's own `state()`.
+
+Two things it proves that are not about copy: the indicator **stands down**
+while the card is up (the same check would otherwise be announced twice), and
+stopping a check really **signals** the helper — the stub traps `TERM` and
+records it, because a helper that was merely abandoned is a camera still held.
+
+Unlike the other offscreen suites this one really does put a card on the screen
+for a second: the card is a layer-shell window and the shipped file cannot be
+instantiated without one. It takes no keyboard focus and its input region is the
+card itself, so nothing is stolen and nothing else is covered.
 
 ## F0
 

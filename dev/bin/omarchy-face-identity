@@ -2,15 +2,28 @@
 
 # Stub of the Profiles contract (plan-merged.md §2.5, plan-engine.md §11.3).
 #
-# `list` answers from the fixture's people.json; `verify` always answers 3,
-# unavailable -- there is no camera behind this and a stub that claimed to
-# recognise someone would be the single most misleading thing in the tree.
+# `list` answers from the fixture's people.json. `verify` answers **3,
+# unavailable, by default** -- there is no camera behind this and a stub that
+# claimed to recognise somebody would be the single most misleading thing in the
+# tree. Two development-only knobs make the Test card's five sentences testable
+# without a face:
+#
+#   OMARCHY_FACE_DEV_VERIFY=<code>     what `verify` exits with (0,1,2,3,4)
+#   OMARCHY_FACE_DEV_VERIFY_SECONDS=N  how long it takes first, so a test can
+#                                      watch the card while it is checking and
+#                                      cancel it the way the Stop button does
+#
+# The delay is a plain `sleep` in the foreground of a script the GUI launches
+# through `bash -c 'exec "$@"'`, so a SIGTERM from Ask.cancel() really does land
+# on this process -- which is the half of the cancellation path that lives on
+# this side of the socket.
 
 set -uo pipefail
 
 FIXTURES=${OMARCHY_FACE_DEV_FIXTURES:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../fixtures" && pwd)}
 FIXTURE=${OMARCHY_FACE_DEV_FIXTURE:-fresh}
 PEOPLE="$FIXTURES/$FIXTURE/people.json"
+STATE=${OMARCHY_FACE_DEV_STATE:-}
 
 case "${1:-}" in
   list)
@@ -21,7 +34,20 @@ case "${1:-}" in
     ;;
   verify)
     [[ -n ${2:-} ]] || exit 2
-    exit 3
+    # A transcript, like the admin stub's verbs.log: a card that says it tested
+    # somebody has to be shown to have asked about them.
+    [[ -n $STATE ]] && printf 'verify %s\n' "$2" >>"$STATE/identity.log"
+    seconds=${OMARCHY_FACE_DEV_VERIFY_SECONDS:-0}
+    if [[ $seconds != 0 ]]; then
+      # `sleep &` and `wait`, never a foreground sleep: bash defers a trap until
+      # a FOREGROUND child exits, and this trap is the thing under test -- the
+      # real helper dies on TERM and its dying socket is what frees the camera
+      # (plan-merged.md §2.5). Profiles learned the same lesson the same way.
+      trap '[[ -n $STATE ]] && printf "cancelled %s\n" "$2" >>"$STATE/identity.log"; exit 143' TERM
+      sleep "$seconds" &
+      wait $!
+    fi
+    exit "${OMARCHY_FACE_DEV_VERIFY:-3}"
     ;;
   *)
     exit 2
