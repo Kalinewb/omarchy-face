@@ -198,6 +198,61 @@ log tail it fetches through `common/Ask.qml`. It draws nothing, so it cannot say
 the row *looks* right — only that every binding in it evaluates and agrees with
 the contract.
 
+## F3 — the people store
+
+```sh
+./dev/f3-stdin-pkexec.sh            # first: does a session survive pkexec?
+./dev/f3-stdin-pkexec.sh --real     # the same, through the real dialog (needs you)
+./dev/f3-people-store.sh            # the store, the session, the derived sets
+./dev/f3-people-store.sh --real     # the REAL howdy against the REAL IR camera
+./dev/f3-people-store.sh --measure  # --real, plus §7's 3/6/9 measurement
+```
+
+`f3-stdin-pkexec.sh` comes first on purpose (`plan-merged.md §1` row 19): every
+other thing in this phase assumes pkexec hands its standard streams to the
+program it execs, and a session is a conversation on those streams. The default
+run proves the channel through a stand-in that delays and then `exec`s; only
+`--real` can prove pkexec itself, and only with somebody at the keyboard —
+Face's action is `auth_self`, and polkit has no way to be answered by a script.
+
+`f3-people-store.sh` runs in the same private namespace `f1-round-trip.sh` uses,
+with tmpfs over `/etc`, `/run`, `/var/lib`, `/usr/local` and
+`/usr/lib/security`, so no person is ever recorded on this machine. By default
+the engine is stubbed — two small scripts that speak howdy's model format and can
+be told to fail the way `add.py` does — which is what lets `no_face`,
+`multiple_faces`, `too_dark`, `black_frames` and a busy camera all be tested.
+
+`--real` unpacks the howdy and python-dlib **packages the engine build produced**
+into the sandbox (`/tmp/omarchy-face-f2.*`, from `f2-engine-job.sh --builder`)
+and runs them against `/dev/video2`: a real capture, a real `compare.py`, and E8
+confirmed on the installed file — the winning model's label really is
+`<name>/<appearance>`, and the printed certainty really is ten times the JSON
+one. Nothing is installed on the machine; the packages are bind-mounted into the
+namespace and gone when it exits.
+
+## G3/G4 — People, Person and the recording card
+
+```sh
+./dev/g3-people-offscreen.sh
+```
+
+The same shape as `g2-engine-row-offscreen.sh`: the real `PeopleView.qml`,
+`PersonView.qml` and `RecordSession.qml` in a QML runtime, against the running
+Omarchy's `qs.Commons` and `qs.Ui`, with a fake panel in front of them. Three of
+phase 4's five gate clauses are proved here — the countdown starting at `ready`
+rather than at the click, Esc before a capture closing stdin and writing nothing,
+and the name rule.
+
+Two knobs exist for it, both GUI-side and both development-only:
+`OMARCHY_FACE_DEV_PKEXEC=1` keeps `pkexec` in argv[0] in front of the stub
+(argv[0] is what decides whether a stream is cancelled by closing stdin or by a
+signal), and the harness puts a stand-in `pkexec` earlier in `PATH` that sleeps
+for ten seconds and then `exec`s — the dialog, without the password.
+
+The recording card itself (`RecordCard.qml`) is a layer-shell window and is not
+covered offscreen: what it draws is checked by opening it. Everything it decides
+is in `RecordSession.qml`, which is.
+
 ## F0
 
 `./dev/f0-verify.sh` is `plan-engine.md §2` as a runnable checklist, plus the
