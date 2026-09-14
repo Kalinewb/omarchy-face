@@ -145,6 +145,17 @@ check "an authentication from a minute ago is not drawn" "false" "$(field showin
 write_state start sudo "" '{"command":"pacman","from":"foot"}'
 out=$(run_case sudo-start FACE_HARNESS_SUPPRESSED=1)
 check "it stands down while the recording card is up" "false" "$(field showing "$out")"
+# Standing down is not the same as saying nothing. Any process running as this
+# account can open a recording card over IPC, and somebody looking into the lens
+# for a countdown is somebody not reading anything else -- so the line goes to
+# the card instead (Service.qml binds it), and this is where it comes from.
+check "…but it hands the card a line saying what asked while it was up" \
+  "sudo · pacman asked while this was open" "$(field suppressedNotice "$out")"
+
+write_state skipped sudo "" '{"command":"pacman"}'
+out=$(run_case sudo-skipped FACE_HARNESS_SUPPRESSED=1)
+check "a gate that skipped is not worth interrupting a recording for" "" \
+  "$(field suppressedNotice "$out")"
 
 step "Profiles asking who you are (service identity)"
 write_state start identity "" '{}'

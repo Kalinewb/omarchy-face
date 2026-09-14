@@ -483,7 +483,10 @@ sudo_blocks=$(grep -c '^# omarchy-face begin$' /etc/pam.d/sudo 2>/dev/null) || s
 # Both helper lines, not just the marker: a block that lost one of its two lines
 # is a stack that either never checks a face (no verifier) or checks one on every
 # password retry (no gate), and neither is the thing `ok` is supposed to mean.
-sudo_lines=$(grep -c 'pam_exec\.so.*/usr/local/bin/omarchy-face-\(gate\|verify\)' /etc/pam.d/sudo 2>/dev/null) || sudo_lines=0
+# Anchored on the line type, so a line somebody commented out is not counted as
+# a line PAM runs -- which is the difference between "wired" and "a note".
+sudo_lines=$(grep -cE '^[[:space:]]*auth[[:space:]].*pam_exec\.so.*/usr/local/bin/omarchy-face-(gate|verify)' \
+  /etc/pam.d/sudo 2>/dev/null) || sudo_lines=0
 
 # The Fix is only offered once somebody could actually be recognised: `sudo-on`
 # refuses with `no_sudo_faces` otherwise, and a button that is refused for a
@@ -496,12 +499,22 @@ if [[ $config_sudo == true && $sudo_blocks == 1 && $sudo_lines == 2 ]] && ((sudo
   add_row sudo "Face for sudo" ok "$sudo_faces face(s) can approve sudo" false ""
 elif [[ $config_sudo != true && $sudo_blocks == 0 && $sudo_lines == 0 ]]; then
   add_row sudo "Face for sudo" needs_action "off" "$sudo_fixable" sudo-on
-else
-  # The two halves disagree. The honest repair is always the one that ends with
-  # sudo asking for a password: `sudo-off` is the verb that is always allowed,
-  # and it is what takes a half-written block back out.
+elif [[ $config_sudo != true ]]; then
+  # Lines in the stack, and the config says off. This is the one disagreement
+  # that is not a risk: both helpers read `sudo` from the config before anything
+  # else, so these lines run, decide "off" and hand straight back to the password
+  # prompt. It is still `broken` -- nobody asked for lines that do nothing -- but
+  # the detail has to say which of the two states it is, because "the config and
+  # the stack disagree" reads far worse than this one is.
   add_row sudo "Face for sudo" broken \
-    "the sudo stack and the config disagree ($sudo_blocks marked block(s), $sudo_lines face line(s), sudo=$config_sudo, $sudo_faces face(s))" \
+    "Face's lines are still in /etc/pam.d/sudo but do nothing: the setting is off, so no face is ever tried ($sudo_blocks marked block(s), $sudo_lines face line(s))" \
+    true sudo-off
+else
+  # The config says on, and the stack is not what Face wrote: a missing block, a
+  # duplicated one, a half-written one, or nobody with Sudo behind it. Here the
+  # lines may well run, so the repair is the one that ends at a password prompt.
+  add_row sudo "Face for sudo" broken \
+    "Face for sudo is on but /etc/pam.d/sudo is not what Face wrote ($sudo_blocks marked block(s), $sudo_lines face line(s), $sudo_faces face(s))" \
     true sudo-off
 fi
 

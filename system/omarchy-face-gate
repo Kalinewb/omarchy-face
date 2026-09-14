@@ -27,7 +27,12 @@
 
 set -u
 unset IFS BASH_ENV ENV CDPATH
-PATH=/usr/local/bin:/usr/bin
+# /usr/bin FIRST. Both directories are root's, and /usr/local/bin is the one
+# Face itself installs into -- but it is also the directory a local convention,
+# a stray package or a half-finished install is most likely to have put
+# something in, and this file runs as root from an auth stack. The distribution's
+# own tools win every name.
+PATH=/usr/bin:/usr/local/bin
 umask 077
 
 # Every helper this gate runs is invoked through `env -i PATH=…`, so no
@@ -36,15 +41,29 @@ umask 077
 # is enforced for the whole tree. pam_exec builds a clean environment of its own
 # (PAM_* and nothing else), so this is belt and braces -- and belt and braces is
 # what a root helper in an auth stack is for.
-CLEAN_ENV=(env -i PATH=/usr/local/bin:/usr/bin LC_ALL=C)
+CLEAN_ENV=(env -i PATH=/usr/bin:/usr/local/bin LC_ALL=C)
 
 CONFIG_FILE=/etc/omarchy-face/config
 RUN_DIR=/run/omarchy-face
 STATE_FILE=$RUN_DIR/state.json
 ATTEMPTS_DIR=$RUN_DIR/attempts
+ATTEMPT_LOG=$RUN_DIR/sudo-attempts
 CAMERA_LOCK=$RUN_DIR/camera.lock
 MODELS=/usr/lib/security/howdy/models
 CAMERA=/usr/local/bin/omarchy-face-camera
+
+# How many camera attempts a minute sudo may cost, across separate sudo calls.
+#
+# The per-call marker (§4.3 step 6) bounds a password retry loop, and it cannot
+# bound anything else: every new `sudo` is a new process with a new key. So a
+# program running as the owner can sit in a loop of `sudo -n true` -- which never
+# prompts and prints nothing -- and have the IR emitter fire at whatever rate it
+# likes, hoping a face wanders past. That is the passive-factor risk the README
+# states, and it is cheap to put a ceiling on it. Six is more than a person
+# reaches by hand (each one is a whole authentication) and low enough that the
+# loop gets a handful of frames a minute rather than hundreds.
+ATTEMPT_LIMIT=6
+ATTEMPT_WINDOW=60
 
 # Config is read with sed, never sourced: the file is root-owned, but `source`
 # on a key=value file is a habit that stops being safe the moment somebody adds
@@ -73,6 +92,16 @@ json_safe() { # json_safe <text>
   printf '%s' "$1" | tr -d '\\"' | tr -cd '\040-\176' | cut -c1-64
 }
 
+# Milliseconds, or 0. `at` is a NUMBER in the document, so a date(1) that failed
+# would otherwise paste an empty string where JSON needs a value and hand the GUI
+# a file it cannot parse -- for the whole of the next authentication.
+now_ms() {
+  local value
+  value=$(date +%s%3N 2>/dev/null)
+  [[ $value =~ ^[0-9]+$ ]] || value=0
+  printf '%s' "$value"
+}
+
 # /run/omarchy-face/state.json, exactly the §2.6 shape, written by
 # same-directory temp + rename so the GUI never reads half a document. 0644,
 # because the thing that draws it runs as the owner.
@@ -86,7 +115,7 @@ state_write() { # state_write <state> <detail>
   chmod 0755 "$RUN_DIR" 2>/dev/null
   tmp=$(mktemp "$RUN_DIR/.state.XXXXXX" 2>/dev/null) || return 0
   printf '{"state":"%s","service":"sudo","requester":{},"person":"","detail":"%s","at":%s}\n' \
-    "$(json_safe "$state")" "$(json_safe "$detail")" "$(date +%s%3N)" >"$tmp" 2>/dev/null
+    "$(json_safe "$state")" "$(json_safe "$detail")" "$(now_ms)" >"$tmp" 2>/dev/null
   chmod 0644 "$tmp" 2>/dev/null
   mv -f "$tmp" "$STATE_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   return 0
@@ -156,6 +185,18 @@ account=$(config_get account)
 [[ ${PAM_USER:-} != root ]] || skip "root is never authenticated by face"
 [[ ${PAM_USER:-} == "$account" ]] || skip "face is not set up for ${PAM_USER:-this user}"
 
+# 3a. And the user who ASKED, where sudo tells us.
+#
+#     PAM_USER is the account being authenticated, which on a stock sudoers is
+#     the invoking user -- but `Defaults targetpw` makes it the TARGET user
+#     instead. On such a machine a second local account with a sudoers rule
+#     allowing `sudo -u <owner>` would have PAM_USER = the owner, and the owner's
+#     face would be spent authenticating somebody else's command. PAM_RUSER is
+#     sudo's record of who ran it; it is not always set, and an unset one is not
+#     evidence of anything, so this only refuses when it is set and disagrees.
+[[ -z ${PAM_RUSER:-} || ${PAM_RUSER:-} == "$account" ]] ||
+  skip "sudo was run by ${PAM_RUSER}, not by $account"
+
 # 4. A camera on this desk proves nothing about who is on the far end of an SSH
 #    connection.
 #
@@ -173,8 +214,15 @@ caller_session_is_remote() {
   [[ -r /run/systemd/sessions/$session ]] || return 1
   grep -qx 'REMOTE=1' "/run/systemd/sessions/$session"
 }
+# This machine's own names count as "not remote". Stock Arch sudo does not set
+# PAM_RHOST at all, but the `pam_rhost` sudoers flag makes it set it for LOCAL
+# sessions too -- to this host's own name -- and without these two lines turning
+# that flag on would silently stop face working and leave no clue why.
+local_hostname=""
+[[ -r /proc/sys/kernel/hostname ]] && local_hostname=$(</proc/sys/kernel/hostname)
 case ${PAM_RHOST:-} in
   "" | localhost | localhost.localdomain | 127.0.0.1 | ::1) ;;
+  "$local_hostname" | "$local_hostname".*) [[ -n $local_hostname ]] || skip "remote session from ${PAM_RHOST}" ;;
   *) skip "remote session from ${PAM_RHOST}" ;;
 esac
 caller_session_is_remote && skip "the caller is in a remote login session"
@@ -206,12 +254,52 @@ if key=$(attempt_key) && [[ -e $ATTEMPTS_DIR/$key ]]; then
   skip "face already had its attempt for this sudo"
 fi
 
+# 6a. And this MACHINE has had enough of them for one minute.
+#
+#     The marker above is per sudo call, so it bounds a password retry loop and
+#     nothing else: `sudo -n true` in a loop is a new process every time, never
+#     prompts, prints nothing, and would otherwise run the camera as fast as the
+#     engine answers. The verifier appends one line here every time it reaches
+#     the engine; this counts the recent ones. A line that is not a timestamp is
+#     ignored rather than trusted, and a log that cannot be read at all does not
+#     skip -- it is a ceiling, not a permission.
+attempts_recently() {
+  local now line count=0
+  now=$(date +%s 2>/dev/null)
+  [[ $now =~ ^[0-9]+$ ]] || return 0
+  [[ -r $ATTEMPT_LOG ]] || return 0
+  while IFS= read -r line; do
+    [[ $line =~ ^[0-9]+$ ]] || continue
+    ((now - line <= ATTEMPT_WINDOW && now >= line)) && count=$((count + 1))
+  done <"$ATTEMPT_LOG"
+  printf '%s' "$count"
+}
+recent=$(attempts_recently)
+[[ $recent =~ ^[0-9]+$ ]] || recent=0
+((recent < ATTEMPT_LIMIT)) ||
+  skip "face has already been asked $recent times in the last ${ATTEMPT_WINDOW}s"
+
 # 7. The sensor. No IR camera at all, or somebody else is streaming it (a video
 #    call): either way the engine would get nothing and burn its timeout.
-node=$("${CLEAN_ENV[@]}" "$CAMERA" --ir-node 2>/dev/null) || skip "no infrared camera"
+#
+#    Both calls are bounded. A wedged UVC device can make an ioctl take as long
+#    as it likes, and this code runs between somebody pressing return and their
+#    password prompt appearing: a probe with no timeout is a sudo that hangs.
+node=$("${CLEAN_ENV[@]}" timeout 3 "$CAMERA" --ir-node 2>/dev/null)
+case $? in
+  0) ;;
+  124) skip "the camera could not be identified in three seconds" ;;
+  *) skip "no infrared camera" ;;
+esac
 [[ -n $node && -c $node ]] || skip "no infrared camera"
 if command -v fuser >/dev/null 2>&1; then
-  "${CLEAN_ENV[@]}" fuser -s "$node" 2>/dev/null && skip "the infrared camera is in use"
+  "${CLEAN_ENV[@]}" timeout 3 fuser -s "$node" 2>/dev/null
+  case $? in
+    0) skip "the infrared camera is in use" ;;
+    1) ;;
+    # Neither "in use" nor "free": unevaluable, and an unevaluable check skips.
+    *) skip "whether the camera is free could not be determined" ;;
+  esac
 fi
 
 # 8. Nothing enrolled for sudo means a guaranteed failure and a guaranteed wait.

@@ -132,17 +132,24 @@ JOURNAL=/run/journal
 STUB=/run/omarchy-face-stub
 mkdir -p "$STUB"
 LAB=$(mktemp -d /run/f4.XXXXXX)
+# A directory for the things that must exist before the first bind mount below.
+LAB_EARLY=$(mktemp -d /run/f4-early.XXXXXX)
 
 # The journal, stood in for. The helpers log through `logger`, which in here has
 # nothing to talk to -- and the attribution line is one of the things this phase
-# is FOR, so it has to be readable. /usr/local/bin is a tmpfs of our own and it
-# comes first in the helpers' pinned PATH, so a stand-in there is what they call.
-cat >/usr/local/bin/logger <<'LOGGER'
+# is FOR, so it has to be readable.
+#
+# Bound over /usr/bin/logger rather than dropped into /usr/local/bin: the helpers
+# pin `PATH=/usr/bin:/usr/local/bin`, deliberately preferring the distribution's
+# own tools, so a stand-in in /usr/local/bin would never be reached. The bind is
+# namespace-local, like everything else in here.
+cat >"$LAB_EARLY/logger" <<'LOGGER'
 #!/bin/bash
 # Stand-in for logger(1): the last argument is the message.
 printf '%s\n' "${@: -1}" >>/run/journal
 LOGGER
-chmod 0755 /usr/local/bin/logger
+chmod 0755 "$LAB_EARLY/logger"
+mount --bind "$LAB_EARLY/logger" /usr/bin/logger || exit 1
 : >"$JOURNAL"
 
 echo "F4 — sudo's PAM stack, the gate and the verifier (plan-merged.md §4 phase 5)"
@@ -405,19 +412,71 @@ step "sudo-off is always allowed (plan-engine.md §4.4)"
 out=$("$ADMIN" sudo-off 2>/dev/null)
 same "…including when it is already off" "true" "$(jq -r '.ok // false' <<<"$out")"
 
-# A foreign line inside our block is not ours to delete: the removal refuses and
-# the config stays as it was, so the `sudo` row keeps saying something is wrong.
+# A foreign line inside our block is not ours to delete, so the removal refuses
+# and the file is left exactly as it was. What must NOT also happen is the verb
+# giving up before writing the config: both helpers read `sudo` from the config
+# before anything else, so the config is what makes them inert, and a `sudo-off`
+# that failed to write it would leave a machine asking the camera on every sudo
+# while the page that offered the switch says the feature is off. The config goes
+# first for exactly this case (security review, phase 5).
 "$ADMIN" sudo-on >/dev/null 2>&1
 sed -i '/^# omarchy-face end$/i auth  optional  pam_permit.so' "$SUDO_PAM"
 before=$(sha256sum "$SUDO_PAM" | cut -d' ' -f1)
 out=$("$ADMIN" sudo-off 2>/dev/null)
-same "a foreign line inside the block makes sudo-off refuse" "pam_edit_failed" \
+same "a foreign line inside the block makes sudo-off report pam_edit_failed" "pam_edit_failed" \
   "$(jq -r '.error // "none"' <<<"$out")"
 same "…and the stack is untouched" "$before" "$(sha256sum "$SUDO_PAM" | cut -d' ' -f1)"
-same "…and the config still says sudo is on, so the row stays broken" "sudo=true" \
+same "…but the feature is OFF, which is what makes the lines inert" "sudo=false" \
   "$(grep '^sudo=' /etc/omarchy-face/config)"
+# The proof that "inert" is a fact and not a claim: the helpers are still in the
+# stack, and both of them now refuse before they reach a camera.
+gate_out=$(rm -f "$STATE"; PAM_SERVICE=sudo PAM_USER="$ACCOUNT" "$GATE"; printf '%s' "$?")
+same "…the gate skips while the lines are still there" "0" "$gate_out"
+same "…giving the config as its reason" "face for sudo is off" \
+  "$(jq -r '.detail // ""' "$STATE" 2>/dev/null)"
+PAM_SERVICE=sudo PAM_USER="$ACCOUNT" "$VERIFY"
+same "…and the verifier refuses to authenticate anybody" "1" "$?"
+same "…which the status row calls broken, saying the lines do nothing" "broken" \
+  "$("$REPO/bin/omarchy-face-status" --json | jq -r '.rows[] | select(.id=="sudo") | .state')"
+check "…in those words" \
+  bash -c "\"$REPO/bin/omarchy-face-status\" --json |
+           jq -r '.rows[] | select(.id==\"sudo\") | .detail' | grep -q 'do nothing'"
 sed -i '/pam_permit.so/d' "$SUDO_PAM"
 "$ADMIN" sudo-off >/dev/null 2>&1
+
+# The same rule for the unwire path: taking Sudo off the last person writes the
+# config first, then edits the stack.
+"$ADMIN" sudo-on >/dev/null 2>&1
+sed -i '/^# omarchy-face end$/i auth  optional  pam_permit.so' "$SUDO_PAM"
+out=$("$ADMIN" set-permission "$ACCOUNT" sudo off 2>/dev/null)
+same "removing the last Sudo face reports the stack it could not edit" "failed" \
+  "$(jq -r '.unwired // "none"' <<<"$out")"
+same "…and still turned the feature off" "sudo=false" "$(grep '^sudo=' /etc/omarchy-face/config)"
+sed -i '/pam_permit.so/d' "$SUDO_PAM"
+"$ADMIN" sudo-off >/dev/null 2>&1
+"$ADMIN" set-permission "$ACCOUNT" sudo on >/dev/null 2>&1
+
+step "a block moved below the last auth line is not 'already wired'"
+# `success=1` jumps over the NEXT line in the stack. If the block is the last
+# thing in it, the gate's skip jumps past the end -- which is a failure after a
+# correct password, not a fall-through to it. Only root can move it there;
+# sudo-on must not look at such a file and call it done.
+cat >"$SUDO_PAM" <<'BOTTOM'
+#%PAM-1.0
+auth		include		system-auth
+account		include		system-auth
+session		include		system-auth
+# omarchy-face begin
+auth  [success=1 default=ignore]  pam_exec.so seteuid quiet /usr/local/bin/omarchy-face-gate
+auth  sufficient                  pam_exec.so seteuid quiet /usr/local/bin/omarchy-face-verify
+# omarchy-face end
+BOTTOM
+sed -i 's/^sudo=true/sudo=false/' /etc/omarchy-face/config
+out=$("$ADMIN" sudo-on 2>/dev/null)
+same "sudo-on refuses a block with no auth line after it" "pam_edit_failed" \
+  "$(jq -r '.error // "none"' <<<"$out")"
+cp /mnt/pam.d/sudo "$SUDO_PAM"
+chmod 0644 "$SUDO_PAM"
 
 step "the status row reads the wiring back (plan-engine.md §10.1)"
 row() { "$REPO/bin/omarchy-face-status" --json | jq -r ".rows[] | select(.id==\"sudo\") | .$1"; }
@@ -475,6 +534,19 @@ gate_case "root is never authenticated by face" 0 "root is never authenticated b
 gate_case "a stack with no PAM_USER at all is skipped" 0 "face is not set up for this user" PAM_USER=
 gate_case "a remote session is skipped" 0 "remote session from elsewhere.example" PAM_RHOST=elsewhere.example
 gate_case "localhost is not remote" 1 "" PAM_RHOST=localhost
+# `Defaults pam_rhost` makes sudo set PAM_RHOST for LOCAL sessions too, to this
+# host's own name. Without this, turning that flag on would silently stop face
+# working and leave no clue why.
+gate_case "…and neither is this machine's own name" 1 "" \
+  "PAM_RHOST=$(cat /proc/sys/kernel/hostname)"
+gate_case "…including its fully qualified form" 1 "" \
+  "PAM_RHOST=$(cat /proc/sys/kernel/hostname).local"
+
+# `Defaults targetpw` makes PAM_USER the TARGET user, so a second local account
+# allowed to `sudo -u <owner>` would otherwise spend the owner's face.
+gate_case "sudo run by somebody else is skipped, whatever PAM_USER says" 0 \
+  "sudo was run by intruder, not by $ACCOUNT" PAM_RUSER=intruder
+gate_case "…and the owner's own PAM_RUSER is fine" 1 "" "PAM_RUSER=$ACCOUNT"
 
 printf '/dev/null\n' >"$STUB/camera"
 gate_case "a camera somebody else is streaming is skipped" 0 "the infrared camera is in use"
@@ -515,6 +587,34 @@ if compgen -G '/proc/acpi/button/lid/*/state' >/dev/null; then
 else
   note "no /proc/acpi/button/lid on this machine: the lid check cannot be exercised here"
 fi
+
+step "a ceiling on how often the camera can be spent (§4.2 check 6a)"
+# The per-call marker bounds a password retry loop and nothing else: `sudo -n` in
+# a loop is a new process every time, never prompts and prints nothing. Six
+# attempts a minute is the ceiling; the seventh is skipped whoever asks.
+now=$(date +%s)
+: >/run/omarchy-face/sudo-attempts
+for _ in 1 2 3 4 5; do printf '%s\n' "$now" >>/run/omarchy-face/sudo-attempts; done
+gate_case "five attempts in the last minute still allows one more" 1 ""
+printf '%s\n' "$now" >>/run/omarchy-face/sudo-attempts
+gate_case "the seventh in a minute is refused" 0 \
+  "face has already been asked 6 times in the last 60s"
+# Old attempts do not count: the window rolls.
+printf '%s\n%s\n%s\n%s\n%s\n%s\n' $((now - 300)) $((now - 300)) $((now - 300)) \
+  $((now - 300)) $((now - 300)) $((now - 300)) >/run/omarchy-face/sudo-attempts
+gate_case "…and attempts from five minutes ago do not count" 1 ""
+: >/run/omarchy-face/sudo-attempts
+
+# The verifier is what fills it, and it does so before it runs the engine: an
+# attempt that was started and killed fired the emitter just the same.
+rm -f /run/omarchy-face/sudo-attempts
+rm -rf /run/omarchy-face/attempts
+PAM_SERVICE=sudo PAM_USER="$ACCOUNT" "$VERIFY" >/dev/null 2>&1
+same "one verifier run writes one line to the ceiling's log" "1" \
+  "$(wc -l </run/omarchy-face/sudo-attempts 2>/dev/null || printf 0)"
+check "…and it is root-only" \
+  bash -c "[[ \$(stat -c '%U %a' /run/omarchy-face/sudo-attempts) == 'root 600' ]]"
+: >/run/omarchy-face/sudo-attempts
 
 step "the gate never writes to stdout or stderr (§4.2)"
 out=$(PAM_SERVICE=sudo PAM_USER="$ACCOUNT" "$GATE" 2>&1)
@@ -610,6 +710,7 @@ stub_compare ok
 verify_case "a stack that is not sudo is never authenticated" 1 PAM_SERVICE=polkit-1
 verify_case "a user who is not the account is never authenticated" 1 PAM_USER=somebodyelse
 verify_case "root is never authenticated" 1 PAM_USER=root
+verify_case "sudo run by somebody else is never authenticated" 1 PAM_RUSER=intruder
 stub_compare timeout
 verify_case "an engine that gives up does not authenticate" 1
 stub_compare silent
@@ -673,6 +774,9 @@ same "sudo --user root id" "id" "$(parser sudo --user root id)"
 same "sudo /usr/bin/pacman (basename only)" "pacman" "$(parser sudo /usr/bin/pacman -Syu)"
 same "sudo -p 'a prompt' systemctl" "systemctl" "$(parser sudo -p "Password for %p: " systemctl restart foo)"
 same "sudo -T 30 -g wheel bash" "bash" "$(parser sudo -T 30 -g wheel bash)"
+same "sudo -R /chroot pacman" "pacman" "$(parser sudo -R /chroot pacman)"
+same "sudo -a myauth id" "id" "$(parser sudo -a myauth id)"
+same "sudo --chroot /somewhere ls" "ls" "$(parser sudo --chroot /somewhere ls)"
 # A command name is another program's data by the time it reaches a JSON
 # document and a journal line.
 same "a name with control characters in it is stripped" "rm" "$(parser sudo "$(printf 'rm\001\002')")"

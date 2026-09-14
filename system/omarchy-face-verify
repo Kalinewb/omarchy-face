@@ -18,19 +18,26 @@
 
 set -u
 unset IFS BASH_ENV ENV CDPATH
-PATH=/usr/local/bin:/usr/bin
+# /usr/bin first, for the reason the gate gives: both directories are root's, and
+# the distribution's own tools should win every name in a file that runs as root
+# from an auth stack.
+PATH=/usr/bin:/usr/local/bin
 umask 077
 
 # The engine is run through `env -i`, for the reason the gate states: nothing
 # inherited steers a decision made as root. The three variables are what howdy's
 # compare.py needs and no more (the admin helper's engine_env() is the same set;
 # SUDO_USER is only there for cli.py, which this file never runs).
-CLEAN_ENV=(env -i PATH=/usr/local/bin:/usr/bin HOME=/root LC_ALL=C PYTHONDONTWRITEBYTECODE=1)
+CLEAN_ENV=(env -i PATH=/usr/bin:/usr/local/bin HOME=/root LC_ALL=C PYTHONDONTWRITEBYTECODE=1)
 
 CONFIG_FILE=/etc/omarchy-face/config
 RUN_DIR=/run/omarchy-face
 STATE_FILE=$RUN_DIR/state.json
 ATTEMPTS_DIR=$RUN_DIR/attempts
+# The cross-call ceiling the gate enforces (its check 6a). This file is what
+# writes to it: one line per attempt that actually reached the engine.
+ATTEMPT_LOG=$RUN_DIR/sudo-attempts
+ATTEMPT_LOG_KEEP=40
 CAMERA_LOCK=$RUN_DIR/camera.lock
 HOWDY_DIR=/usr/lib/security/howdy
 MODELS=$HOWDY_DIR/models
@@ -62,6 +69,16 @@ json_safe() { # json_safe <text> [width]
   printf '%s' "$1" | tr -d '\\"' | tr -cd '\040-\176' | cut -c1-"${2:-32}"
 }
 
+# Milliseconds, or 0 -- never an empty string. `at` is a NUMBER in the document,
+# so a date(1) that failed would hand the GUI a file it cannot parse for the whole
+# of the next authentication.
+now_ms() {
+  local value
+  value=$(date +%s%3N 2>/dev/null)
+  [[ $value =~ ^[0-9]+$ ]] || value=0
+  printf '%s' "$value"
+}
+
 # --- who asked (plan-merged.md §2.6, plan-engine.md §4.3 step 3) --------------
 #
 # Under pam_exec this helper's parent IS sudo, so /proc/$PPID/comm would say
@@ -75,8 +92,9 @@ json_safe() { # json_safe <text> [width]
 # The first non-option word of sudo's own argv, basename only.
 #
 # The rule reads options the way sudo's getopt does: a word starting with `-`
-# is an option; the ten short options -u -g -h -p -C -D -r -t -T -U take an
-# argument, and so do their long spellings; an argument attached to its option
+# is an option; the twelve short options that take an argument are
+# -a -u -g -h -p -C -D -R -r -t -T -U, and so do their long spellings; an
+# argument attached to its option
 # (`-uroot`, `--user=root`) is already consumed. A short cluster is read letter
 # by letter and stops at the first one that takes an argument: everything after
 # that letter IS the argument, and only when there is nothing after it does the
@@ -103,7 +121,8 @@ sudo_command_from() { # sudo_command_from <cmdline file>
       if [[ $word == --* ]]; then
         opt=${word#--}
         case $opt in
-          user | group | host | prompt | close-from | chdir | role | type | command-timeout | other-user)
+          user | group | host | prompt | close-from | chdir | chroot | role | type | \
+          command-timeout | other-user | auth-type)
             skip_next=1 ;;
         esac
         continue
@@ -111,7 +130,7 @@ sudo_command_from() { # sudo_command_from <cmdline file>
       letters=${word#-}
       count=${#letters}
       for ((index = 0; index < count; index++)); do
-        [[ ${letters:index:1} == [ughpCDrtTU] ]] || continue
+        [[ ${letters:index:1} == [aughpCDRrtTU] ]] || continue
         ((index == count - 1)) && skip_next=1
         break
       done
@@ -177,7 +196,7 @@ state_write() { # state_write <state> <person> <detail>
   tmp=$(mktemp "$RUN_DIR/.state.XXXXXX" 2>/dev/null) || return 0
   printf '{"state":"%s","service":"sudo","requester":%s,"person":"%s","detail":"%s","at":%s}\n' \
     "$(json_safe "$state")" "$requester_json" "$(json_safe "$person")" \
-    "$(json_safe "$detail" 64)" "$(date +%s%3N)" >"$tmp" 2>/dev/null
+    "$(json_safe "$detail" 64)" "$(now_ms)" >"$tmp" 2>/dev/null
   chmod 0644 "$tmp" 2>/dev/null
   mv -f "$tmp" "$STATE_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   return 0
@@ -217,6 +236,27 @@ clear_attempt() {
   return 0
 }
 
+# One line per attempt that actually reached the engine, which is what the gate's
+# cross-call ceiling counts (its check 6a). Written whatever the answer turns out
+# to be: the thing being bounded is how often the IR emitter fires, and a match
+# costs exactly as much of that as a miss.
+#
+# Pruned to the last few, because /run is memory and this file has no other
+# reader: the gate only ever asks about the last minute.
+record_attempt() {
+  local now kept
+  now=$(date +%s 2>/dev/null)
+  [[ $now =~ ^[0-9]+$ ]] || return 0
+  [[ -e $ATTEMPT_LOG ]] || (umask 077; : >"$ATTEMPT_LOG") 2>/dev/null
+  chmod 0600 "$ATTEMPT_LOG" 2>/dev/null
+  printf '%s\n' "$now" >>"$ATTEMPT_LOG" 2>/dev/null
+  if [[ $(wc -l <"$ATTEMPT_LOG" 2>/dev/null || printf 0) -gt $((ATTEMPT_LOG_KEEP * 2)) ]]; then
+    kept=$(tail -n "$ATTEMPT_LOG_KEEP" "$ATTEMPT_LOG" 2>/dev/null)
+    printf '%s\n' "$kept" >"$ATTEMPT_LOG" 2>/dev/null
+  fi
+  return 0
+}
+
 # --- step 1: the gate's cheap checks, re-asserted ------------------------------
 #
 # A stack that somehow carries this line without its gate -- a hand edit, a copy
@@ -232,6 +272,12 @@ account=$(config_get account)
 [[ -n $account ]] || exit 1
 [[ ${PAM_USER:-} == "$account" ]] || exit 1
 [[ ${PAM_USER:-} != root ]] || exit 1
+# Who RAN sudo, where sudo says so. Under `Defaults targetpw` PAM_USER is the
+# target user rather than the invoker, and then a second local account allowed to
+# `sudo -u <owner>` would be authenticated by the owner's face. An unset
+# PAM_RUSER proves nothing and is accepted; one that disagrees is refused (the
+# gate's check 3a, made again here so the line is safe without it).
+[[ -z ${PAM_RUSER:-} || ${PAM_RUSER:-} == "$account" ]] || exit 1
 # The account name becomes part of a path and of the engine's argv. It was
 # written by root, and it is still checked: a config that says something else is
 # a config that has been edited.
@@ -282,6 +328,12 @@ for_whom="for ${command_name:-no command}"
 state_write start "" "looking"
 
 # --- step 4: the engine --------------------------------------------------------
+
+# Recorded BEFORE the engine runs, not after. The ceiling exists to bound how
+# often the IR emitter fires, and an attempt that was started and then killed
+# fired it just the same; counting it afterwards would let a loop that kills its
+# own sudo mid-check spend the camera without ever being counted.
+record_attempt
 
 out=$("${CLEAN_ENV[@]}" timeout -k 2 "$COMPARE_SECONDS" \
   python3 "$HOWDY_DIR/compare.py" "$MODEL" 2>/dev/null)

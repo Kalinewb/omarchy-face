@@ -36,6 +36,15 @@ Item {
   // more than this does, so it stands down while either is up (§6.2).
   property bool suppressed: false
 
+  // …but it does not stay quiet about it. Any process running as this account can
+  // open a recording card over IPC, and a person looking into the lens for a
+  // countdown is a person not reading anything else -- so a `sudo` that lands
+  // during one would have been the one authentication nothing on screen mentioned.
+  // The card is handed this line instead (Service.qml), which is the same
+  // information in the one place the person is already looking.
+  property string suppressedNotice: ""
+  function clearSuppressedNotice() { root.suppressedNotice = "" }
+
   // Development only, and the same variable the panel uses: the state file and
   // people.json both move to a fixture directory, because nothing unprivileged
   // can write the real ones.
@@ -122,6 +131,14 @@ Item {
     root.requesterFrom = String(requester.from || "")
 
     if (!root.serviceShown) { safety.stop(); dismiss.stop(); root.showing = false; return }
+
+    // Suppressed, but not silent (see suppressedNotice above). Only for the
+    // states that mean something happened; `skipped` is nothing to report.
+    if (root.suppressed && root.authState !== "skipped") {
+      root.suppressedNotice = (root.service === "sudo" ? "sudo" : "A face check")
+        + (root.requesterCommand !== "" ? " · " + root.requesterCommand : "")
+        + " asked while this was open"
+    }
 
     if (root.authState === "start") {
       dismiss.stop()

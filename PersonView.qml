@@ -113,12 +113,13 @@ Column {
       // (plan-merged.md §2.3).
       if (result.parsed && result.parsed.unwired === "sudo")
         view.note = "Nobody has Sudo now, so sudo asks for passwords only."
-      // The same call, when the PAM edit itself was refused: the permission is
-      // gone but the stack still points at Face's helpers, and only the person
-      // in front of it can decide what to do about that.
+      // The same call, when the PAM edit itself was refused. The setting is off
+      // either way -- the engine writes that first, precisely so this case is not
+      // a machine still asking the camera -- so what is left is lines that do
+      // nothing, and somebody with a root editor is who removes them.
       else if (result.parsed && result.parsed.unwired === "failed")
-        view.note = "Nobody has Sudo now, but /etc/pam.d/sudo could not be changed back. " +
-                    "Turn Face for sudo off in Settings."
+        view.note = "Nobody has Sudo now and no face is tried, but Face's lines are still in " +
+                    "/etc/pam.d/sudo: they are not the ones Face wrote, so it left them alone."
     })
   }
 
@@ -141,12 +142,13 @@ Column {
       if (!result.ok) { view.note = view.outcomeText(result); return }
       if (result.parsed && result.parsed.unwired === "sudo")
         view.note = "Nobody has Sudo now, so sudo asks for passwords only."
-      // The same call, when the PAM edit itself was refused: the permission is
-      // gone but the stack still points at Face's helpers, and only the person
-      // in front of it can decide what to do about that.
+      // The same call, when the PAM edit itself was refused. The setting is off
+      // either way -- the engine writes that first, precisely so this case is not
+      // a machine still asking the camera -- so what is left is lines that do
+      // nothing, and somebody with a root editor is who removes them.
       else if (result.parsed && result.parsed.unwired === "failed")
-        view.note = "Nobody has Sudo now, but /etc/pam.d/sudo could not be changed back. " +
-                    "Turn Face for sudo off in Settings."
+        view.note = "Nobody has Sudo now and no face is tried, but Face's lines are still in " +
+                    "/etc/pam.d/sudo: they are not the ones Face wrote, so it left them alone."
     })
   }
 

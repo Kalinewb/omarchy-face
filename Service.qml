@@ -109,10 +109,15 @@ Item {
       root.closeCard()
       if (saved) root.openPerson(who)
     })
+    // A card opening starts with nothing to report; from then on the indicator's
+    // suppressed line is the card's, live, so a sudo that lands mid-countdown
+    // says so on the surface the person is actually looking at.
+    indicator.clearSuppressedNotice()
     root.card = cardComponent.createObject(root, {
       session: root.session,
       previewDevice: root.previewDevice,
-      appearanceLabels: root.appearanceLabels
+      appearanceLabels: root.appearanceLabels,
+      notice: Qt.binding(function () { return indicator.suppressedNotice })
     })
     if (!root.card) {
       root.closeCard()
@@ -191,7 +196,8 @@ Item {
           service: indicator.service,
           person: indicator.person,
           headline: indicator.headline,
-          detail: indicator.detail
+          detail: indicator.detail,
+          suppressedNotice: indicator.suppressedNotice
         },
         card: root.card ? {
           name: root.cardName,

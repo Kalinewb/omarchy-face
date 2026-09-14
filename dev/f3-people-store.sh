@@ -514,10 +514,15 @@ check "…the block is gone from /etc/pam.d/sudo" bash -c "! grep -q omarchy-fac
 same "…and the config says so" "sudo=false" "$(grep '^sudo=' /etc/omarchy-face/config)"
 check "…and the sudo set was deleted" test ! -e "$MODELS/omarchy-face.sudo.$ACCOUNT.dat"
 
-# And the same rule when the edit cannot be made. A block holding a line Face
-# did not write is refused by pam_remove_block, which leaves the file exactly as
-# it was -- so the caller must say so rather than claim an unwire and write
-# sudo=false over a stack that still runs the verifier.
+# And the same rule when the edit cannot be made. A block holding a line Face did
+# not write is refused by pam_remove_block, which leaves the file exactly as it
+# was -- so the caller says so rather than claiming an unwire it did not make.
+#
+# What it must NOT do is stop there. The config is written FIRST (phase 5's
+# security review), because both PAM helpers read `sudo` from it before anything
+# else: that write is what makes the leftover lines inert, and a verb that gave
+# up before it would leave a machine asking the camera on every sudo while the
+# GUI said the feature was off.
 printf 'account=%s\nsudo=true\nlock=false\n' "$ACCOUNT" >/etc/omarchy-face/config
 "$ADMIN" set-permission "$ACCOUNT" sudo on >/dev/null 2>&1
 FACE_FN=pam_insert_block FACE_ARG=/etc/pam.d/sudo FACE_ADMIN=$ADMIN bash -c '
@@ -530,7 +535,8 @@ same "a refused PAM edit is reported, not swallowed" "pam_edit_failed" \
   "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("error"))' "$out")"
 same "…and the unwire is never claimed" "failed" \
   "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("unwired"))' "$out")"
-same "…so the config still says sudo is on" "sudo=true" "$(grep '^sudo=' /etc/omarchy-face/config)"
+same "…but the feature is off, which is what makes the leftover lines inert" "sudo=false" \
+  "$(grep '^sudo=' /etc/omarchy-face/config)"
 check "…and the stack is untouched" grep -q '^auth  required  pam_permit.so$' /etc/pam.d/sudo
 # Back to the stack and the config the rest of the run expects.
 sed -i '/^auth  required  pam_permit.so$/d' /etc/pam.d/sudo

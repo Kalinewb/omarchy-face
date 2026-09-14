@@ -308,13 +308,49 @@ things this phase is really for:
   driven directly over eleven argv shapes, including the two a "last letter
   decides" rule gets wrong (`-Hu root` and `-uroot`).
 
-`logger` is stood in for in `/usr/local/bin` — first in the helpers' pinned
-`PATH` — because the attribution line in the journal is one of the things this
-phase is for, and a namespace has no journal to read it back from.
+It also holds the two rules the phase-5 security review turned into invariants:
+**`sudo-off` writes the config before it edits the file** (both helpers read
+`sudo` from the config before anything else, so that write — not the edit — is
+what makes them inert, and a refused edit must not leave the camera live while
+the GUI says the feature is off), and **the camera has a ceiling**: six attempts
+a minute across separate `sudo` calls, because the per-call marker cannot bound a
+`sudo -n` loop.
+
+`logger` is stood in for by a **bind mount over `/usr/bin/logger`**, because the
+helpers pin `PATH=/usr/bin:/usr/local/bin` — the distribution's tools win every
+name — so a stand-in in `/usr/local/bin` would never be reached.
 
 **What it cannot prove, and what needs a person:** that `sudo` itself runs these
 lines, that `pam_exec … seteuid` hands them root, and that the card appears while
 the password prompt is up. Those need a live `sudo` and a face.
+
+## F4b — what libpam does with Face's two lines
+
+```sh
+./dev/f4b-pam-semantics.sh
+```
+
+Everything else in phase 5 tests Face's code. This tests the sentence the design
+rests on, against the libpam that is **installed**: `success=1` is a jump, and
+`pam.conf(5)`'s "the next N modules are skipped" is a sentence about the common
+case rather than a specification of the edges. It builds throwaway services out
+of `pam_exec`, `pam_permit` and `pam_deny` in the sandbox's copy of `/etc/pam.d`
+and calls `pam_authenticate` through `ctypes` (`dev/pam-probe.py`), then reads
+back both the result and which modules ran.
+
+Five behaviours, each one a thing sudo must keep doing: a gate that skips jumps
+over the verifier and lands on the password; a matched face ends the chain; a
+face that does not match falls through; and a gate or a verifier that **cannot be
+executed at all** is ignored rather than fatal — which is what `chmod 000` on a
+helper is supposed to cost somebody.
+
+The sixth is the hazard `pam_block_intact`'s position check exists for: a block
+moved below the last `auth` line, so the gate's jump runs off the end of the
+chain. On pam 1.7.2 the dispatcher carries the status the chain had already
+reached — success stays success, failure stays failure — so it is survivable,
+and **not** a way to turn a wrong password into an acceptance. The check stays
+anyway: nothing in `pam.conf(5)` promises that, and this suite is what will say
+so if an update changes it.
 
 ## G5 — the indicator and the sudo switch
 
@@ -335,6 +371,12 @@ against `people.json`'s label, the 10 s stale filter, the 12 s safety timer,
 `skipped` and `lock` drawing nothing, standing down while the recording card is
 up, and the Settings switch calling exactly `sudo-on`/`sudo-off` with the pending
 value snapping back when the verb answers.
+
+Standing down is not the same as saying nothing: any process running as this
+account can open a recording card over IPC, and somebody looking into the lens
+for a countdown is somebody not reading anything else. So a `sudo` that lands
+while the card is up hands its line to the card instead, which the suite checks
+both ways — a real check reports, a `skipped` one does not interrupt.
 
 Three things in it are asserted as *text* rather than exercised, because an
 offscreen runtime has no compositor to ask: the built-in screen filter

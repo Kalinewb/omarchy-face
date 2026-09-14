@@ -32,6 +32,7 @@ ShellRoot {
     rootObj.log("person", indicator.person)
     rootObj.log("headline", indicator.headline)
     rootObj.log("detail", indicator.detail)
+    rootObj.log("suppressedNotice", indicator.suppressedNotice)
   }
 
   FaceCommon.Ask {

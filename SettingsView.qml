@@ -44,7 +44,13 @@ Column {
 
   readonly property bool sudoOn: view.pendingSudo !== null ? view.pendingSudo : view.config.sudo === true
 
-  function outcomeText(result) {
+  // `requested` is the value the switch was moved TO, not the value the config
+  // has now: the status document is re-read asynchronously, so at the moment
+  // this runs `config.sudo` is still whatever it was before the verb. The
+  // difference matters for one code -- a refused PAM edit after `sudo-off`
+  // leaves the feature off and the lines in place, which is a different sentence
+  // from a refused `sudo-on`, which changed nothing at all.
+  function outcomeText(result, requested) {
     if (result.outcome === "owner_declined") return "Not authorised."
     if (result.outcome === "missing") return "Face's system files are not installed."
     if (result.outcome === "busy") return "Face is busy — try again in a moment."
@@ -53,8 +59,15 @@ Column {
     if (code === "helper_unsafe")
       return "Face's own helpers in /usr/local/bin are not owned by root, or can be written by " +
              "somebody else — sudo will not be pointed at them."
+    // After a sudo-off, this means the setting was written and the lines were
+    // not: the feature is off either way, which is what the message has to say
+    // first. (sudo-on's own pam_edit_failed changed nothing at all.)
     if (code === "pam_edit_failed")
-      return "/etc/pam.d/sudo is not the shape Face wrote, so it was left exactly as it is."
+      return requested
+        ? "/etc/pam.d/sudo is not the shape Face wrote, so it was left exactly as it is."
+        : "Face for sudo is off and no face will be tried — but its lines are still in "
+          + "/etc/pam.d/sudo, because they are not the ones Face wrote and it will not delete "
+          + "somebody else's."
     if (code === "config_write_failed")
       return "Face could not write its own configuration, so nothing was changed."
     if (code === "store_corrupt") return "Face's people store is damaged and nothing was changed."
@@ -74,7 +87,7 @@ Column {
     panel.ask.ask(panel.ask.adminArgv([value ? "sudo-on" : "sudo-off"]), "", function (result) {
       view.busy = ""
       view.pendingSudo = null
-      view.note = result.ok ? "" : view.outcomeText(result)
+      view.note = result.ok ? "" : view.outcomeText(result, value)
       // The switch shows `config.sudo` again the moment this lands, so the
       // status document is what it snaps back to -- not a value this view kept.
       panel.reloadWatched()
@@ -120,16 +133,25 @@ Column {
     wrapMode: Text.WordWrap
   }
 
-  // The sudo row going `broken` means the config and /etc/pam.d/sudo disagree.
+  // The sudo row going `broken` means /etc/pam.d/sudo is not what Face wrote.
   // It is shown here, where the switch is, because this page is where somebody
-  // would come to put it right -- and turning the switch off is what does that.
+  // would come to put it right.
+  //
+  // Two states, and they are not equally bad -- the engine's detail already says
+  // which, so this only adds what to do about it. With the switch OFF, both
+  // helpers read the setting before anything else and hand straight back to the
+  // password prompt, so the leftover lines do nothing; with it ON, they may well
+  // run. Saying "turning this off fixes it" in both cases would be a promise
+  // this switch cannot keep in the first one.
   Text {
     textFormat: Text.PlainText
     width: parent.width
     visible: view.sudoRowState === "broken"
     leftPadding: Style.space(6)
-    text: "Face's sudo setting and /etc/pam.d/sudo do not agree: " + view.sudoDetail
-          + ". Turning this off puts sudo back to passwords only."
+    text: view.sudoDetail + (view.sudoOn
+          ? " Turning this off stops any face being tried, whether or not the lines can be removed."
+          : " Nothing is tried while this is off. Removing the lines needs somebody who can edit "
+            + "/etc/pam.d/sudo as root — Face will not touch a block it did not write.")
     color: Color.urgent
     font.family: view.fontFamily
     font.pixelSize: Style.font.caption

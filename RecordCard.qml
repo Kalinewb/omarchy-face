@@ -29,6 +29,12 @@ PanelWindow {
   // person view.
   property var appearanceLabels: ["No glasses", "Everyday glasses", "Reading glasses"]
 
+  // Something asked for root while this card was up. The indicator stands down
+  // for this card (it would be two cards in one place), so its line arrives here
+  // instead: a person staring into the lens for a countdown must not be the one
+  // person who never hears that a sudo happened (Indicator.qml).
+  property string notice: ""
+
   signal closed()
 
   readonly property color onScrim: "white"
@@ -287,6 +293,20 @@ PanelWindow {
           font.family: card.fontFamily
           font.pixelSize: Style.font.caption
           horizontalAlignment: Text.AlignHCenter
+        }
+
+        // Not an error and not part of the session: something else asked for
+        // root while this was open, and this is the only surface that can say so.
+        Text {
+          textFormat: Text.PlainText
+          width: parent.width
+          visible: card.notice !== ""
+          text: card.notice
+          color: Color.accent
+          font.family: card.fontFamily
+          font.pixelSize: Style.font.caption
+          horizontalAlignment: Text.AlignHCenter
+          wrapMode: Text.WordWrap
         }
       }
     }

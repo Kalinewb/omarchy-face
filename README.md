@@ -4,21 +4,29 @@ Look at your laptop instead of typing your password into `sudo` — for you, and
 for the people you choose.
 
 > **Being rewritten.** This branch is a ground-up rewrite against a fresh plan,
-> built phase by phase, and **it does not authenticate anything yet**. No PAM
-> stack is edited. Setup can now install Face's system files and take them off
+> built phase by phase. Setup can install Face's system files and take them off
 > again, and build the face engine: howdy and a CPU-only dlib, compiled **from
 > the Arch User Repository** — at two pinned revisions, by a user systemd invents
 > for the job, and installed with `pacman`, which runs a package's install
-> scriptlet as root — in a unit that survives the popup being closed. The helpers
-> it installs are in their safe state — the sudo gate always skips, the verifier
-> never authenticates, and the daemon answers nothing.
+> scriptlet as root — in a unit that survives the popup being closed.
 >
-> Faces **can** now be recorded: People and Person, one owner prompt per
-> recording session, up to three appearances each, per-person Sudo and Lock
-> screen permissions. Nothing acts on them yet — the sudo stack is untouched
-> until the phase that wires it, and the owner cannot be removed. Display names
-> are world-readable in `/var/lib/omarchy-face/people.json`; the faces themselves
-> are not, and never leave root's files.
+> Faces can be recorded: People and Person, one owner prompt per recording
+> session, up to three appearances each, per-person Sudo and Lock screen
+> permissions. Display names are world-readable in
+> `/var/lib/omarchy-face/people.json`; the faces themselves are not, and never
+> leave root's files.
+>
+> **`sudo` can now be answered by a face.** Settings → *Face for sudo* adds four
+> marked lines to `/etc/pam.d/sudo` and takes them out again; nothing else in that
+> file is touched, and turning the switch off is what makes the check stop,
+> whether or not the lines can be removed. The lock screen is still untouched.
+>
+> **What the card on screen is, and is not.** When something asks for root, a card
+> appears under the camera saying a check is happening and naming what asked.
+> Treat it as *a check is happening*, not as proof of who asked: the command comes
+> from `sudo`'s own argument list, but the "from" part is a process name any
+> program running as you can set to anything it likes. It is there so that a
+> prompt you did not expect is visible, not as a thing to authorise against.
 >
 > The README this file will become — what it is for, how it works, the limits,
 > what to do when something goes wrong, and the contract with the Profiles
@@ -30,9 +38,10 @@ for the people you choose.
 |---|---|
 | `manifest.json` | `bar-widget` + `service`, nothing else |
 | `FacePanel.qml` | the bar button, its five states, the view stack, the status document |
-| `Service.qml` | the `keepLoaded` service: the recording card, and the home of everything that must outlive a plugin reload |
+| `Service.qml` | the `keepLoaded` service: the recording card, the indicator, and the home of everything that must outlive a plugin reload |
 | `SetupView.qml` … `RemoveView.qml` | one view each |
 | `RecordSession.qml`, `RecordCard.qml` | one `enroll-session`: the state machine, and the card on screen |
+| `Indicator.qml` | the card that appears while a face is being checked, and what asked |
 | `common/Ask.qml` | every call to the engine: `ask()` and `stream()`, and what the exit codes mean |
 | `common/names.js` | the name Profiles binds to, derived from the display name |
 | `bin/omarchy-face-status` | the read half of the contract: one JSON document, no privilege, always exit 0 |

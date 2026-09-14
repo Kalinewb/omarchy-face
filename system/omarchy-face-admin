@@ -561,7 +561,15 @@ pam_block_intact() { # pam_block_intact <file>
   # Exactly four lines of ours, nowhere else in the file.
   [[ $(grep -c 'omarchy-face' "$file") == 4 ]] || return 1
   body=$(sed -n "$((begin + 1)),$((end - 1))p" "$file")
-  [[ $body == "$PAM_GATE_LINE"$'\n'"$PAM_VERIFY_LINE" ]]
+  [[ $body == "$PAM_GATE_LINE"$'\n'"$PAM_VERIFY_LINE" ]] || return 1
+  # And an auth line of somebody else's has to FOLLOW it. `success=1` is a jump
+  # over the next line in the stack; if the block is the last thing in it, the
+  # gate's skip jumps past the end -- and a jump past the end of an auth chain is
+  # not "carry on to the password", it is a failure after one. Only root can move
+  # the block there, and the check costs one grep: `sudo-on` is not allowed to
+  # call such a file "already wired" and leave it.
+  tail -n +"$((end + 1))" "$file" | grep -qE '^[[:space:]]*auth[[:space:]]' || return 1
+  return 0
 }
 
 # Insert Face's block above the first auth line of one PAM stack (§4.1).
@@ -2165,22 +2173,28 @@ name_rule_ok() { [[ $1 =~ ^[a-z][a-z0-9-]{0,23}$ ]]; }
 # machine where `sudo=false` (every machine until then) the caller does not call
 # it at all.
 #
-# 0 unwired · 1 the PAM edit was refused, and the config still says sudo is on.
-# The status is the whole point: pam_remove_block returns 1 when the block is
-# not the shape we wrote, and leaves the file exactly as it was -- so a caller
-# that ignored it would write `sudo=false` and report `"unwired":"sudo"` while
-# /etc/pam.d/sudo still ran the verifier. (2 is "there was nothing of ours in
-# it", which is not a failure: the stack is already what the config is about to
-# say it is.)
+# 0 unwired · 1 the lines are still in the file, but they no longer do anything.
+#
+# **The config goes first, and that order is the whole of it.** Both helpers read
+# `sudo` from the config before they do anything else (§4.2 check 2, §4.3 step
+# 1), so writing `sudo=false` is what makes them inert -- not deleting the lines.
+# Deleting first and writing second has a failure in the middle of it: a block
+# somebody edited by hand makes pam_remove_block refuse, and a caller that gave
+# up there would leave `sudo=true` behind, which is a machine still asking the
+# camera on every sudo while its Settings page says the feature is off. Written
+# this way round, the refusal costs a stale block in a file and nothing else: the
+# gate skips at the config check, the verifier exits 1, and the `sudo` row says
+# so. (pam_remove_block's 2 is "there was nothing of ours in it", which is not a
+# failure -- the stack is already what the config now says it is.)
 unwire_sudo() {
   local status
+  config_set sudo false
   pam_remove_block "$PAM_DIR/sudo"
   status=$?
   if ((status == 1)); then
-    audit "sudo could NOT be unwired: $PAM_DIR/sudo is not the shape face wrote"
+    audit "sudo is off, but $PAM_DIR/sudo is not the shape face wrote and its lines are still there (they do nothing now)"
     return 1
   fi
-  config_set sudo false
   audit "sudo unwired: no face can approve sudo any more"
   return 0
 }
@@ -2899,17 +2913,28 @@ case $verb in
       store_py regenerate >/dev/null 2>&1 || true
     fi
 
+    # The config FIRST. It is what both helpers read before they do anything
+    # else, so this line -- not the edit below -- is what turns the feature off.
+    # The order matters because the edit can refuse: a block somebody has changed
+    # by hand is not ours to delete, and an "always allowed" verb that died there
+    # before writing the config would leave a machine asking the camera on every
+    # sudo while the page that offered the switch says it is off.
+    config_set sudo false || die "config_write_failed"
+
     # 0 removed · 2 there was nothing of ours in it (already off) · 1 refused,
-    # and the file is exactly as it was. The status is the whole point: writing
-    # `sudo=false` over a stack that still runs the verifier would report a
-    # machine as safe while every sudo still opened the camera.
+    # and the file is exactly as it was. A refusal is still an error -- the lines
+    # are still in the stack and somebody has to look at them -- but they are
+    # inert lines now: the gate skips at the config check and the verifier exits
+    # 1 without ever reaching a camera.
     pam_remove_block "$PAM_DIR/sudo"
     case $? in
       0 | 2) ;;
-      *) die "pam_edit_failed" ;;
+      *)
+        audit "sudo is off, but its lines could not be removed from $PAM_DIR/sudo (they do nothing now)"
+        die "pam_edit_failed"
+        ;;
     esac
 
-    config_set sudo false || die "config_write_failed"
     audit "sudo unwired from face by uid ${caller_uid:-0}"
     printf '{"ok":true}\n'
     exit 0
