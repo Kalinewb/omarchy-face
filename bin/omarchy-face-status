@@ -360,8 +360,8 @@ fi
 #
 # Each is answered from what is on disk, which before its phase is nothing.
 # `engine` and `install-job` are real from phase 3; `people`, `sudo` and `lock`
-# offer no Fix yet, because the verbs behind them answer not_implemented until
-# F3 (people), F4 (sudo) and F6 (lock).
+# offer no Fix before their own phase, because a `fixable` row whose verb answers
+# not_implemented is a button that lies.
 
 engine_installed=false
 howdy_version=""
@@ -525,17 +525,69 @@ else
   add_row polkit-1 "polkit" ok "no face line in /etc/pam.d/polkit-1" false ""
 fi
 
-# The lock row renders when the feature is on, OR the wrapper is not staged, OR
-# the wrapper said `failed` (§10.1: the two repairable failures both leave
-# config lock=false, so keying on that alone hides the row with its own fix on
-# it). F6 adds `omarchy-face-lock status --json`; until the wrapper exists at
-# all, "not staged" is the whole truth.
+# --- row: lock ---------------------------------------------------------------
+#
+# The row renders when the feature is on, OR the wrapper is not staged, OR the
+# wrapper said `failed` (§10.1: both repairable failures leave config lock=false,
+# so keying on that alone would hide the row with its own fix on it). Everything
+# it decides comes from `omarchy-face-lock status --json`, which is a read: it
+# prompts nothing and writes nothing.
+
+lock_doc='{"enabled":false,"compat":"n/a","missing":[],"otherLock":""}'
+if [[ -x $PLUGIN_DIR/bin/omarchy-face-lock ]]; then
+  if out=$("$PLUGIN_DIR/bin/omarchy-face-lock" status --json 2>/dev/null); then
+    jq -e . >/dev/null 2>&1 <<<"$out" && lock_doc=$out
+  fi
+fi
+lock_enabled=$(jq -r '.enabled // false' <<<"$lock_doc")
+lock_compat=$(jq -r '.compat // "n/a"' <<<"$lock_doc")
+lock_other=$(jq -r '.otherLock // ""' <<<"$lock_doc")
+lock_missing=$(jq -r '(.missing // []) | join(", ")' <<<"$lock_doc")
+
 lock_staged=false
 [[ -d $PLUGINS_DIR/graveklar.face-lock ]] && lock_staged=true
-if [[ $lock_staged == true ]]; then
-  add_row lock "Lock screen" unknown "the lock screen wrapper arrives in a later version" false ""
-else
-  add_row lock "Lock screen" needs_action "not set up" false ""
+
+# A Face update that changed the wrapper. The same `diff -rq` `sync` makes, made
+# here so the row can offer it rather than waiting for the next shell start
+# (§9.4: 0 identical, 1 different, 2 could not tell).
+lock_stale=false
+if [[ $lock_staged == true && -d $PLUGIN_DIR/lock ]]; then
+  diff -rq "$PLUGIN_DIR/lock" "$PLUGINS_DIR/graveklar.face-lock" >/dev/null 2>&1 || lock_stale=true
+fi
+
+lock_visible=false
+[[ $config_lock == true || $lock_staged != true || $lock_compat == failed ]] && lock_visible=true
+
+if [[ $lock_visible == true ]]; then
+  if [[ -n $lock_other ]]; then
+    # Not this wrapper's failure and not repairable from here: whoever enabled
+    # the other lock screen plugin is who can disable it.
+    add_row lock "Lock screen" broken \
+      "another lock screen plugin ($lock_other) is in use, so face is off on the lock screen" false ""
+  elif [[ $lock_staged != true ]]; then
+    add_row lock "Lock screen" needs_action \
+      "the lock screen wrapper is not in place yet" true lock-stage
+  elif [[ $lock_stale == true ]]; then
+    add_row lock "Lock screen" needs_action \
+      "an update to Face's lock screen is waiting for a restart" true lock-sync
+  elif [[ $lock_enabled != true ]]; then
+    add_row lock "Lock screen" needs_action \
+      "face is set up for the lock screen but is not switched on there" true lock-enable
+  elif [[ $lock_compat == incompatible ]]; then
+    # The stock lock screen is running exactly as Omarchy ships it; only face is
+    # off. A Face update is the fix, so there is no button here.
+    add_row lock "Lock screen" broken \
+      "Omarchy's lock screen changed, so face is off on it${lock_missing:+ (missing: $lock_missing)} — password and fingerprint work as normal" \
+      false ""
+  elif [[ $lock_compat == failed ]]; then
+    add_row lock "Lock screen" broken \
+      "Omarchy's own lock screen is back${lock_missing:+: $lock_missing} — turn Lock screen off and on again in Settings to try face there" \
+      false ""
+  elif [[ $lock_compat == ok ]]; then
+    add_row lock "Lock screen" ok "face follows Omarchy's lock screen" false ""
+  else
+    add_row lock "Lock screen" unknown "starting" false ""
+  fi
 fi
 
 # With no infrared camera nothing else can be made true, so the engine hides
@@ -582,6 +634,7 @@ jq -nc \
   --arg howdy "$howdy_version" \
   --argjson threshold "${threshold:-0}" \
   --argjson install "$install_doc" \
+  --argjson lockDoc "$lock_doc" \
   --argjson removalPeople "$removal_people" \
   --argjson pam "$(json_list ${pam_files[@]+"${pam_files[@]}"})" \
   --argjson lockWrapper "$lock_wrapper" \
@@ -595,7 +648,8 @@ jq -nc \
      config: {account: $account, sudo: $sudo, lock: $lock},
      engine: {installed: $engineInstalled, howdy: $howdy, threshold: $threshold},
      install: $install,
-     lock: {enabled: false, compat: "n/a", missing: [], otherLock: ""},
+     lock: {enabled: ($lockDoc.enabled // false), compat: ($lockDoc.compat // "n/a"),
+            missing: ($lockDoc.missing // []), otherLock: ($lockDoc.otherLock // "")},
      removal: {people: $removalPeople, pam: $pam, lockWrapper: $lockWrapper,
                helpers: $helpers, daemon: $daemon, policy: $policy, packages: $packages}
    }'

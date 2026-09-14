@@ -497,6 +497,40 @@ same "a person who is not the owner can be removed" '{"ok":true,"removed":"mia",
 check "…and their derived file goes with them" test ! -e "$MODELS/omarchy-face.person.mia.dat"
 check "…while the others stay" test -f "$MODELS/omarchy-face.person.anna.dat"
 
+step "lock-on and lock-off (F6's two admin verbs)"
+# They belong to phase 7, and they are tested here because this is the suite with
+# a store and a derived lock set in it. What they are NOT is a lock screen: the
+# wrapper is a plugin folder the unprivileged verbs move in and out of shell.json
+# (dev/f6-lock.sh). These two move one setting the daemon reads before it will
+# look at a camera at all, and nothing else.
+pam_state() { find /etc/pam.d -type f -exec sha256sum {} + | sort | sha256sum | cut -c1-16; }
+pam_before=$(pam_state)
+config_says() { sed -n "s/^$1=//p" /etc/omarchy-face/config | tail -1; }
+
+same "the setting starts off" "false" "$(config_says lock)"
+out=$("$ADMIN" lock-on 2>&1)
+same "lock-on reports the faces behind it, read back from the store" \
+  '{"ok":true,"lock_faces":2}' "$out"
+same "…and writes the one setting the daemon reads" "true" "$(config_says lock)"
+same "…leaving sudo exactly as it was" "false" "$(config_says sudo)"
+same "…and touching no PAM stack at all" "$pam_before" "$(pam_state)"
+out=$("$ADMIN" lock-off 2>&1)
+same "lock-off is a plain ok" '{"ok":true}' "$out"
+same "…and the setting is off" "false" "$(config_says lock)"
+
+out=$("$ADMIN" set-permission anna lock off 2>&1)
+out=$("$ADMIN" lock-on 2>&1)
+same "lock-on with nobody holding Lock screen is allowed (plan-merged.md §2.3)" \
+  '{"ok":true,"lock_faces":0}' "$out"
+check "…because there is no lock set for the daemon to compare against" \
+  test ! -e "$MODELS/omarchy-face.lock.$ACCOUNT.dat"
+note "the daemon answers NO disabled on a missing set, so this fails safe rather"
+note "than opening a camera for a question with no possible yes"
+out=$("$ADMIN" lock-off 2>&1)
+out=$("$ADMIN" set-permission anna lock on 2>&1)
+same "…and turning the permission back on rebuilds it" "2" \
+  "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$MODELS/omarchy-face.lock.$ACCOUNT.dat")"
+
 step "unwiring sudo when the last face goes (config sudo=true)"
 printf 'account=%s\nsudo=true\nlock=false\n' "$ACCOUNT" >/etc/omarchy-face/config
 # The block phase 5 will insert, put there by the same function phase 5 calls --

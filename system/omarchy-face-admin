@@ -18,9 +18,9 @@
 # that build it: install-engine, which starts the job, and build-engine, which
 # is the job. Phase 4 (F3) adds the store verbs, and phase 5 (F4) the two that
 # wire sudo: sudo-on and sudo-off, the only verbs here that edit a file PAM
-# reads. lock-on and lock-off still answer not_implemented rather than
-# pretending: a verb that returns {"ok":true} for work it did not do is worse
-# than one that says so.
+# reads. Phase 7 (F6) adds lock-on and lock-off, which move one setting the
+# daemon reads and wire nothing at all: the lock screen wrapper is a plugin
+# folder, enabled and disabled without privilege.
 #
 # WHO MAY RUN THIS. The polkit action is auth_self, so on a machine with more
 # than one login *any* active user can authenticate as themselves and get this
@@ -2940,13 +2940,60 @@ case $verb in
     exit 0
     ;;
 
-  lock-on | lock-off)
-    # Phase 7 (plan-engine.md §1). Answering in the contract's error shape
-    # rather than with prose keeps the GUI's error path honest: whatever asked
-    # for this gets {"error":…} and exit 1, exactly as it will if the real verb
-    # ever fails.
-    printf '{"error":"not_implemented","verb":%s}\n' "$(json_string "$verb")"
-    exit 1
+  lock-on)
+    # The setting the daemon reads before it will answer VERIFY-LOCK at all
+    # (§6.2). It wires nothing: the lock screen wrapper is a plugin folder the
+    # unprivileged `omarchy-face-lock` verbs enable and disable, and this verb
+    # never touches it. What it does is make the daemon willing to look.
+    assert_owner
+    [[ -n $account ]] || die "not_installed"
+    require_python
+
+    # Derive first, for the reason `sudo-on` derives first: the daemon compares
+    # against models/omarchy-face.lock.<account>.dat, and `regenerate` is what
+    # makes that file agree with people/*.json. A corrupt store stops here,
+    # before the setting moves, rather than after.
+    regen=$(store_py regenerate)
+    regen_status=$?
+    if ((regen_status != 0)); then
+      printf '%s\n' "$regen"
+      exit "$regen_status"
+    fi
+
+    # Unlike `sudo-on` there is no minimum (plan-merged.md §2.3): turning this
+    # on with nobody holding Lock screen is allowed, because the daemon already
+    # fails safe -- no lock set means `NO disabled`, so no camera is opened and
+    # no lock is ever opened. The Settings page says so in words rather than
+    # refusing a switch somebody has a reason to move first.
+    faces=$(sed -n 's/.*"lock_faces":\([0-9]\{1,\}\).*/\1/p' <<<"$regen" | head -1)
+    [[ $faces =~ ^[0-9]+$ ]] || die "store_corrupt"
+
+    config_set lock true || die "config_write_failed"
+    audit "lock screen face unlock on by uid ${caller_uid:-0}: $faces face(s) can open the lock screen"
+    printf '{"ok":true,"lock_faces":%s}\n' "$faces"
+    exit 0
+    ;;
+
+  lock-off)
+    # Always allowed, exactly like `sudo-off`, and for the same reason: every
+    # thing that could make this verb refuse -- a store that will not parse, a
+    # missing python -- is a reason somebody would want face off the lock
+    # screen, and a machine whose only way back is a text editor as root is not
+    # a machine this plugin may create.
+    assert_owner
+    [[ -n $account ]] || die "not_installed"
+
+    # The config FIRST. It is what the daemon reads before it does anything
+    # else, so this line is what stops a face being tried -- not the derived set
+    # below, which is rebuilt afterwards and best effort.
+    config_set lock false || die "config_write_failed"
+    if command -v python3 >/dev/null 2>&1; then
+      store_py regenerate >/dev/null 2>&1 || true
+    fi
+
+    audit "lock screen face unlock off by uid ${caller_uid:-0}"
+    printf '{"ok":true}\n'
+    exit 0
     ;;
 
   *)

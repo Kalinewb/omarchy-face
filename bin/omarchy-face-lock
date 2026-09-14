@@ -1,0 +1,521 @@
+#!/bin/bash
+#
+# omarchy-face v2
+# omarchy-face-version: 2.0.0-dev
+#
+# The lock-screen clone's verbs (plan-merged.md §2.5, plan-engine.md §9.4).
+# Unprivileged, run as the owner, and the only thing in this plugin that is
+# allowed to write ~/.config/omarchy/plugins.
+#
+#   omarchy-face-lock stage                put the wrapper folder in place
+#   omarchy-face-lock sync                 stage it when it is missing or stale
+#   omarchy-face-lock enable               make it the lock screen
+#   omarchy-face-lock disable [--stranded] give Omarchy's lock screen back
+#   omarchy-face-lock status --json        what the status helper embeds
+#   omarchy-face-lock notify-once <k> <m>  internal, for the Face service
+#
+# TWO RULES SHAPE THE WHOLE FILE.
+#
+# 1. **Only `stage` writes the plugins folder.** Every write under it reloads
+#    every plugin bar widget, which destroys the Face popup and every process it
+#    owns (E13). So `enable` and `disable` edit `shell.json` -- which is OUTSIDE
+#    that folder -- and the live lock service is swapped with no restart and no
+#    reload (E12). That is what lets the Settings switch move with the popup
+#    still open. `sync` writes the folder only by calling `stage`, and only at
+#    shell start, when no popup exists.
+#
+# 2. **"Locked" is two different questions** (plan-engine.md §9.5).
+#    A LIVE LOCKER -- `omarchy-shell lock status` answering `.secure or
+#    .requested` -- is a lock client drawing a password field, and destroying it
+#    strands the session behind Hyprland's failsafe. THE COMPOSITOR'S FLAG --
+#    `omarchy-hyprland-session-locked` -- says only that Hyprland holds an
+#    ext-session-lock, which is also exactly what a stranded orphan looks like.
+#    Every verb that writes refuses unless BOTH say unlocked. The one exception
+#    is `disable --stranded`, the §9.3a recovery: it refuses only for a live
+#    locker, because there being no answer at all is the whole reason it is
+#    running -- there is no lock service to destroy, and disabling is what puts
+#    Omarchy's own lock screen back so its stranded-lock recovery can put a
+#    password field on the screen.
+
+set -uo pipefail
+unset IFS
+umask 077
+
+# Locale pins `sort`, `grep` and every message this file matches on.
+export LC_ALL=C
+
+PLUGIN_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+TEMPLATE=$PLUGIN_DIR/lock
+CLONE_ID=graveklar.face-lock
+SOURCE_ID=omarchy.lock
+
+CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
+PLUGINS_DIR=$CONFIG_HOME/omarchy/plugins
+STAGED=$PLUGINS_DIR/$CLONE_ID
+SHELL_JSON=$CONFIG_HOME/omarchy/shell.json
+
+RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/omarchy-face
+STATUS_FILE=$RUNTIME_DIR/lock-status.json
+STATE_DIR=${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-face
+NOTIFIED_FILE=$STATE_DIR/lock-notified
+
+# The shell this account is actually running, the way every other script in
+# Omarchy finds it: the session's value first, because a terminal opened after a
+# dev link disagrees with the desktop that is running.
+SHELL_PATH=$(systemctl --user show-environment 2>/dev/null | sed -n 's/^OMARCHY_PATH=//p' | tail -n 1)
+: "${SHELL_PATH:=${OMARCHY_PATH:-/usr/share/omarchy}}"
+SHELL_DIR=$SHELL_PATH/shell
+
+# --- answers -----------------------------------------------------------------
+
+ok() { # ok [key value]…  -> {"ok":true,…}
+  local out='{"ok":true' key value
+  while (($# >= 2)); do
+    key=$1
+    value=$2
+    shift 2
+    out+=",\"$key\":$value"
+  done
+  printf '%s}\n' "$out"
+  exit 0
+}
+
+# Every failure is `{"error":code,…}` and exit 1, which is what the GUI switches
+# on (plan-merged.md §2 rule 3). There is no exit 3 here: nothing in this file
+# takes a lock anything else could be holding.
+die() { # die <code> [key value]…
+  local out="{\"error\":\"$1\"" key value
+  shift
+  while (($# >= 2)); do
+    key=$1
+    value=$2
+    shift 2
+    out+=",\"$key\":$value"
+  done
+  printf '%s}\n' "$out"
+  exit 1
+}
+
+json_string() { # json_string <text> -> a quoted JSON string
+  local text=${1-} out="" i char
+  for ((i = 0; i < ${#text}; i++)); do
+    char=${text:i:1}
+    case $char in
+      '"') out+='\"' ;;
+      '\') out+='\\' ;;
+      $'\n') out+='\n' ;;
+      $'\r') out+='\r' ;;
+      $'\t') out+='\t' ;;
+      *)
+        # Control characters are not legal in a JSON string, and every value
+        # here comes from a file somebody else wrote.
+        if [[ $char < $'\x20' ]]; then out+=$(printf '\\u%04x' "'$char"); else out+=$char; fi
+        ;;
+    esac
+  done
+  printf '"%s"' "$out"
+}
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+now_ms() { printf '%s' "$(($(date +%s%N) / 1000000))"; }
+
+# --- "locked", both ways (plan-engine.md §9.5) -------------------------------
+
+# Question 1: is a LIVE LOCKER holding the session -- something that is drawing
+# and can take a password? This is the one that decides whether there is
+# anything to preserve, and it is asked exactly the way omarchy-restart-shell
+# asks it (:28-37).
+#
+#   0  a locker answered and says the session is secure or being secured
+#   1  a locker answered and says it is not locked
+#   2  nothing answered at all
+locker_state() { # locker_state [ipc timeout]
+  local answer timeout=${1:-2s}
+  have omarchy-shell || return 2
+  answer=$(OMARCHY_PATH="$SHELL_PATH" OMARCHY_SHELL_IPC_TIMEOUT="$timeout" \
+    omarchy-shell lock status 2>/dev/null) || return 2
+  [[ -n $answer ]] || return 2
+  have jq || return 2
+  case $(jq -r '.secure or .requested' <<<"$answer" 2>/dev/null) in
+    true) return 0 ;;
+    false) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+# Question 2: does the COMPOSITOR hold an ext-session-lock? True with no answer
+# to question 1 is an orphan (§9.3a). Exit 2 from the helper is "could not tell",
+# which its own callers treat as unlocked.
+compositor_locked() {
+  have omarchy-hyprland-session-locked || return 1
+  omarchy-hyprland-session-locked
+}
+
+# What every verb that writes asks first. Both questions, and a `locked` refusal
+# for either.
+refuse_if_locked() {
+  locker_state
+  ((  $? == 0 )) && die locked reason '"a lock screen is up"'
+  compositor_locked && die locked reason '"the compositor holds a session lock"'
+  return 0
+}
+
+# --- shell.json --------------------------------------------------------------
+
+# Enabled, as PluginRegistry.isEnabled decides it for a third-party service
+# (:148-163, :231-248): a top-level entry in `plugins[]`, and not named in
+# `disabledPlugins[]`.
+plugin_enabled() { # plugin_enabled <id>
+  have jq || return 1
+  [[ -f $SHELL_JSON ]] || return 1
+  jq -e --arg id "$1" '
+    (((.disabledPlugins // []) | index($id)) == null)
+    and (((.plugins // []) | map(.id? // "")) | index($id)) != null
+  ' "$SHELL_JSON" >/dev/null 2>&1
+}
+
+# Another plugin that has taken Omarchy's lock screen. A clone declares it in
+# its manifest (`omarchy.clonedFrom`), and only an ENABLED one is in the way:
+# the installed lock-explorer sits in the plugins folder disabled and blocks
+# nothing.
+# One jq over every manifest rather than one per plugin: this runs inside the
+# status read, which the popup makes every thirty seconds.
+other_lock() {
+  local id
+  have jq || return 1
+  compgen -G "$PLUGINS_DIR/*/manifest.json" >/dev/null 2>&1 || return 1
+  while IFS= read -r id; do
+    [[ -n $id && $id != "$CLONE_ID" ]] || continue
+    plugin_enabled "$id" || continue
+    printf '%s' "$id"
+    return 0
+  done < <(jq -r --arg source "$SOURCE_ID" \
+    'select((.omarchy.clonedFrom // "") == $source) | (.id // "")' \
+    "$PLUGINS_DIR"/*/manifest.json 2>/dev/null)
+  return 1
+}
+
+# --- lock-status.json --------------------------------------------------------
+
+# The freshness rule, and it is the whole of it (plan-engine.md §9.4): a value
+# written before the running shell started is ignored. Nothing deletes this
+# file -- an earlier round had the Face service delete it at shell start, which
+# races the wrapper's own write and can erase a fresh, correct `ok`.
+#
+# Milliseconds since the epoch, from /proc: field 22 of the shell's stat line is
+# its start in clock ticks since boot, and btime is when boot was. The newest
+# matching process wins, which is the strict answer -- a value that predates it
+# is stale, and stale is what makes the health check the one that decides.
+shell_started_ms() {
+  local btime ticks pid start best="" value
+  [[ -r /proc/stat ]] || return 1
+  btime=$(awk '/^btime/{print $2; exit}' /proc/stat 2>/dev/null)
+  [[ $btime =~ ^[0-9]+$ ]] || return 1
+  ticks=$(getconf CLK_TCK 2>/dev/null)
+  [[ $ticks =~ ^[0-9]+$ ]] && ((ticks > 0)) || ticks=100
+
+  for pid in $(pgrep -x -u "$(id -u)" quickshell 2>/dev/null); do
+    # This account's Omarchy shell, not a development harness pointed at some
+    # other config directory.
+    tr '\0' '\n' <"/proc/$pid/cmdline" 2>/dev/null | grep -qxF -- "$SHELL_DIR" || continue
+    start=$(awk '{ n = index($0, ") "); s = substr($0, n + 2); split(s, f, " "); print f[20] }' \
+      "/proc/$pid/stat" 2>/dev/null)
+    [[ $start =~ ^[0-9]+$ ]] || continue
+    value=$((btime * 1000 + start * 1000 / ticks))
+    if [[ -z $best ]] || ((value > best)); then best=$value; fi
+  done
+  [[ -n $best ]] || return 1
+  printf '%s' "$best"
+}
+
+# The wrapper's last word, or nothing when it is stale or absent.
+fresh_status() {
+  local started document at
+  [[ -r $STATUS_FILE ]] || return 1
+  have jq || return 1
+  jq -e . "$STATUS_FILE" >/dev/null 2>&1 || return 1
+  started=$(shell_started_ms) || return 1
+  document=$(jq -c . "$STATUS_FILE" 2>/dev/null) || return 1
+  at=$(jq -r '.at // 0' <<<"$document" 2>/dev/null)
+  [[ $at =~ ^[0-9]+$ ]] || return 1
+  ((at >= started)) || return 1
+  printf '%s' "$document"
+}
+
+# What a health check writes when it disables the clone (plan-merged.md §2.6).
+# This value is what makes the Setup row `lock` read `broken`, and it is the
+# Face service's cue to say so once.
+write_failed_status() { # write_failed_status <reason>
+  local document temp
+  mkdir -p "$RUNTIME_DIR" 2>/dev/null || return 1
+  document=$(printf '{"compat":"failed","missing":[%s],"at":%s}' "$(json_string "$1")" "$(now_ms)")
+  temp=$RUNTIME_DIR/.lock-status.json.$$
+  printf '%s' "$document" >"$temp" 2>/dev/null || { rm -f "$temp"; return 1; }
+  mv -f "$temp" "$STATUS_FILE" 2>/dev/null || { rm -f "$temp"; return 1; }
+}
+
+# --- the recovery (plan-engine.md §9.3a) -------------------------------------
+#
+# Nothing answered, so there is nothing to destroy: disabling the clone restores
+# `omarchy.lock` (E4), `_syncServices` creates the stock lock service (E12), and
+# ITS OWN checkStrandedLock/recoverStrandedLock (plugins/lock/Service.qml:82-100)
+# notice a compositor lock this shell did not take and put a real password field
+# on the screen. That is the way out of a stranded lock and it needs no user.
+#
+# Asked once more before it acts: a locker that came up late and says it is
+# secure is a live lock client, and destroying one is the crashed-lockscreen
+# fallback (shell.qml:1030-1032), never a recovery.
+recover_disable() { # recover_disable <reason>  -> 0 when the status was written too
+  locker_state
+  if (($? == 0)); then
+    die live_locker reason '"a lock screen answered after all; it was left alone"'
+  fi
+  have omarchy || die missing_omarchy
+  # Not conditional on the disable's exit: a clone that was already disabled,
+  # or a shell that did not answer, still leaves a machine whose lock screen is
+  # Omarchy's, and `failed` is still the right thing for the row to say.
+  omarchy plugin disable "$CLONE_ID" >/dev/null 2>&1
+  write_failed_status "$1"
+}
+
+# --- staging -----------------------------------------------------------------
+
+# The copy is BYTE-FOR-BYTE and substitutes nothing (plan-engine.md §9.2). If
+# `stage` rewrote even one byte -- a version, a path -- `sync`'s `diff -rq`
+# would differ on every shell start, so every start would re-stage and, with the
+# clone enabled, restart the shell, for ever. The manifest's version is a
+# literal in the template, bumped by hand when the wrapper changes; that is
+# exactly how a Face update reaches the staged copy.
+do_stage() {
+  local temp previous
+  refuse_if_locked
+  [[ -d $TEMPLATE && -f $TEMPLATE/manifest.json ]] || die no_template
+  mkdir -p "$PLUGINS_DIR" 2>/dev/null || die plugins_dir_unwritable
+
+  # A dot-prefixed name, because the plugin watcher maps dot entries to no
+  # plugin id at all (PluginRegistry.qml:728-740) and the scan globs `*/`, which
+  # does not match them. So building the copy costs no reload; only the `mv`
+  # below does.
+  temp=$(mktemp -d "$PLUGINS_DIR/.$CLONE_ID.XXXXXX" 2>/dev/null) || die stage_failed
+  cp -a "$TEMPLATE/." "$temp/" 2>/dev/null || { rm -rf "$temp"; die stage_failed; }
+  # After the copy, not before: `cp -a src/.` carries the source directory's own
+  # attributes onto the target, and mktemp's 0700 is not a mode a plugin folder
+  # should keep.
+  chmod 0755 "$temp" 2>/dev/null
+
+  # Validated before it lands, never after: validating the installed copy is
+  # validating the damage, and by then the reload has already run.
+  if have omarchy; then
+    omarchy plugin validate "$temp" >/dev/null 2>&1 || { rm -rf "$temp"; die validate_failed; }
+  fi
+
+  if [[ -e $STAGED ]]; then
+    previous=$(mktemp -d "$PLUGINS_DIR/.$CLONE_ID.old.XXXXXX" 2>/dev/null) || {
+      rm -rf "$temp"
+      die stage_failed
+    }
+    mv -T "$STAGED" "$previous/folder" 2>/dev/null || {
+      rm -rf "$temp" "$previous"
+      die stage_failed
+    }
+  fi
+  if ! mv -T "$temp" "$STAGED" 2>/dev/null; then
+    # Put back what was there rather than leaving the account with no clone at
+    # all: an enabled clone whose folder vanished is a shell with no lock screen
+    # until the next start.
+    [[ -n ${previous:-} ]] && mv -T "$previous/folder" "$STAGED" 2>/dev/null
+    rm -rf "$temp" ${previous:+"$previous"}
+    die stage_failed
+  fi
+  [[ -n ${previous:-} ]] && rm -rf "$previous"
+  return 0
+}
+
+# --- verbs -------------------------------------------------------------------
+
+verb=${1:-}
+shift 2>/dev/null || true
+
+case $verb in
+
+  stage)
+    do_stage
+    ok staged true
+    ;;
+
+  sync)
+    # The Face service runs this at every shell start, whether or not the lock
+    # feature is on, and it is the only routine call that can write the plugins
+    # folder -- which is why it runs then and not while a popup is open.
+    refuse_if_locked
+    [[ -d $TEMPLATE && -f $TEMPLATE/manifest.json ]] || die no_template
+
+    # `diff -rq`, not `cmp -r`: cmp has no recursive mode, and diff's exit codes
+    # are exactly the three answers this needs -- 0 identical, 1 different,
+    # 2 could not tell (a missing tree).
+    if [[ -d $STAGED ]] && diff -rq "$TEMPLATE" "$STAGED" >/dev/null 2>&1; then
+      ok
+    fi
+
+    do_stage
+
+    # A code change to a running keepLoaded service needs a restart (E12); an
+    # enabled clone is one. Disabled, the new bytes are simply what the next
+    # start loads.
+    if plugin_enabled "$CLONE_ID"; then
+      # DETACHED, and this is not tidiness. Quickshell kills a Process's direct
+      # child, and this script IS that child: a restart run from here would have
+      # `quickshell kill` take the shell that owns it, and itself with it,
+      # before the relaunch (plan-engine.md §9.4). `setsid -f` puts it in a new
+      # session outside the shell's process tree.
+      if have setsid && have omarchy; then
+        setsid -f omarchy restart shell >/dev/null 2>&1 </dev/null
+        ok staged true restart '"requested"'
+      fi
+      ok staged true restart '"unavailable"'
+    fi
+    ok staged true
+    ;;
+
+  enable)
+    refuse_if_locked
+    if other=$(other_lock); then
+      die other_lock id "$(json_string "$other")"
+    fi
+    [[ -d $STAGED && -f $STAGED/manifest.json ]] || die not_staged
+    have omarchy || die missing_omarchy
+
+    # The registry may not have finished noticing a folder that was staged a
+    # moment ago, and `omarchy plugin enable` answers "is not known" for one it
+    # has not scanned. Ask it to rescan and try again -- an old lesson, and
+    # cheap.
+    enabled=false
+    for _ in 1 2 3; do
+      if omarchy plugin enable "$CLONE_ID" >/dev/null 2>&1; then
+        enabled=true
+        break
+      fi
+      omarchy-shell shell rescanPlugins >/dev/null 2>&1
+      sleep 0.5
+    done
+    [[ $enabled == true ]] || die enable_failed reason '"the shell would not enable the clone"'
+
+    # A wrapper that does not compile gets no error from inside itself:
+    # `ensureService` logs a warning (shell.qml:916-918) and there is simply no
+    # lock service, so no `lock` IPC target either. The registry offers no
+    # earlier signal for services, so the timeout IS the signal. Ten seconds is
+    # plenty here -- unlike a shell start, the plugin scan has already finished.
+    deadline=$((SECONDS + 10))
+    while ((SECONDS < deadline)); do
+      # A short IPC timeout, for the same reason omarchy-restart-shell uses one
+      # (:29-31): this is a poll, and a two-second wait per tick would spend the
+      # whole budget on four questions.
+      locker_state 0.5s
+      (($? != 2)) && ok enabled true
+      sleep 0.25
+    done
+
+    recover_disable "no lock service answered"
+    die enable_failed reason '"Face'"'"'s lock screen did not start, so Omarchy'"'"'s is back"'
+    ;;
+
+  disable)
+    if [[ ${1:-} == --stranded ]]; then
+      # The §9.3a recovery, run by a health check that got no answer at all.
+      # The compositor's flag is deliberately not consulted: "Hyprland is
+      # locked" is exactly what a stranded orphan looks like, and refusing here
+      # would be refusing to rescue it.
+      if recover_disable "no lock service answered"; then
+        ok disabled true recovered true
+      fi
+      # The clone is off either way -- that is what puts a password field back
+      # on a stranded screen. Only the note the Setup row reads is missing.
+      ok disabled true recovered true statusWritten false
+    fi
+    refuse_if_locked
+    have omarchy || die missing_omarchy
+    omarchy plugin disable "$CLONE_ID" >/dev/null 2>&1 || die disable_failed
+    ok disabled true
+    ;;
+
+  status)
+    # The `lock` object of plan-merged.md §2.2, embedded by
+    # bin/omarchy-face-status. A read: it prompts nothing, opens nothing and
+    # changes nothing, so it is safe on a timer.
+    [[ ${1:-} == --json || -z ${1:-} ]] || { echo "usage: omarchy-face-lock status --json" >&2; exit 2; }
+
+    enabled=false
+    plugin_enabled "$CLONE_ID" && enabled=true
+    compat=n/a
+    missing='[]'
+    document=""
+    fresh_compat=""
+    if document=$(fresh_status); then
+      fresh_compat=$(jq -r '.compat // ""' <<<"$document" 2>/dev/null)
+    fi
+
+    other=""
+    if other=$(other_lock); then
+      # Not a compat value: another plugin owning the lock screen is a reason
+      # face is off, not a verdict on this wrapper (plan-merged.md §1 row 12).
+      compat=n/a
+    elif [[ $fresh_compat == failed ]]; then
+      # `failed` is reported whether or not the clone is still enabled, and that
+      # is the whole point of it: the §9.3a recovery DISABLES the clone and then
+      # writes this, so keying the row on enablement would hide the one state
+      # that most needs explaining (plan-engine.md §10.1, "why the lock row's
+      # visibility is three conditions").
+      other=""
+      compat=failed
+      missing=$(jq -c '.missing // []' <<<"$document" 2>/dev/null)
+    else
+      other=""
+      if [[ $enabled == true ]]; then
+        if [[ -n $fresh_compat ]]; then
+          compat=$fresh_compat
+          missing=$(jq -c '.missing // []' <<<"$document" 2>/dev/null)
+          case $compat in ok | incompatible | loading) ;; *) compat=loading; missing='[]' ;; esac
+        else
+          # Enabled with nothing fresh to read: the wrapper has not written yet,
+          # or never will. The 30 s health check is what decides which, and it
+          # writes `failed` when nothing answers.
+          compat=loading
+        fi
+      fi
+    fi
+    printf '{"enabled":%s,"compat":%s,"missing":%s,"otherLock":%s}\n' \
+      "$enabled" "$(json_string "$compat")" "$missing" "$(json_string "$other")"
+    exit 0
+    ;;
+
+  notify-once)
+    # Internal, called only by the Face service (plan-gui.md §6.3): exactly one
+    # notification per new reason, and the last reason is remembered on disk so
+    # a shell restart does not say it again.
+    #
+    # It lives here rather than in QML because "one notification, never one per
+    # check" is a property a test has to be able to assert without a running
+    # shell -- and because compare, record and notify want to be one step, not
+    # three with a window between them.
+    key=${1:-}
+    body=${2:-}
+    [[ -n $key ]] || die missing_reason
+    mkdir -p "$STATE_DIR" 2>/dev/null || die state_dir_unwritable
+    if [[ -f $NOTIFIED_FILE ]] && [[ $(cat "$NOTIFIED_FILE" 2>/dev/null) == "$key" ]]; then
+      ok said false
+    fi
+    printf '%s' "$key" >"$NOTIFIED_FILE.tmp" 2>/dev/null || die state_dir_unwritable
+    mv -f "$NOTIFIED_FILE.tmp" "$NOTIFIED_FILE" 2>/dev/null || die state_dir_unwritable
+    if [[ -n $body ]] && have notify-send; then
+      notify-send -a "Face Unlock" "Face unlock is off on the lock screen" "$body" >/dev/null 2>&1
+      ok said true
+    fi
+    ok said false
+    ;;
+
+  *)
+    printf '{"error":"unknown_verb","verb":%s}\n' "$(json_string "$verb")"
+    exit 1
+    ;;
+esac
