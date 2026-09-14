@@ -14,9 +14,10 @@
 #   126/127 come from pkexec itself and mean the owner declined
 #
 # Phase 2 (F1) implements the three verbs that exist before there is a store or
-# an engine: install-system, purge and purge-legacy. The rest answer
-# not_implemented rather than pretending: a verb that returns {"ok":true} for
-# work it did not do is worse than one that says so.
+# an engine: install-system, purge and purge-legacy. Phase 3 (F2) adds the two
+# that build it: install-engine, which starts the job, and build-engine, which
+# is the job. The rest answer not_implemented rather than pretending: a verb
+# that returns {"ok":true} for work it did not do is worse than one that says so.
 #
 # WHO MAY RUN THIS. The polkit action is auth_self, so on a machine with more
 # than one login *any* active user can authenticate as themselves and get this
@@ -39,6 +40,27 @@ UNIT_DIR=/etc/systemd/system
 MODELS=/usr/lib/security/howdy/models
 BUILD_STATE=/var/lib/private/omarchy-face-build
 INSTALL_UNIT=omarchy-face-install.service
+
+ENGINE_FILE=$STORE_DIR/engine.json
+INSTALL_FILE=$RUN_DIR/install.json
+INSTALL_LOG=$RUN_DIR/install.log
+INSTALL_LOCK=$RUN_DIR/install.lock
+HOWDY_DIR=/usr/lib/security/howdy
+HOWDY_CONFIG=$HOWDY_DIR/config.ini
+HOWDY_DROPIN=/usr/lib/systemd/system/polkit-agent-helper@.service.d/10-howdy.conf
+CAMERA=/usr/local/bin/omarchy-face-camera
+
+# The fixed step list of plan-engine.md §5.2. It is in the contract
+# (plan-merged.md §2.2 `install.steps`), so the GUI renders it as a checklist
+# with elapsed seconds and never as a percentage.
+INSTALL_STEPS=(deps fetch build install configure "done")
+
+# What the build needs that a stock Arch machine may not have (§5.2 step 1).
+# python-dlib's own library dependencies are deliberately NOT here: `pacman -U`
+# resolves a package file's dependencies from the sync databases, so they arrive
+# with it and this list stays the one thing it is -- what is needed to *build*.
+BUILD_DEPS=(base-devel git python-opencv python-setuptools boost cmake sqlite
+            cblas lapack libx11 libinih libevdev v4l-utils)
 
 # The installed set (plan-engine.md §8.1). Source name : destination : mode.
 # One table, used by install, by the version check and by purge, so the three
@@ -532,6 +554,340 @@ pam_insert_block() { # pam_insert_block <file>
   return 0
 }
 
+# --- the engine build job (F2) -----------------------------------------------
+#
+# Two verbs, and the split between them is the whole point of this phase.
+#
+#   install-engine   starts a transient root unit and returns immediately
+#   build-engine     is what that unit runs
+#
+# `install-engine` is pkexec'd, so it is a child of the popup's Process and dies
+# with it. The build takes tens of minutes, so it must not be that child: it is
+# started with `systemd-run --unit=omarchy-face-install`, which puts it in its
+# own cgroup under PID 1. Closing the popup, restarting the shell or logging out
+# does not touch it, and nothing is lost when they happen -- the job's whole
+# state is /run/omarchy-face/install.json and install.log, both world-readable,
+# so a GUI that comes back simply reads where the build got to.
+#
+# That is also why a second click cannot start a second build: `install-engine`
+# asks systemd whether the unit is active and exits 3 if it is.
+
+install_started=0
+install_step=""
+install_notes=()
+
+now_seconds() { date +%s; }
+
+ensure_run_dir() {
+  [[ -d $RUN_DIR ]] || install -d -o root -g root -m 0755 "$RUN_DIR" 2>/dev/null
+}
+
+# install.json is the contract's `install` object (plan-merged.md §2.2), written
+# by same-directory temp + rename (§2 rule 5) so a reader never sees half a
+# document. 0644: the GUI runs as the owner and has to be able to read it.
+write_install() { # write_install <state> <step> <error>
+  local state=$1 step=$2 error=$3 now tmp
+  now=$(now_seconds)
+  ((install_started)) || install_started=$now
+  ensure_run_dir
+  tmp=$INSTALL_FILE.tmp
+  printf '{"state":%s,"step":%s,"steps":%s,"startedAt":%s,"updatedAt":%s,"error":%s,"notes":%s}\n' \
+    "$(json_string "$state")" "$(json_string "$step")" \
+    "$(json_array "${INSTALL_STEPS[@]}")" "$install_started" "$now" \
+    "$(json_string "$error")" \
+    "$(json_array ${install_notes[@]+"${install_notes[@]}"})" >"$tmp" 2>/dev/null || return 1
+  chmod 0644 "$tmp" 2>/dev/null
+  mv -f "$tmp" "$INSTALL_FILE" 2>/dev/null
+}
+
+# The job outlives the process that asked for it, so `startedAt` has to outlive
+# it too: install-engine writes the first document, build-engine continues it.
+# Elapsed time in the GUI is measured from that first write, which is when the
+# owner clicked -- not from when systemd got round to the unit.
+read_install_started() {
+  local value
+  value=$(sed -n 's/.*"startedAt":\([0-9]\{1,\}\).*/\1/p' "$INSTALL_FILE" 2>/dev/null | head -1)
+  [[ $value =~ ^[0-9]+$ ]] && install_started=$value
+}
+
+install_log() { # install_log <line…>
+  ensure_run_dir
+  printf '%s %s\n' "$(date '+%H:%M:%S')" "$*" >>"$INSTALL_LOG" 2>/dev/null
+}
+
+# Is the engine already installed, and installed the way this phase installs it?
+# "howdy is present" is not enough: a python-dlib built with CUDA satisfies
+# `pacman -Q` and is exactly what E9 says not to have on this machine, so a
+# machine carrying one is rebuilt rather than kept.
+engine_packages_cpu_only() {
+  pacman -Q howdy >/dev/null 2>&1 || return 1
+  pacman -Q python-dlib >/dev/null 2>&1 || return 1
+  pacman -Q python-dlib-cuda >/dev/null 2>&1 && return 1
+  pacman -Qi python-dlib 2>/dev/null | sed -n 's/^Depends On[[:space:]]*:[[:space:]]*//p' |
+    grep -qi 'cuda' && return 1
+  return 0
+}
+
+# Start the job. 0 started · 3 one is already running · 1 systemd would not.
+job_error=""
+start_install_job() {
+  job_error=""
+  if systemctl is-active --quiet "$INSTALL_UNIT" 2>/dev/null; then
+    job_error=install_running
+    return 3
+  fi
+  ensure_run_dir
+  [[ -d $RUN_DIR ]] || { job_error=install_failed; return 1; }
+
+  # --collect reaps the unit when it finishes, but a machine that lost systemd's
+  # collection (a manager restart mid-build) can be left with a failed unit of
+  # that name, and `systemd-run --unit=` refuses a name that already exists.
+  systemctl reset-failed "$INSTALL_UNIT" >/dev/null 2>&1
+
+  # One log per build. The last build's output is not worth keeping: the GUI
+  # shows a tail of the CURRENT build, and a log that grows across attempts
+  # would show the previous failure at the bottom of a successful one.
+  : >"$INSTALL_LOG" 2>/dev/null
+  chmod 0644 "$INSTALL_LOG" 2>/dev/null
+  install_started=0
+  install_notes=()
+  write_install running "" ""
+  install_log "starting the engine build"
+
+  # Type=exec, so this call fails when the helper cannot be executed rather than
+  # returning success for a unit that dies a moment later: `{"started":true}` has
+  # to mean it started. RuntimeMaxSec bounds a build that hangs -- systemd kills
+  # it, the TERM trap in build-engine writes `failed`, and the row stops saying
+  # "building" for ever.
+  if ! systemd-run --unit=omarchy-face-install --collect --quiet \
+       --property=Type=exec \
+       --property=RuntimeMaxSec=7200 \
+       --property=Description="omarchy-face engine build" \
+       /usr/local/bin/omarchy-face-admin build-engine >>"$INSTALL_LOG" 2>&1; then
+    write_install failed "" start_failed
+    job_error=start_failed
+    return 1
+  fi
+  audit "engine build started by uid ${caller_uid:-0}"
+  return 0
+}
+
+# --- what the build user runs -------------------------------------------------
+#
+# makepkg is run neither by root nor by the invoking user (plan-engine.md §5.2
+# step 3). It runs under `systemd-run -p DynamicUser=yes -p
+# StateDirectory=omarchy-face-build`, which is a uid systemd allocates for the
+# duration and nothing else on the machine can be: no process running as the
+# owner can write into the directory the packages are built in, so the package
+# file root is about to install cannot be swapped between `makepkg` and
+# `pacman -U`.
+#
+# The script is passed as argv rather than installed as a file, because the file
+# would have to join the `system` row's fixed set of ten (§8.1) to be compared
+# and installed with the rest, and it is only ever run by the lines below.
+#
+# It is NOT trusted to have done the right thing: it edits a PKGBUILD that came
+# off the AUR a minute earlier, and root verifies the *built packages* before
+# installing them (the install step below). The patch is how the build is asked
+# for CPU-only howdy; the verification is what makes it so.
+read -r -d '' BUILD_SCRIPT <<'BUILD_SCRIPT_END' || true
+set -uo pipefail
+umask 022
+export PATH=/usr/bin
+
+dir=$1
+phase=$2
+cd "$dir" || { printf 'no_build_dir\n' >"$dir/result" 2>/dev/null; exit 1; }
+
+# One word, read by root. The exit status says "something went wrong"; this says
+# which thing, and survives systemd-run losing the status to a signal.
+fail() { printf '%s\n' "$1" >"$dir/result"; exit 1; }
+note() { printf '%s\n' "$1" >>"$dir/notes"; }
+
+: >"$dir/result"
+
+case $phase in
+  fetch)
+    rm -rf -- "$dir/python-dlib" "$dir/howdy" "$dir/notes"
+    git clone --depth 1 https://aur.archlinux.org/python-dlib.git "$dir/python-dlib" || fail fetch_failed
+    git clone --depth 1 https://aur.archlinux.org/howdy.git "$dir/howdy" || fail fetch_failed
+    ;;
+
+  build)
+    # dlib's PKGBUILD defaults to building the CUDA package as well (E9). If the
+    # flag is not where it was, stop: silently pulling ~2.7 GB of CUDA from a
+    # GUI click is the wrong failure.
+    grep -q '^_build_cuda=1$' "$dir/python-dlib/PKGBUILD" || fail cuda_flag_missing
+    sed -i 's/^_build_cuda=1$/_build_cuda=0/' "$dir/python-dlib/PKGBUILD" || fail cuda_flag_missing
+    grep -q '^_build_cuda=0$' "$dir/python-dlib/PKGBUILD" || fail cuda_flag_missing
+
+    # howdy's package() installs a systemd drop-in that widens the polkit agent
+    # helper's device access. Face is never in polkit-1, so it buys nothing and
+    # is dropped. The install line is a two-line continuation, hence awk rather
+    # than sed. An absent anchor is a note, not a failure -- root checks the
+    # built package either way.
+    if grep -q 'polkit-agent-helper-howdy\.conf' "$dir/howdy/PKGBUILD"; then
+      awk '
+        skip { if ($0 !~ /\\$/) skip = 0; next }
+        /install .*polkit-agent-helper-howdy\.conf/ { if ($0 ~ /\\$/) skip = 1; next }
+        { print }
+      ' "$dir/howdy/PKGBUILD" >"$dir/howdy/PKGBUILD.patched" || fail polkit_patch_failed
+      mv -f "$dir/howdy/PKGBUILD.patched" "$dir/howdy/PKGBUILD" || fail polkit_patch_failed
+      if grep -q '10-howdy\.conf' "$dir/howdy/PKGBUILD"; then fail polkit_patch_failed; fi
+    else
+      note "howdy's PKGBUILD no longer names the polkit drop-in"
+    fi
+
+    # --nodeps: root installed everything the build needs in the deps step, and
+    # makepkg's own dependency handling would want to call pacman as a user that
+    # deliberately cannot.
+    ( cd "$dir/python-dlib" && makepkg -f --noconfirm --nodeps ) || fail dlib_build_failed
+    ( cd "$dir/howdy" && makepkg -f --noconfirm --nodeps ) || fail howdy_build_failed
+    ;;
+
+  *)
+    fail bad_phase
+    ;;
+esac
+exit 0
+BUILD_SCRIPT_END
+
+run_as_builder() { # run_as_builder <fetch|build>
+  systemd-run --wait --pipe --quiet --collect \
+    --property=DynamicUser=yes \
+    --property=StateDirectory=omarchy-face-build \
+    --property=WorkingDirectory=/var/lib/omarchy-face-build \
+    --setenv=HOME=/var/lib/omarchy-face-build \
+    --setenv=LANG=C \
+    /bin/bash -c "$BUILD_SCRIPT" omarchy-face-build /var/lib/omarchy-face-build "$1" \
+    >>"$INSTALL_LOG" 2>&1
+}
+
+# The word the build user left behind, if any. `tr -cd` because this file is
+# written by a uid that is not root's and is about to become an error code in a
+# JSON document.
+builder_result() {
+  head -1 "$BUILD_STATE/result" 2>/dev/null | tr -cd 'a-z_'
+}
+
+# One phase as the build user, and two ways to hear that it failed. systemd-run
+# --wait propagates the service's exit status, but a service killed by a signal
+# has no status to propagate -- and a phase that wrote `result` and then died
+# still knows more about what went wrong than "it exited non-zero" does.
+run_builder_phase() { # run_builder_phase <fetch|build>
+  local code
+  if ! run_as_builder "$1"; then
+    code=$(builder_result)
+    build_fail "${code:-build_user_failed}"
+  fi
+  code=$(builder_result)
+  [[ -z $code ]] || build_fail "$code"
+  collect_builder_notes
+}
+
+collect_builder_notes() {
+  local line
+  [[ -r $BUILD_STATE/notes ]] || return 0
+  while IFS= read -r line; do
+    [[ -n $line ]] || continue
+    install_notes+=("$(printf '%s' "$line" | tr -cd '\040-\176' | cut -c1-120)")
+  done <"$BUILD_STATE/notes"
+  rm -f -- "$BUILD_STATE/notes"
+}
+
+# Exactly one package file of that name, or nothing. `<name>-[0-9]*` and not
+# `<name>-*`, so python-dlib-cuda-20.0.1-… is never mistaken for python-dlib's
+# own package -- which is the one mistake in this file that would install CUDA.
+found_package=""
+find_package() { # find_package <dir> <pkgname>
+  local dir=$1 name=$2 file matches=()
+  found_package=""
+  for file in "$dir/$name"-[0-9]*.pkg.tar.*; do
+    [[ -f $file ]] || continue
+    [[ $file == *.sig ]] && continue
+    matches+=("$file")
+  done
+  ((${#matches[@]} == 1)) || return 1
+  found_package=${matches[0]}
+}
+
+package_info() { # package_info <file>
+  bsdtar -xOqf "$1" .PKGINFO 2>/dev/null
+}
+
+build_dir_remove() {
+  rm -rf -- "$BUILD_STATE" 2>/dev/null
+  # systemd leaves /var/lib/<name> as a symlink into private/ for a DynamicUser
+  # unit. Removing the target without the link leaves a dangling name behind.
+  [[ -L /var/lib/omarchy-face-build ]] && rm -f -- /var/lib/omarchy-face-build
+  return 0
+}
+
+build_fail() { # build_fail <code>
+  local code=$1
+  install_log "FAILED at ${install_step:-start}: $code"
+  write_install failed "$install_step" "$code"
+  audit "engine build failed at ${install_step:-start}: $code"
+  build_dir_remove
+  printf '{"error":%s}\n' "$(json_string "$code")"
+  exit 1
+}
+
+# systemd stopping the unit (RuntimeMaxSec, `systemctl stop`, shutdown) must not
+# leave install.json saying `running` for ever: the GUI would show a build that
+# is not happening and offer no way back. A SIGKILL cannot be caught, which is
+# why omarchy-face-status also treats `running` with no active unit as a build
+# that stopped (§10.1's install-job row).
+build_interrupted() {
+  install_log "the build was stopped"
+  write_install failed "$install_step" interrupted
+  build_dir_remove
+  exit 143
+}
+
+step_begin() { # step_begin <step>
+  install_step=$1
+  write_install running "$1" ""
+  install_log "== $1"
+}
+
+# One value out of a flat JSON document (omarchy-face-camera's --describe). Not
+# a JSON parser and not trying to be: jq is a build dependency of nothing here,
+# and this file has to work on a machine where the install has not finished.
+json_value() { # json_value <document> <key>
+  local doc=$1 key=$2
+  printf '%s' "$doc" | sed -n 's/.*"'"$key"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+}
+
+config_ini_get() { # config_ini_get <key>
+  local value
+  value=$(sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$HOWDY_CONFIG" 2>/dev/null | head -1)
+  # Trailing whitespace is not part of the value; howdy's parser ignores it and
+  # the read-back check below would not.
+  value=${value%"${value##*[![:space:]]}"}
+  printf '%s' "$value"
+}
+
+# One anchored edit, then read it back. A key that is not in the file is
+# `config_key_missing` rather than a line appended to the end: howdy's config is
+# sectioned, and a key appended after [debug] is a key in the wrong section that
+# howdy silently ignores (plan-engine.md §5.2 step 5).
+set_config_key() { # set_config_key <key> <value>
+  local key=$1 value=$2 escaped
+  grep -qE "^[[:space:]]*${key}[[:space:]]*=" "$HOWDY_CONFIG" 2>/dev/null || return 1
+  # The value is a device path: it carries slashes, and sed would read them as
+  # the end of the replacement. Backslash and & are sed's own too.
+  escaped=${value//\\/\\\\}
+  escaped=${escaped//&/\\&}
+  escaped=${escaped//\//\\/}
+  sed -i "s/^[[:space:]]*${key}[[:space:]]*=.*/${key} = ${escaped}/" "$HOWDY_CONFIG" 2>/dev/null || return 1
+  # The package installs this tree 0600 and it stays that way: the config holds
+  # the camera the authentication runs against, and nothing unprivileged has any
+  # business reading it (which is what engine.json is for).
+  chmod 0600 "$HOWDY_CONFIG" 2>/dev/null
+  [[ $(config_ini_get "$key") == "$value" ]]
+}
+
 # --- verbs -------------------------------------------------------------------
 
 case $verb in
@@ -616,17 +972,222 @@ case $verb in
     systemctl_step daemon-reload
     systemctl_step enable --now omarchy-faced.socket
 
-    # F2 (phase 3) starts the engine build here, as a transient root unit that
-    # outlives this process and the panel that asked for it:
+    # The first install ends by starting the engine build (plan-engine.md §5.1):
+    # a machine that has just had Face installed has no engine, and the Setup
+    # view's next row is the one that would otherwise ask for a second prompt to
+    # say so. An UPDATE never starts one -- system files change far more often
+    # than the engine does, and rebuilding howdy because a QML file moved is not
+    # what "Update Face system files" says on the button.
     #
-    #   systemd-run --unit=omarchy-face-install --collect --property=Type=exec \
-    #               /usr/local/bin/omarchy-face-admin build-engine
+    # `started` is false rather than fatal when the job could not start: the
+    # system half is installed either way, and the `engine` row's own Fix is the
+    # way to try again.
+    started=false
+    if ((first_install)); then
+      if start_install_job; then
+        started=true
+      else
+        warnings+=("the engine build did not start: $job_error")
+      fi
+    fi
+
+    printf '{"ok":true,"version":%s,"changed":%s,"warnings":%s,"started":%s}\n' \
+      "$(json_string "$new_version")" "$(json_array "${changed[@]}")" \
+      "$(json_array "${warnings[@]}")" "$started"
+    exit 0
+    ;;
+
+  install-engine)
+    # Build the engine, or repair one that is there but not configured. The
+    # answer is `{"started":true}`, never the build's own result: the build
+    # outlives this process by design, and a verb that waited for it would be
+    # back to a job that dies with the popup.
+    assert_owner
+    [[ -n $account ]] || die "not_installed"
+
+    start_install_job
+    case $? in
+      0) ;;
+      3) die "install_running" 3 ;;
+      *) die "${job_error:-start_failed}" ;;
+    esac
+    printf '{"started":true}\n'
+    exit 0
+    ;;
+
+  build-engine)
+    # The job itself (plan-engine.md §5.2). Only ever run by the transient unit
+    # install-engine starts.
     #
-    # It is deliberately not stubbed: "started":false is true today, and a
-    # first install that claimed to have started a build would leave the Setup
-    # view waiting for progress that never arrives.
-    printf '{"ok":true,"version":%s,"changed":%s,"warnings":%s,"started":false}\n' \
-      "$(json_string "$new_version")" "$(json_array "${changed[@]}")" "$(json_array "${warnings[@]}")"
+    # Refused when PKEXEC_UID is set, and the reason is not access control --
+    # the owner can already start this work with install-engine. It is that a
+    # pkexec'd build would run as a child of the popup's Process and be
+    # SIGKILLed when the popup closes, half way through `pacman -U`. The only
+    # supported way in is the unit.
+    [[ -z $caller_uid ]] || die "not_owner"
+
+    # One build at a time, whoever asked. The flock is taken before any state is
+    # written, so a second job cannot stamp `running` over the first one's step.
+    ensure_run_dir
+    exec 8>>"$INSTALL_LOCK" 2>/dev/null || die "install_failed"
+    flock -n 8 || die "install_running" 3
+    chmod 0600 "$INSTALL_LOCK" 2>/dev/null
+
+    trap build_interrupted TERM INT HUP
+    read_install_started
+    install_step=""
+    audit "engine build running"
+
+    # Everything the build needs is already there, and it is the CPU-only build:
+    # then deps, fetch, build and install have nothing to do and the job is one
+    # `configure` away from done. This is the ordinary path after a
+    # `purge --keep-packages`, and it is why the Remove view can offer to keep
+    # the packages at all.
+    rebuild=1
+    if engine_packages_cpu_only; then
+      rebuild=0
+      install_notes+=("howdy $(pacman -Q howdy 2>/dev/null | awk '{print $2}') was already installed")
+    fi
+
+    # 1. deps
+    step_begin deps
+    if ((rebuild)); then
+      # A held db.lck is somebody else's pacman, not a broken machine: say so
+      # rather than failing inside pacman a minute later.
+      [[ -e /var/lib/pacman/db.lck ]] && build_fail pacman_locked
+      # No `-Sy`. Refreshing the databases without upgrading is the partial
+      # upgrade Arch tells you never to do, and a GUI button is the last place
+      # to do it: a machine whose databases are too old to resolve these names
+      # fails here with pacman's own message in the log.
+      pacman -S --needed --noconfirm "${BUILD_DEPS[@]}" >>"$INSTALL_LOG" 2>&1 ||
+        build_fail deps_failed
+    else
+      install_log "skipped: the engine is already installed"
+    fi
+
+    # 2. fetch, and 3. build, both as the build user.
+    step_begin fetch
+    if ((rebuild)); then
+      run_builder_phase fetch
+    else
+      install_log "skipped"
+    fi
+
+    step_begin build
+    if ((rebuild)); then
+      run_builder_phase build
+    else
+      install_log "skipped"
+    fi
+
+    # 4. install. Root's own checks come first, on the package FILES, because
+    #    the patch that asked for a CPU-only build ran as a uid whose whole job
+    #    was to run somebody else's PKGBUILD.
+    step_begin install
+    if ((rebuild)); then
+      find_package "$BUILD_STATE/python-dlib" python-dlib || build_fail dlib_package_missing
+      dlib_pkg=$found_package
+      dlib_info=$(package_info "$dlib_pkg") || build_fail dlib_package_missing
+      grep -qx "pkgname = python-dlib" <<<"$dlib_info" || build_fail dlib_package_missing
+      # The one check this whole phase exists for. A dlib built against CUDA
+      # depends on it; nothing else about the file says so as plainly.
+      if grep -qiE '^depend = (cuda|cudnn)' <<<"$dlib_info"; then
+        build_fail cuda_in_package
+      fi
+      if compgen -G "$BUILD_STATE/python-dlib/python-dlib-cuda-*.pkg.tar.*" >/dev/null; then
+        build_fail cuda_in_package
+      fi
+
+      find_package "$BUILD_STATE/howdy" howdy || build_fail howdy_package_missing
+      howdy_pkg=$found_package
+      grep -qx "pkgname = howdy" <<<"$(package_info "$howdy_pkg")" || build_fail howdy_package_missing
+      # The drop-in, checked in the package rather than in the PKGBUILD. If the
+      # AUR spells the install line differently one day the patch above misses
+      # it, and this is what still knows.
+      dropin_built=0
+      if bsdtar -tf "$howdy_pkg" 2>/dev/null | grep -q '10-howdy\.conf'; then
+        dropin_built=1
+        install_notes+=("the built howdy package carried the polkit drop-in; it was removed after installing")
+      fi
+
+      install_log "installing $(basename -- "$dlib_pkg") and $(basename -- "$howdy_pkg")"
+      pacman -U --noconfirm --asdeps "$dlib_pkg" >>"$INSTALL_LOG" 2>&1 || build_fail dlib_install_failed
+      pacman -U --noconfirm "$howdy_pkg" >>"$INSTALL_LOG" 2>&1 || build_fail howdy_install_failed
+
+      if ((dropin_built)) || [[ -e $HOWDY_DROPIN ]]; then
+        rm -f -- "$HOWDY_DROPIN"
+        rmdir /usr/lib/systemd/system/polkit-agent-helper@.service.d 2>/dev/null
+        systemctl daemon-reload >/dev/null 2>&1
+      fi
+    else
+      install_log "skipped"
+    fi
+
+    # 5. configure. howdy's config.ini is root-only (the package installs the
+    #    whole directory 0600), so everything the unprivileged status helper
+    #    needs to judge this is copied into engine.json afterwards (§11.4).
+    step_begin configure
+    [[ -f $HOWDY_CONFIG ]] || build_fail howdy_config_missing
+
+    camera_doc=$("$CAMERA" --describe 2>/dev/null) || build_fail no_ir_camera
+    ir_path=$(json_value "$camera_doc" ir)
+    ir_size=$(json_value "$camera_doc" irSize)
+    [[ -n $ir_path ]] || build_fail no_ir_camera
+
+    frame_width=-1
+    frame_height=-1
+    if [[ $ir_size =~ ^([0-9]+)x([0-9]+)$ ]]; then
+      frame_width=${BASH_REMATCH[1]}
+      frame_height=${BASH_REMATCH[2]}
+    else
+      ir_size=""
+    fi
+
+    # One anchored edit per key, each read back. `certainty` and `dark_threshold`
+    # stay stock: they are howdy's own judgement about faces, and phase 4
+    # measures against them rather than moving them first.
+    set_config_key device_path "$ir_path" || build_fail config_key_missing
+    set_config_key frame_width "$frame_width" || build_fail config_key_missing
+    set_config_key frame_height "$frame_height" || build_fail config_key_missing
+    set_config_key recording_plugin opencv || build_fail config_key_missing
+    # 5 s, not howdy's stock 4: the lock screen re-blanks 5 s after a wake
+    # (§9.2), and sudo uses the same value. Disclosed as risk 8.
+    set_config_key timeout 5 || build_fail config_key_missing
+    set_config_key capture_failed false || build_fail config_key_missing
+    set_config_key capture_successful false || build_fail config_key_missing
+    set_config_key end_report true || build_fail config_key_missing
+    set_config_key disabled false || build_fail config_key_missing
+
+    certainty_raw=$(config_ini_get certainty)
+    [[ $certainty_raw =~ ^[0-9]+([.][0-9]+)?$ ]] || build_fail config_key_missing
+    # howdy's config is on a 1-10 scale and every number in Face's contract is on
+    # 0-1 (plan-merged.md §2 rule 8). The division happens once, here.
+    certainty=$(awk -v value="$certainty_raw" 'BEGIN { printf "%.4g", value / 10 }')
+
+    howdy_version=$(pacman -Q howdy 2>/dev/null | awk '{print $2}')
+    [[ -n $howdy_version ]] || build_fail howdy_package_missing
+
+    [[ -d $STORE_DIR ]] || install -d -o root -g root -m 0755 "$STORE_DIR" || build_fail install_failed
+    engine_tmp=$ENGINE_FILE.tmp
+    printf '{"howdy":%s,"threshold":%s,"timeout":5,"device_path":%s,"frameSize":%s,"recording_plugin":"opencv","end_report":true,"certainty":%s,"at":%s}\n' \
+      "$(json_string "$howdy_version")" "$certainty" "$(json_string "$ir_path")" \
+      "$(json_string "$ir_size")" "$certainty" "$(now_seconds)" >"$engine_tmp" ||
+      build_fail install_failed
+    chmod 0644 "$engine_tmp"
+    chown root:root "$engine_tmp"
+    mv -f "$engine_tmp" "$ENGINE_FILE" || build_fail install_failed
+    install_log "configured howdy $howdy_version for $ir_path${ir_size:+ at $ir_size}"
+
+    # 6. done. The build directory goes now rather than at the next build: it
+    #    holds a source tree and two packages, and keeping them would mean a
+    #    machine that has finished still carrying half a gigabyte for nothing.
+    step_begin "done"
+    build_dir_remove
+    write_install "done" "done" ""
+    audit "engine build finished: howdy $howdy_version, CPU-only dlib"
+    printf '{"ok":true,"howdy":%s,"notes":%s}\n' \
+      "$(json_string "$howdy_version")" \
+      "$(json_array ${install_notes[@]+"${install_notes[@]}"})"
     exit 0
     ;;
 
@@ -690,6 +1251,10 @@ case $verb in
     #    directory, so they go by name rather than by removing the directory.
     rm -f "$MODELS"/omarchy-face.*.dat 2>/dev/null
     rm -rf "$STORE_DIR" "$RUN_DIR" "$CONFIG_DIR" "$BUILD_STATE"
+    # systemd leaves /var/lib/<name> as a symlink to a DynamicUser unit's
+    # StateDirectory. `rm -rf` on the target does not take the link with it, and
+    # a dangling one is debris a removal should not leave.
+    [[ -L /var/lib/omarchy-face-build ]] && rm -f /var/lib/omarchy-face-build
 
     # 4. Packages. Scope says remove everything; --keep-packages is the Remove
     #    view's "saves a rebuild" tick. Never in minimal mode: howdy may be
@@ -727,6 +1292,7 @@ case $verb in
     for leftover in "$STORE_DIR" "$RUN_DIR" "$CONFIG_DIR" "$BUILD_STATE"; do
       [[ -e $leftover ]] && incomplete+=("$leftover")
     done
+    [[ -L /var/lib/omarchy-face-build ]] && incomplete+=("/var/lib/omarchy-face-build")
     # `systemctl disable --now` can fail without saying so on a machine where
     # the unit is masked, or wedged, or the manager is busy. The unit FILES are
     # gone by now, so a socket still listening is an orphan holding a path in
@@ -823,8 +1389,8 @@ case $verb in
     ;;
 
   enroll-session | set-label | set-permission | remove-appearance | remove-person | \
-  sudo-on | sudo-off | lock-on | lock-off | regenerate | install-engine | build-engine)
-    # Phases 3 to 5 (plan-engine.md §1). Answering in the contract's error shape
+  sudo-on | sudo-off | lock-on | lock-off | regenerate)
+    # Phases 4 to 7 (plan-engine.md §1). Answering in the contract's error shape
     # rather than with prose keeps the GUI's error path honest: whatever asked
     # for this gets {"error":…} and exit 1, exactly as it will if the real verb
     # ever fails.

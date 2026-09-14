@@ -39,6 +39,8 @@ PEOPLE_FILE=$STORE_DIR/people.json
 ENGINE_FILE=$STORE_DIR/engine.json
 RUN_DIR=/run/omarchy-face
 INSTALL_FILE=$RUN_DIR/install.json
+INSTALL_LOG=$RUN_DIR/install.log
+INSTALL_UNIT=omarchy-face-install.service
 POLICY=/usr/share/polkit-1/actions/no.graveklar.face.policy
 UNIT_DIR=/etc/systemd/system
 
@@ -61,8 +63,27 @@ HELPER_COUNT=7
 
 case ${1:-} in
   --json | "") ;;
+  --install-log)
+    # The last 20 lines of the engine build's log, which is what the Setup view
+    # shows under the `engine` row (plan-gui.md §4 row 4, plan-merged.md §1
+    # row 9). It lives here and not in the GUI because the path is the engine's
+    # to know, and because the development stubs answer it from a fixture like
+    # every other read.
+    #
+    # Bounded three ways: the last 64 KB of the file, carriage returns split
+    # into lines (pacman and makepkg overwrite a line rather than ending it),
+    # and 20 lines out the far end. A build log is megabytes; the panel gets a
+    # screenful.
+    if [[ -r $INSTALL_LOG ]]; then
+      tail -c 65536 "$INSTALL_LOG" 2>/dev/null |
+        tr '\r\000' '\n ' |
+        sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' |
+        tail -n 20
+    fi
+    exit 0
+    ;;
   *)
-    echo "usage: omarchy-face-status --json" >&2
+    echo "usage: omarchy-face-status [--json|--install-log]" >&2
     exit 2
     ;;
 esac
@@ -332,9 +353,10 @@ fi
 
 # --- rows the later phases fill in ------------------------------------------
 #
-# Each is answered from what is on disk, which before its phase is nothing. None
-# of them offers a Fix yet: the verbs behind them answer not_implemented until
-# F2 (engine), F3 (people), F4 (sudo) and F6 (lock).
+# Each is answered from what is on disk, which before its phase is nothing.
+# `engine` and `install-job` are real from phase 3; `people`, `sudo` and `lock`
+# offer no Fix yet, because the verbs behind them answer not_implemented until
+# F3 (people), F4 (sudo) and F6 (lock).
 
 engine_installed=false
 howdy_version=""
@@ -358,22 +380,79 @@ if [[ -r $INSTALL_FILE ]] && jq -e . "$INSTALL_FILE" >/dev/null 2>&1; then
   install_doc=$(jq -c . "$INSTALL_FILE")
 fi
 install_state=$(jq -r '.state // "idle"' <<<"$install_doc")
+install_step=$(jq -r '.step // ""' <<<"$install_doc")
+install_error=$(jq -r '.error // ""' <<<"$install_doc")
 
-if [[ $engine_installed == true ]]; then
-  if [[ -r $ENGINE_FILE ]]; then
-    add_row engine "Face engine" ok "howdy $howdy_version" false ""
-  else
-    add_row engine "Face engine" broken "howdy is installed but has not been configured for this camera" false ""
-  fi
-else
-  add_row engine "Face engine" needs_action "the face engine is not built yet" false ""
+# A build that says `running` is only running while its unit is. The job is a
+# transient root unit, so a SIGKILL, a reboot into a machine whose /run survived
+# (it does not, but a container's might) or a systemd that lost it leaves
+# install.json saying `running` with nothing behind it -- and a row that says
+# "building" for ever has no way back. Asking systemd costs one call and needs
+# no privilege. Where systemd cannot be reached at all, the file is taken at its
+# word rather than declared stale on no evidence.
+install_live=true
+if [[ $install_state == running && -d /run/systemd/system ]]; then
+  systemctl is-active --quiet "$INSTALL_UNIT" 2>/dev/null || install_live=false
 fi
 
-case $install_state in
-  running) add_row install-job "Engine build" unknown "building" false "" ;;
-  failed)  add_row install-job "Engine build" broken "$(jq -r '.error // "the build failed"' <<<"$install_doc")" false "" ;;
-  *)       add_row install-job "Engine build" ok "" false "" ;;
-esac
+# What `configure` recorded, which is the only unprivileged view of what it did
+# to howdy's root-only config.ini (plan-engine.md §11.4). The `engine` row is
+# `ok` only when this file agrees with the packages that are installed: an
+# engine.json from before an upgrade describes a howdy that is no longer there.
+engine_configured=false
+engine_problem=""
+if [[ $engine_installed == true ]]; then
+  if [[ ! -r $ENGINE_FILE ]]; then
+    engine_problem="howdy is installed but has not been configured for this camera"
+  elif ! jq -e . "$ENGINE_FILE" >/dev/null 2>&1; then
+    engine_problem="the engine's record of its own configuration cannot be read"
+  else
+    engine_doc=$(jq -c . "$ENGINE_FILE")
+    engine_recorded=$(jq -r '.howdy // ""' <<<"$engine_doc")
+    engine_device=$(jq -r '.device_path // ""' <<<"$engine_doc")
+    engine_timeout=$(jq -r '.timeout // 0' <<<"$engine_doc")
+    engine_report=$(jq -r '.end_report // false' <<<"$engine_doc")
+    if [[ $engine_recorded != "$howdy_version" ]]; then
+      engine_problem="howdy $howdy_version is installed, but Face configured $engine_recorded — build the engine again"
+    elif [[ -z $engine_device || $engine_timeout != 5 || $engine_report != true ]]; then
+      engine_problem="howdy is installed but is not configured the way Face needs it"
+    else
+      engine_configured=true
+    fi
+  fi
+fi
+
+# The `engine` row and the `install-job` row are two views of one thing: the GUI
+# renders `install-job` inside `engine` (plan-merged.md §1 row 3), so while a
+# build runs the engine row is `unknown` -- never `needs_action` with a Fix that
+# would start a second build, and never `ok` on the strength of packages that
+# are being replaced as it is read.
+if [[ $install_state == running && $install_live == true ]]; then
+  add_row engine "Face engine" unknown \
+    "building the face engine${install_step:+ — $install_step}" false ""
+elif [[ $engine_configured == true ]]; then
+  add_row engine "Face engine" ok "howdy $howdy_version" false ""
+elif [[ -n $engine_problem ]]; then
+  add_row engine "Face engine" broken "$engine_problem" true install-engine
+elif [[ $install_state == failed ]]; then
+  add_row engine "Face engine" broken \
+    "the engine build failed${install_error:+: $install_error}" true install-engine
+elif [[ $install_state == running ]]; then
+  add_row engine "Face engine" broken \
+    "the engine build stopped before it finished" true install-engine
+else
+  add_row engine "Face engine" needs_action "the face engine is not built yet" true install-engine
+fi
+
+if [[ $install_state == running && $install_live != true ]]; then
+  add_row install-job "Engine build" broken "the build stopped before it finished" true install-engine
+else
+  case $install_state in
+    running) add_row install-job "Engine build" unknown "building${install_step:+ — $install_step}" false "" ;;
+    failed)  add_row install-job "Engine build" broken "${install_error:-the build failed}" true install-engine ;;
+    *)       add_row install-job "Engine build" ok "" false "" ;;
+  esac
+fi
 
 people_doc=""
 sudo_faces=0

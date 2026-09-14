@@ -479,9 +479,11 @@ check "no omarchy-face block or helper line in any PAM stack" \
 if compgen -G '/etc/pam.d/*.omarchy-face.bak' >/dev/null; then
   note "a *.omarchy-face.bak file from the old install is still in /etc/pam.d (the legacy row reports it; purge-legacy removes it)"
 fi
+# /var/lib/omarchy-face-build is the symlink systemd leaves beside a DynamicUser
+# unit's StateDirectory (phase 3); `-e` is false for a dangling one, hence `-L`.
 check "no state, store or config directory" \
   bash -c "[[ ! -e /run/omarchy-face && ! -e /var/lib/omarchy-face && ! -e /etc/omarchy-face &&
-              ! -e /var/lib/private/omarchy-face-build ]]"
+              ! -e /var/lib/private/omarchy-face-build && ! -L /var/lib/omarchy-face-build ]]"
 check "no derived model files" no_glob '/usr/lib/security/howdy/models/omarchy-face.*.dat'
 check "no snapshot directory left in /run" no_glob '/run/omarchy-face-install.*'
 check "howdy and python-dlib are not installed" \
