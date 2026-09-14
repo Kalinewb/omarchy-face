@@ -40,6 +40,7 @@ UNIT_DIR=/etc/systemd/system
 MODELS=/usr/lib/security/howdy/models
 BUILD_STATE=/var/lib/private/omarchy-face-build
 INSTALL_UNIT=omarchy-face-install.service
+BUILD_PHASE_UNIT=omarchy-face-build.service
 
 ENGINE_FILE=$STORE_DIR/engine.json
 INSTALL_FILE=$RUN_DIR/install.json
@@ -753,10 +754,25 @@ exit 0
 BUILD_SCRIPT_END
 
 run_as_builder() { # run_as_builder <fetch|build>
-  systemd-run --wait --pipe --quiet --collect \
+  # The phase runs in a unit of its own, and that unit is NOT in this process's
+  # cgroup -- so if the job is stopped (RuntimeMaxSec, `systemctl stop`), a
+  # twenty-minute makepkg would otherwise carry on with nothing left watching
+  # it. BindsTo ties the two together: the build stops when the job does.
+  #
+  # Only when there IS a job: run as root by hand there is no
+  # omarchy-face-install.service to bind to, and a BindsTo on a unit systemd
+  # cannot load refuses to start at all.
+  local bound=()
+  if systemctl is-active --quiet "$INSTALL_UNIT" 2>/dev/null; then
+    bound=(--property="BindsTo=$INSTALL_UNIT" --property="After=$INSTALL_UNIT")
+  fi
+  systemctl reset-failed "$BUILD_PHASE_UNIT" >/dev/null 2>&1
+  systemd-run --wait --pipe --quiet --collect --unit="${BUILD_PHASE_UNIT%.service}" \
     --property=DynamicUser=yes \
     --property=StateDirectory=omarchy-face-build \
     --property=WorkingDirectory=/var/lib/omarchy-face-build \
+    --property=Description="omarchy-face engine build ($1)" \
+    "${bound[@]}" \
     --setenv=HOME=/var/lib/omarchy-face-build \
     --setenv=LANG=C \
     /bin/bash -c "$BUILD_SCRIPT" omarchy-face-build /var/lib/omarchy-face-build "$1" \
@@ -840,6 +856,10 @@ build_fail() { # build_fail <code>
 # that stopped (§10.1's install-job row).
 build_interrupted() {
   install_log "the build was stopped"
+  # Whatever the build user is doing, it is not wanted any more. (BindsTo in
+  # run_as_builder covers the case where systemd stops the job itself; this
+  # covers a signal that reached this process alone.)
+  systemctl stop "$BUILD_PHASE_UNIT" >/dev/null 2>&1
   write_install failed "$install_step" interrupted
   build_dir_remove
   exit 143

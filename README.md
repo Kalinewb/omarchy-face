@@ -6,7 +6,9 @@ for the people you choose.
 > **Being rewritten.** This branch is a ground-up rewrite against a fresh plan,
 > built phase by phase, and **it does not authenticate anything yet**. No PAM
 > stack is edited, no camera is opened, and no face is recorded. Setup can now
-> install Face's system files and take them off again; the helpers it installs
+> install Face's system files and take them off again, and build the face
+> engine: howdy and a CPU-only dlib, compiled by a user systemd invents for the
+> job, in a unit that survives the popup being closed. The helpers it installs
 > are in their safe state — the sudo gate always skips, the verifier never
 > authenticates, and the daemon answers nothing.
 >

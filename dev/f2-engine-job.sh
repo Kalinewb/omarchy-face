@@ -293,18 +293,25 @@ if [[ ${1:-} != --sandboxed && ${OMARCHY_FACE_F2_IN_NS:-0} != 1 ]]; then
     bash -c "grep -A3 '^  build-engine)' '$ADMIN_SRC' | grep -q caller_uid || grep -q 'Refused when PKEXEC_UID' '$ADMIN_SRC'"
   check "makepkg runs under DynamicUser, never as root or as the owner" \
     grep -q 'DynamicUser=yes' "$ADMIN_SRC"
+  check "…in a unit bound to the job, so stopping the job stops the build" \
+    grep -q 'BindsTo=\$INSTALL_UNIT' "$ADMIN_SRC"
   check "the GUI never runs a build itself" \
     bash -c "! grep -rn 'makepkg\|pacman ' '$REPO'/*.qml '$REPO'/common/*.qml"
   check "the GUI's only engine verb is install-engine" \
     grep -q 'adminArgv(\["install-engine"\])' "$REPO/SetupView.qml"
 
-  exec env OMARCHY_FACE_F2_IN_NS=1 unshare --map-root-user --mount --pid --fork \
-    "$BASH" "$0" --sandboxed
+  # The checks above ran before the namespace, and `exec` throws this process
+  # away -- so the count goes with it unless it is carried across.
+  exec env OMARCHY_FACE_F2_IN_NS=1 \
+    OMARCHY_FACE_F2_CHECKS=$checks OMARCHY_FACE_F2_FAILURES=$failures \
+    unshare --map-root-user --mount --pid --fork "$BASH" "$0" --sandboxed
 fi
 
 # --- inside the namespace -----------------------------------------------------
 
 if [[ ${OMARCHY_FACE_F2_IN_NS:-0} == 1 ]]; then
+  checks=${OMARCHY_FACE_F2_CHECKS:-0}
+  failures=${OMARCHY_FACE_F2_FAILURES:-0}
   # /etc as a farm of symlinks to the real one, except the two directories the
   # job writes; the same trick f1-round-trip.sh uses, and for the same reason:
   # a bare tmpfs leaves the namespace without /etc/passwd.

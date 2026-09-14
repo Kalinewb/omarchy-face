@@ -361,6 +361,7 @@ Panel {
     // whether a plugins-folder write closed the popup (plan-merged.md §4);
     // there is no other way to ask a destroyed window whether it is still there.
     function state(): string {
+      var build = root.installDoc || {}
       return JSON.stringify({
         open: root.opened,
         view: root.view,
@@ -370,6 +371,16 @@ Panel {
         barState: root.barState,
         barTarget: root.barTarget,
         barTooltip: root.barTooltip,
+        // The build the `engine` row is showing. It is here for the same reason
+        // the rest is: phase 3's gate is "closing the popup or restarting the
+        // shell mid-build loses nothing", and a shell that has just restarted
+        // cannot be asked what it is rendering any other way.
+        install: {
+          state: String(build.state || "idle"),
+          step: String(build.step || ""),
+          startedAt: Number(build.startedAt || 0),
+          updatedAt: Number(build.updatedAt || 0)
+        },
         dev: engine.dev
       })
     }
