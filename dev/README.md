@@ -20,7 +20,7 @@ the four helpers, answering from `dev/fixtures/<name>/`:
 | Helper | What the stub does |
 |---|---|
 | `omarchy-face-status` | prints `dev/fixtures/$OMARCHY_FACE_DEV_FIXTURE/status.json`, exit 0 always |
-| `omarchy-face-admin` | answers in the contract's shape, writes nothing; `enroll-session` is not scripted yet. Setup's **first install** also lands here in development (`Ask.firstInstallArgv`), so the `pkexec /bin/bash` form never runs against a fixture |
+| `omarchy-face-admin` | answers in the contract's shape, writes nothing outside the fixture directory; `enroll-session` is not scripted yet. Setup's **first install** also lands here in development (`Ask.firstInstallArgv`), so the `pkexec /bin/bash` form never runs against a fixture. `install-engine` and `install-system` start the stand-in build below |
 | `omarchy-face-lock` | answers `{ok}` and deliberately never touches the plugins folder |
 | `omarchy-face-identity` | `list` from the fixture; `verify` always exits 3, unavailable |
 
@@ -117,6 +117,54 @@ path is tested against the code being written. Nothing outside the namespace is
 written, and no password is needed. What the sandbox cannot do is talk to
 systemd, so `systemctl --now` and `daemon-reload` come back as warnings; `--here`
 is the run that proves the socket really starts.
+
+## The stand-in engine build
+
+`dev/bin/omarchy-face-build-standin` walks the real step list into
+`$OMARCHY_FACE_DEV_STATE/install.json` and writes a log beside it, without
+compiling anything. `install-engine` (and the first install) start it as a
+transient unit of the **user** manager — `systemd-run --user --unit=
+omarchy-face-dev-build` — which gives it the one property the real job's gate is
+about: it is not a child of the popup, so closing the popup or restarting the
+shell does not touch it.
+
+```sh
+./install.sh --dev                                       # click Build the face engine
+OMARCHY_FACE_DEV_BUILD_SECONDS=20 ./install.sh --dev     # a longer build to close the popup during
+OMARCHY_FACE_DEV_BUILD_FAIL=build:dlib_build_failed ./install.sh --dev   # the failed path
+systemctl --user status omarchy-face-dev-build           # it is a unit, not a child
+```
+
+The variables have to reach the *shell*, which inherits Hyprland's environment;
+`install.sh --dev` passes `OMARCHY_FACE_DEV_*` through, so set them in front of
+it rather than exporting them in a terminal.
+
+## F2 — the engine build
+
+```sh
+./dev/f2-engine-job.sh              # sandbox: build-engine end to end, stubs for pacman and systemd
+./dev/f2-engine-job.sh --detach     # the job outlives whatever started it
+./dev/f2-engine-job.sh --builder    # the REAL compile, as this account (dlib takes a while)
+sudo ./dev/f2-engine-job.sh --build-user   # plan-engine.md §5.3: makepkg under DynamicUser
+```
+
+The gate of `plan-merged.md §4` phase 3. The default run is the same private
+user namespace `f1-round-trip.sh` uses, with `pacman`, `systemctl`,
+`systemd-run` and the camera stubbed in `/usr/local/bin` (which is where the
+helper's pinned `PATH` looks first). That is what lets the package verification
+be tested with packages that are deliberately wrong: a dlib whose `.PKGINFO`
+depends on CUDA, and a howdy still carrying the polkit drop-in.
+
+`--builder` runs the **shipped** build script — extracted out of
+`system/omarchy-face-admin`, so a patch that is edited in the helper and not in
+the test cannot pass — and checks what came out: one `python-dlib` package, no
+`python-dlib-cuda`, nothing depending on cuda or cudnn, no `libcud*` in the
+package, and no `10-howdy.conf` in howdy's.
+
+`--build-user` is the only run that needs root, and it answers the one question
+a sandbox cannot: whether `makepkg` (and `fakeroot` inside it) runs under
+systemd's `DynamicUser`. If it does not, `plan-engine.md §5.3`'s fallback
+applies.
 
 ## F0
 

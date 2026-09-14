@@ -13,6 +13,14 @@ FIXTURES=${OMARCHY_FACE_DEV_FIXTURES:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")
 FIXTURE=${OMARCHY_FACE_DEV_FIXTURE:-fresh}
 FILE="$FIXTURES/$FIXTURE/status.json"
 
+# The build log's tail, from wherever the stand-in job is writing it. Same
+# bounds as the real helper: the last 64 KB, carriage returns split, 20 lines.
+if [[ ${1:-} == --install-log ]]; then
+  LOG=${OMARCHY_FACE_DEV_STATE:-$FIXTURES/$FIXTURE}/install.log
+  [[ -r $LOG ]] && tail -c 65536 "$LOG" | tr '\r\000' '\n ' | tail -n 20
+  exit 0
+fi
+
 if [[ ! -f $FILE ]]; then
   # A missing fixture is a development mistake, not a machine state. Say so in
   # the document itself rather than exiting non-zero, which the GUI would read

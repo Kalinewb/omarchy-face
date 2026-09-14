@@ -36,6 +36,14 @@ Item {
     return [pluginBin + "/omarchy-face-status", "--json"]
   }
 
+  // The engine build's log tail (plan-gui.md §4 row 4). It goes through the
+  // status helper rather than a `tail` of a path the GUI knows, so the panel
+  // keeps exactly one idea of where the engine's files live -- and so the dev
+  // stubs can answer it from a fixture like every other read.
+  function installLogArgv() {
+    return [pluginBin + "/omarchy-face-status", "--install-log"]
+  }
+
   function lockArgv(args) {
     return [pluginBin + "/omarchy-face-lock"].concat(args || [])
   }

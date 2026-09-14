@@ -10,10 +10,12 @@ import qs.Ui
 // `omarchy-face-status` sends and invents nothing.
 //
 // Phase 2 makes `legacy`, `camera` and `system` real, which means their Fix
-// buttons: purge-legacy, the first install, and the system-file update. The
-// other rows render their state and no button, because the verbs behind them
-// answer not_implemented until their own phase -- a Fix that cannot fix
-// anything is worse than no Fix at all.
+// buttons: purge-legacy, the first install, and the system-file update. Phase 3
+// adds `engine`, which is the one row that is not a single state: it carries the
+// build job's step list, its elapsed time and a tail of its log. The remaining
+// rows render their state and no button, because the verbs behind them answer
+// not_implemented until their own phase -- a Fix that cannot fix anything is
+// worse than no Fix at all.
 Column {
   id: view
 
@@ -61,14 +63,112 @@ Column {
     if (row.fix === "purge-legacy") return "Remove the old install"
     if (row.fix === "install-first") return "Install Face's system files"
     if (row.fix === "install-system") return "Update Face system files"
+    if (row.fix === "install-engine") {
+      // While a build runs there is no button at all. `install-engine` would
+      // exit 3, and the row is already showing the build that is happening.
+      if (view.buildRunning) return ""
+      // One verb, two buttons: after a failure the honest word is the one the
+      // user is about to do, not the one they did before it failed.
+      return view.buildState === "failed" ? "Try again" : "Build the face engine"
+    }
     return ""
+  }
+
+  // --- the engine build (plan-gui.md §4 row 4) ------------------------------
+  //
+  // Everything below reads the job's own files. Nothing here owns the build, so
+  // closing the popup, or restarting the shell, loses nothing: the row comes
+  // back where the build has got to, because that is where it reads it from.
+
+  readonly property var build: panel ? panel.installDoc : ({})
+  readonly property string buildState: build && build.state ? String(build.state) : "idle"
+  readonly property string buildStep: build && build.step ? String(build.step) : ""
+  readonly property string buildError: build && build.error ? String(build.error) : ""
+  readonly property var buildSteps: build && Array.isArray(build.steps) && build.steps.length > 0
+                                    ? build.steps
+                                    : ["deps", "fetch", "build", "install", "configure", "done"]
+  readonly property var buildNotes: build && Array.isArray(build.notes) ? build.notes : []
+  readonly property bool buildRunning: buildState === "running"
+  readonly property bool buildShown: buildRunning || buildState === "failed"
+
+  // A clock of its own: elapsed time has to move while nothing else changes,
+  // and install.json is only rewritten when a step does.
+  property int tick: 0
+  readonly property int nowSeconds: { view.tick; return Math.floor(Date.now() / 1000) }
+
+  property string logTail: ""
+  property bool logExpanded: false
+  property bool logBusy: false
+
+  // Seconds as a person reads them. Never a percentage: the plan is explicit
+  // that a build reports elapsed time per step, because nothing here can know
+  // how long a compile has left (plan-engine.md §5.2).
+  function elapsedText(seconds) {
+    if (!(seconds > 0)) return ""
+    var s = Math.floor(seconds)
+    if (s < 60) return s + "s"
+    var m = Math.floor(s / 60)
+    if (m < 60) return m + "m " + ("0" + (s % 60)).slice(-2) + "s"
+    return Math.floor(m / 60) + "h " + ("0" + (m % 60)).slice(-2) + "m"
+  }
+
+  function stepIndex(name) {
+    for (var i = 0; i < view.buildSteps.length; i++)
+      if (String(view.buildSteps[i]) === String(name)) return i
+    return -1
+  }
+
+  // ✓ done · → running · · not started yet. A step list that only ever grows
+  // forwards, which is what the fixed `steps` array is for.
+  function stepMark(index) {
+    var current = view.stepIndex(view.buildStep)
+    if (view.buildState === "done") return "✓"
+    if (current < 0) return index === 0 && view.buildRunning ? "→" : "·"
+    if (index < current) return "✓"
+    if (index > current) return "·"
+    return view.buildState === "failed" ? "✗" : "→"
+  }
+
+  function readLog() {
+    if (!panel || view.logBusy) return
+    view.logBusy = true
+    panel.ask.ask(panel.ask.installLogArgv(), "", function (result) {
+      view.logBusy = false
+      // The helper exits 0 with an empty log before the first line is written;
+      // that is not a failure, it is a build that has not said anything yet.
+      view.logTail = result.ok ? String(result.stdout || "") : ""
+    })
+  }
+
+  // A failure is the one state where the tail is worth reading without asking
+  // for it, so it opens itself (plan-gui.md §4 row 4).
+  onBuildStateChanged: {
+    if (view.buildState === "failed") { view.logExpanded = true; view.readLog() }
+    if (view.buildState === "idle" || view.buildState === "done") view.logTail = ""
+  }
+
+  Timer {
+    interval: 1000
+    repeat: true
+    running: view.buildShown
+    onTriggered: {
+      view.tick = view.tick + 1
+      // The log is re-read every two seconds, and only while somebody is
+      // looking at it: it is a subprocess per read.
+      if (view.logExpanded && (view.tick % 2) === 0) view.readLog()
+    }
   }
 
   // What went wrong, in the words the user has to act on. `owner_declined` is
   // its own case because nothing happened at all -- the dialog was dismissed,
   // and the row is exactly as it was.
-  function outcomeText(result) {
+  function outcomeText(result, row) {
     if (result.outcome === "owner_declined") return "Not authorised — nothing changed."
+    // Exit 3 is "the store or the install job is held" (plan-merged.md §2 rule
+    // 3). On the engine row there is only one thing it can be, and saying which
+    // is the difference between "try again" and "it is already happening".
+    if (result.outcome === "busy" && row && row.id === "engine")
+      return "The engine is already building."
     if (result.outcome === "busy") return "Face is busy with something else — try again in a moment."
     if (result.outcome === "missing") return "Face's helpers are not installed."
     var code = result.parsed && result.parsed.error ? String(result.parsed.error) : "it did not say why"
@@ -84,7 +184,36 @@ Column {
       return "/usr/local/bin is not owned by root, or is writable by others — Face will not install helpers there."
     if (code === "plugin_not_owned" || code === "plugin_missing" || code === "plugin_unsafe")
       return "Face could not read its own system files from the plugin folder."
+    if (code === "install_running") return "The engine is already building."
+    if (code === "start_failed")
+      return "The engine build could not be started — systemd would not take the job."
     return "It did not work: " + code + "."
+  }
+
+  // Why a build stopped, in the same voice. The engine's codes are words, not
+  // sentences, because the sentence belongs to whichever surface shows them.
+  function buildErrorText(code) {
+    if (code === "cuda_flag_missing")
+      return "dlib's build file no longer has the switch that turns CUDA off, and Face will not " +
+             "pull in a graphics toolkit behind your back. This needs a look at the package."
+    if (code === "cuda_in_package")
+      return "The dlib that was built still wants CUDA, so it was not installed."
+    if (code === "pacman_locked")
+      return "Another package manager is running. Let it finish and try again."
+    if (code === "deps_failed") return "The packages the build needs could not be installed."
+    if (code === "fetch_failed") return "The build files could not be downloaded."
+    if (code === "dlib_build_failed" || code === "howdy_build_failed")
+      return "The build did not finish. The log below says where it stopped."
+    if (code === "build_user_failed")
+      return "The build could not run as its own user. The log below says why."
+    if (code === "dlib_install_failed" || code === "howdy_install_failed")
+      return "The built packages could not be installed."
+    if (code === "no_ir_camera") return "The infrared camera could not be found."
+    if (code === "howdy_config_missing" || code === "config_key_missing")
+      return "The engine was installed but could not be configured for this camera."
+    if (code === "interrupted") return "The build was stopped before it finished."
+    if (code === "start_failed") return "The build could not be started."
+    return "The build stopped: " + code + "."
   }
 
   function runFix(row) {
@@ -94,6 +223,8 @@ Column {
       argv = panel.ask.adminArgv(["purge-legacy"])
     } else if (row.fix === "install-system") {
       argv = panel.ask.adminArgv(["install-system"])
+    } else if (row.fix === "install-engine") {
+      argv = panel.ask.adminArgv(["install-engine"])
     } else if (row.fix === "install-first") {
       var script = String(installScript.text() || "")
       if (script.trim() === "") {
@@ -112,7 +243,14 @@ Column {
     panel.ask.ask(argv, "", function (result) {
       view.busyRow = ""
       view.noteRow = row.id
-      view.noteText = result.ok ? "" : view.outcomeText(result)
+      view.noteText = result.ok ? "" : view.outcomeText(result, row)
+      // A started build answers immediately and then takes half an hour, so the
+      // row has to switch to the step list without waiting for the next status
+      // read (up to 30 s away).
+      if (result.ok && (row.fix === "install-engine" || row.fix === "install-first")) {
+        view.logTail = ""
+        panel.reloadWatched()
+      }
       // Every fix changes something the status document reports, so the row is
       // re-read rather than assumed to have moved.
       panel.refresh()
@@ -149,8 +287,13 @@ Column {
 
       // `legacy` is a row about something that is not there on a healthy
       // machine, so it renders only when it has something to report
-      // (plan-gui.md §4 row 1).
-      readonly property bool hidden: modelData.id === "legacy" && modelData.state === "ok"
+      // (plan-gui.md §4 row 1). `install-job` never renders as a row of its own:
+      // the GUI shows it inside `engine` (plan-merged.md §1 row 3), and two
+      // lines saying the same thing about one build is one line too many. The
+      // engine still sends it, and the bar widget still lights on it being
+      // broken (plan-gui.md §3).
+      readonly property bool hidden: (modelData.id === "legacy" && modelData.state === "ok")
+                                     || modelData.id === "install-job"
       // Below an unresolved `legacy`, every other row is dimmed: they were
       // computed on a machine that still has the old install on it.
       readonly property bool stale: view.legacyBlocking && modelData.id !== "legacy"
@@ -236,6 +379,15 @@ Column {
         font.pixelSize: Style.font.caption
       }
 
+      // The build, folded into the row it belongs to. A Loader, so eight rows
+      // that are not the engine carry none of it.
+      Loader {
+        width: parent.width
+        active: rowItem.modelData.id === "engine" && view.buildShown && !rowItem.stale
+        visible: active
+        sourceComponent: buildComponent
+      }
+
       Row {
         width: parent.width
         leftPadding: Style.space(22)
@@ -263,6 +415,138 @@ Column {
         font.family: view.fontFamily
         font.pixelSize: Style.font.caption
         wrapMode: Text.WordWrap
+      }
+    }
+  }
+
+  // The engine build, as the Setup view shows it (plan-gui.md §4 row 4): the
+  // fixed step list with a mark and the elapsed time, whatever the job left in
+  // `notes`, the reason if it failed, and a collapsed tail of the build log.
+  //
+  // Not a progress bar. Nothing in a compile can say how much is left, and a bar
+  // that creeps to 90% and stops there for twenty minutes is a worse answer than
+  // the truth, which is a step name and a clock.
+  Component {
+    id: buildComponent
+
+    Column {
+      width: parent ? parent.width : 0
+      leftPadding: Style.space(22)
+      topPadding: Style.space(2)
+      bottomPadding: Style.space(4)
+      spacing: Style.space(3)
+
+      Text {
+        textFormat: Text.PlainText
+        width: parent.width - Style.space(22)
+        visible: view.buildRunning
+        // Total elapsed, from when the owner asked -- install.json's `startedAt`
+        // is written by the verb that started the job, not by the job.
+        text: {
+          var started = Number(view.build.startedAt || 0)
+          var total = started > 0 ? view.nowSeconds - started : 0
+          return "Building — " + (view.elapsedText(total) || "just started")
+        }
+        color: view.dim
+        font.family: view.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+
+      Repeater {
+        model: view.buildSteps
+
+        Text {
+          required property var modelData
+          required property int index
+
+          textFormat: Text.PlainText
+          width: parent.width - Style.space(22)
+          // The step that is happening carries a clock of its own, from the
+          // last time the job wrote a line. The finished ones carry nothing:
+          // install.json keeps one `updatedAt`, so a per-step time for them
+          // would be invented rather than measured.
+          text: {
+            var mark = view.stepMark(index)
+            var line = mark + "  " + String(modelData)
+            if (mark !== "→") return line
+            var updated = Number(view.build.updatedAt || 0)
+            var seconds = updated > 0 ? view.nowSeconds - updated : 0
+            var elapsed = view.elapsedText(seconds)
+            return elapsed === "" ? line : line + "   " + elapsed
+          }
+          color: view.stepMark(index) === "·" ? view.dim
+               : view.stepMark(index) === "✗" ? Color.urgent
+               : view.foreground
+          opacity: view.stepMark(index) === "·" ? 0.6 : 1
+          font.family: view.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+
+      // Anything the job decided was worth saying out loud -- a kept package, a
+      // polkit drop-in it had to take back out.
+      Repeater {
+        model: view.buildNotes
+
+        Text {
+          required property var modelData
+          textFormat: Text.PlainText
+          width: parent.width - Style.space(22)
+          text: "· " + String(modelData)
+          color: view.dim
+          font.family: view.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+        }
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        width: parent.width - Style.space(22)
+        visible: view.buildState === "failed"
+        topPadding: Style.space(2)
+        text: view.buildErrorText(view.buildError)
+        color: Color.urgent
+        font.family: view.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WordWrap
+      }
+
+      // The log is a build's output: thousands of lines of compiler noise, and
+      // exactly what somebody needs when it stops. Collapsed while it is going
+      // well, open on a failure (plan-gui.md §4 row 4).
+      Text {
+        textFormat: Text.PlainText
+        topPadding: Style.space(2)
+        text: view.logExpanded ? "▾ Build log" : "▸ Build log"
+        color: view.dim
+        font.family: view.fontFamily
+        font.pixelSize: Style.font.caption
+
+        MouseArea {
+          anchors.fill: parent
+          cursorShape: Qt.PointingHandCursor
+          onClicked: {
+            view.logExpanded = !view.logExpanded
+            if (view.logExpanded) view.readLog()
+          }
+        }
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        width: parent.width - Style.space(22)
+        visible: view.logExpanded
+        text: view.logTail.trim() === "" ? "(nothing in the log yet)" : view.logTail.trim()
+        color: view.dim
+        // The bar's family is already the monospace one the shell resolves
+        // (`Style.fontFamily` defaults to "monospace"), so the tail lines up
+        // without this view naming a font of its own.
+        font.family: view.fontFamily
+        font.pixelSize: Style.font.caption
+        // No wrapping: a wrapped build log is unreadable, and the panel already
+        // flicks sideways for nothing else.
+        elide: Text.ElideRight
       }
     }
   }

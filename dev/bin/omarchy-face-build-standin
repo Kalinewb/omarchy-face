@@ -1,0 +1,66 @@
+#!/bin/bash
+
+# A stand-in for the engine build (plan-engine.md §5.2), for GUI work.
+#
+# It compiles nothing. What it does do is everything the GUI can observe: walk
+# the fixed step list, write `install.json` by same-directory temp + rename,
+# append to `install.log`, and take long enough that a person can close the
+# popup, restart the shell and come back to it.
+#
+# It is started the way the real job is -- as a transient unit, here the user
+# manager's (`systemd-run --user --unit=omarchy-face-dev-build`) -- so it has
+# the property this phase's gate is about: it is not a child of the popup's
+# Process, and nothing that happens to the shell touches it.
+#
+#   omarchy-face-build-standin <state dir> [seconds per step] [fail-at step:code]
+
+set -uo pipefail
+
+STATE=${1:-}
+PER_STEP=${2:-8}
+FAIL_AT=${3:-}
+
+[[ -n $STATE ]] || { echo "usage: omarchy-face-build-standin <state dir> [seconds] [step:code]" >&2; exit 2; }
+mkdir -p "$STATE" || exit 1
+
+FILE=$STATE/install.json
+LOG=$STATE/install.log
+STEPS=(deps fetch build install configure "done")
+STARTED=$(date +%s)
+NOTES=""
+
+write_install() { # write_install <state> <step> <error>
+  local tmp=$FILE.tmp
+  printf '{"state":"%s","step":"%s","steps":["deps","fetch","build","install","configure","done"],"startedAt":%s,"updatedAt":%s,"error":"%s","notes":[%s]}\n' \
+    "$1" "$2" "$STARTED" "$(date +%s)" "$3" "$NOTES" >"$tmp" || return 1
+  mv -f "$tmp" "$FILE"
+}
+
+log() { printf '%s %s\n' "$(date '+%H:%M:%S')" "$*" >>"$LOG"; }
+
+: >"$LOG"
+log "starting the engine build (development stand-in)"
+write_install running "" ""
+
+for step in "${STEPS[@]}"; do
+  [[ $step == done ]] && break
+  write_install running "$step" ""
+  log "== $step"
+
+  if [[ $FAIL_AT == "$step":* ]]; then
+    log "FAILED at $step: ${FAIL_AT#*:}"
+    write_install failed "$step" "${FAIL_AT#*:}"
+    exit 1
+  fi
+
+  # Something to read in the tail, so the collapsed log is not an empty box.
+  for n in $(seq 1 "$PER_STEP"); do
+    log "$step: line $n of $PER_STEP"
+    sleep 1
+  done
+done
+
+NOTES='"this build was a development stand-in and compiled nothing"'
+write_install "done" "done" ""
+log "== done"
+exit 0

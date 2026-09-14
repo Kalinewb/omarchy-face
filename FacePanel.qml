@@ -117,7 +117,7 @@ Panel {
   }
 
   readonly property string lockCompat: lockState && lockState.compat ? String(lockState.compat) : ""
-  readonly property bool installFailed: status && status.install && String(status.install.state) === "failed"
+  readonly property bool installFailed: String(installDoc.state || "") === "failed"
   readonly property bool lockAttention: lockCompat === "incompatible" || lockCompat === "failed"
   readonly property bool attention: brokenRow !== null || lockAttention || installFailed
 
@@ -226,6 +226,18 @@ Panel {
   property var people: null
   property var install: null
 
+  // What the Setup view's `engine` row renders (plan-gui.md §4 row 4). The
+  // watched file first, because it is re-read every second while the popup is
+  // open and the status document only every thirty -- a build's step list would
+  // otherwise crawl half a minute behind the build.
+  //
+  // This is also the whole of what survives the popup closing or the shell
+  // restarting mid-build: the job is a transient root unit writing
+  // /run/omarchy-face/install.json, so a GUI that comes back reads the same
+  // build where it got to rather than losing it or starting a second one.
+  readonly property var installDoc: install ? install
+                                  : (status && status.install ? status.install : ({}))
+
   // The raw text each parsed object came from. `reload()` re-emits `loaded`
   // whether or not the bytes changed, so without this the once-a-second reload
   // below hands every view a NEW object identity every second: a Repeater sees
@@ -274,6 +286,14 @@ Panel {
     onLoadFailed: { root.installRaw = ""; root.install = null }
   }
 
+  // The two watched files, now. Used by the once-a-second timer and by a view
+  // that has just made one of them change: a fix that starts a build should show
+  // the build, not the second of nothing that precedes the next tick.
+  function reloadWatched() {
+    peopleFile.reload()
+    installFile.reload()
+  }
+
   Timer {
     // While the popup is open the two watched files are re-read every second,
     // because an atomic rename leaves watchChanges pointing at an inode nobody
@@ -281,7 +301,7 @@ Panel {
     interval: 1000
     repeat: true
     running: root.opened
-    onTriggered: { peopleFile.reload(); installFile.reload() }
+    onTriggered: root.reloadWatched()
   }
 
   Timer {
@@ -296,8 +316,7 @@ Panel {
 
   onOpenedChanged: if (opened) {
     root.refresh()
-    peopleFile.reload()
-    installFile.reload()
+    root.reloadWatched()
     console.log("graveklar.face", "popup opened on view", root.view)
     Qt.callLater(function () { keyCatcher.forceActiveFocus() })
   } else {

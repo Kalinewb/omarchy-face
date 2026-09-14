@@ -9,12 +9,36 @@
 
 set -uo pipefail
 
+HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+STANDIN_UNIT=omarchy-face-dev-build
+
+# The engine build, as far as the GUI can tell (plan-engine.md §5.2). The real
+# job is a transient ROOT unit; this is a transient unit of the user manager
+# running dev/bin/omarchy-face-build-standin, which walks the same step list
+# into $OMARCHY_FACE_DEV_STATE/install.json. Same shape, same detachment, no
+# compiler: closing the popup or restarting the shell does not touch it, which
+# is the half of phase 3's gate that belongs to the GUI.
+#
+#   OMARCHY_FACE_DEV_BUILD_SECONDS   seconds per step (default 8)
+#   OMARCHY_FACE_DEV_BUILD_FAIL      "build:dlib_build_failed" to fail there
+start_standin() {
+  local state=${OMARCHY_FACE_DEV_STATE:-}
+  [[ -n $state ]] || return 0
+  if systemctl --user is-active --quiet "$STANDIN_UNIT.service" 2>/dev/null; then
+    return 3
+  fi
+  systemctl --user reset-failed "$STANDIN_UNIT.service" >/dev/null 2>&1
+  systemd-run --user --unit="$STANDIN_UNIT" --collect --quiet --property=Type=exec \
+    "$HERE/omarchy-face-build-standin" "$state" \
+    "${OMARCHY_FACE_DEV_BUILD_SECONDS:-8}" "${OMARCHY_FACE_DEV_BUILD_FAIL:-}" >/dev/null 2>&1
+}
+
 verb=${1:-}
 shift || true
 
 case "$verb" in
   set-label | set-permission | remove-appearance | remove-person | \
-  sudo-on | sudo-off | lock-on | lock-off | regenerate | install-system | purge-legacy)
+  sudo-on | sudo-off | lock-on | lock-off | regenerate | purge-legacy)
     # Drain stdin: the real verbs take their labels there (§2 rule 4), and a
     # GUI that writes to a helper which never reads gets EPIPE instead of a
     # result.
@@ -22,11 +46,27 @@ case "$verb" in
     printf '{"ok":true,"verb":"%s","dev":true}\n' "$verb"
     exit 0
     ;;
+  install-system)
+    # The first install ends by starting the build (plan-engine.md §5.1), and
+    # Setup's first-install Fix lands here in development.
+    cat >/dev/null
+    started=false
+    start_standin && started=true
+    printf '{"ok":true,"verb":"install-system","started":%s,"dev":true}\n' "$started"
+    exit 0
+    ;;
   install-engine)
+    start_standin
+    # Exit 3 is "a build is already running" (plan-merged.md §2 rule 3), and the
+    # Setup view's "The engine is already building" depends on getting it.
+    [[ $? == 3 ]] && { printf '{"error":"install_running","dev":true}\n'; exit 3; }
     printf '{"started":true,"dev":true}\n'
     exit 0
     ;;
   purge)
+    systemctl --user stop "$STANDIN_UNIT.service" >/dev/null 2>&1
+    [[ -n ${OMARCHY_FACE_DEV_STATE:-} ]] &&
+      rm -f "$OMARCHY_FACE_DEV_STATE/install.json" "$OMARCHY_FACE_DEV_STATE/install.log"
     printf '{"ok":true,"incomplete":[],"dev":true}\n'
     exit 0
     ;;

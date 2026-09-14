@@ -3,7 +3,7 @@
     {"id": "legacy", "label": "Old install", "state": "ok", "detail": "nothing left from the old version", "fixable": false, "fix": ""},
     {"id": "camera", "label": "Infrared camera", "state": "ok", "detail": "Chicony USB2.0 Camera, 400x400 infrared", "fixable": false, "fix": ""},
     {"id": "system", "label": "Face's system files", "state": "needs_action", "detail": "not installed", "fixable": true, "fix": "install-first"},
-    {"id": "engine", "label": "Face engine", "state": "needs_action", "detail": "howdy is not installed", "fixable": false, "fix": ""},
+    {"id": "engine", "label": "Face engine", "state": "needs_action", "detail": "the face engine is not built yet", "fixable": true, "fix": "install-engine"},
     {"id": "install-job", "label": "Engine build", "state": "ok", "detail": "", "fixable": false, "fix": ""},
     {"id": "people", "label": "People", "state": "needs_action", "detail": "record your face first", "fixable": false, "fix": ""},
     {"id": "sudo", "label": "Face for sudo", "state": "needs_action", "detail": "off", "fixable": false, "fix": ""},
