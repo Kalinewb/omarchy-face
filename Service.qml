@@ -17,10 +17,8 @@ import "common"
 //     30 s wrapper health check, and the single notification per new reason
 //     (G6, plan-merged.md §1 row 13 and §3)
 //
-// Phase 4 builds the recording card, phase 5 the indicator and phase 6 the Test
-// card. The lock duties still do nothing: in particular this does NOT run
-// `sync` yet -- that call stages the wrapper into the plugins folder, and
-// staging before the wrapper exists would be a reload for nothing.
+// Phase 4 builds the recording card, phase 5 the indicator, phase 6 the Test
+// card and phase 7 the three lock duties at the bottom of this file.
 Item {
   id: root
 
@@ -277,6 +275,14 @@ Item {
         duties: (root.card ? ["record"] : [])
           .concat(root.testCard ? ["test"] : [])
           .concat(indicator.visibleNow ? ["indicator"] : []),
+        // The lock duties have no window and no card, so this is the only way a
+        // test can watch them: which phase the shell-start sequence reached, and
+        // whether a reason was said out loud.
+        lock: {
+          phase: root.lockPhase,
+          notified: root.lockNotifiedKey,
+          statusPath: root.lockStatusPath
+        },
         // What the indicator is saying, which is how a test asks a card that has
         // no window it could be questioned about any other way. It is also the
         // phase-5 gate's only handle on "the card names the program".
@@ -324,9 +330,209 @@ Item {
     suppressedIdentity: root.testCard !== null
   }
 
+  // --- the lock screen (G6, plan-gui.md §6.3) ---------------------------------
+  //
+  // Three duties, and all three are here rather than in the popup because the
+  // popup does not exist at shell start and is destroyed by any write under the
+  // plugins folder:
+  //
+  //   1. `omarchy-face-lock sync` at shell start -- always, whether or not the
+  //      lock feature is on. It stages the wrapper folder when it is missing or
+  //      a Face update changed it, and writes nothing when it is current. This
+  //      is the one moment a plugins-folder write costs nothing: no popup is
+  //      open, so its reload destroys nothing.
+  //   2. the health check. A wrapper that fails to compile gets no error from
+  //      inside itself -- `ensureService` logs a warning (shell.qml:916-918) and
+  //      there is simply no lock service, so `omarchy-system-lock` and the idle
+  //      lock do nothing at all, and if the session is locked when that happens
+  //      there is no password field either. The registry reports no load error
+  //      for services, so a timeout is the only signal: with the clone enabled,
+  //      poll `omarchy-shell lock status` for 30 s, and if NOTHING answers, give
+  //      Omarchy's own lock screen back (plan-engine.md §9.3a).
+  //   3. one notification per new reason, and never one per check.
+  //
+  // What this file must NOT do is delete `lock-status.json`. An earlier round of
+  // the plan had it do so as its first act; that races the wrapper, which writes
+  // the file as soon as it loads, and a delete landing after a fresh `ok` leaves
+  // Settings reading "Starting" until the next lock. The file's own `at` against
+  // this shell's start time is the whole staleness rule (plan-merged.md §2.6).
+
+  // start | syncing | restarting | checking | settled | recovering | recovered | off
+  property string lockPhase: "start"
+  property double lockStartedAt: 0
+  property bool lockProbeBusy: false
+  property string lockNotifiedKey: ""
+
+  // 30 s, and it is an upper bound on plugin DISCOVERY, not on IPC
+  // registration: the lock's IpcHandler is created in the same synchronous pass
+  // as the service itself, but start-up only reaches that pass again when the
+  // async rescan finishes (shell.qml:158-159, :1480-1488). `omarchy-restart-shell`
+  // waits 30 s for the same reason (:39-46).
+  readonly property int lockCheckMs: 30000
+
+  function lockLog(message) { console.log("graveklar.face", message) }
+
+  function lockSync() {
+    root.lockPhase = "syncing"
+    engine.ask(engine.lockArgv(["sync"]), "", function (result) {
+      var parsed = result.parsed || {}
+      if (result.ok && String(parsed.restart || "") === "requested") {
+        // The wrapper changed and the clone is enabled, so the shell is on its
+        // way out. Nothing else is worth starting here.
+        root.lockPhase = "restarting"
+        root.lockLog("the lock screen wrapper was updated; the shell is restarting")
+        return
+      }
+      if (!result.ok) {
+        // A locked session at shell start is the ordinary refusal, and it is not
+        // worth a word: staging behind a lock screen is never urgent.
+        var code = parsed.error ? String(parsed.error) : result.outcome
+        if (code !== "locked")
+          console.warn("graveklar.face", "omarchy-face-lock sync:", code)
+      } else if (parsed.staged === true) {
+        root.lockLog("the lock screen wrapper was staged")
+      }
+      root.lockCheck()
+    })
+  }
+
+  function lockCheck() {
+    engine.ask(engine.lockArgv(["status", "--json"]), "", function (result) {
+      lockStatusFile.reload()
+      var parsed = result.parsed || {}
+      if (!result.ok || parsed.enabled !== true) {
+        // Not the lock screen, so there is nothing to check: `omarchy.lock` is
+        // Omarchy's own and answers for itself.
+        root.lockPhase = "off"
+        return
+      }
+      root.lockPhase = "checking"
+    })
+  }
+
+  Timer {
+    id: lockHealth
+    interval: 1000
+    repeat: true
+    running: root.lockPhase === "checking"
+    triggeredOnStart: true
+    onTriggered: {
+      if (root.lockProbeBusy) return
+      if (Date.now() - root.lockStartedAt >= root.lockCheckMs) { root.lockRecover(); return }
+      root.lockProbeBusy = true
+      // `omarchy-shell lock status` and not a ping: the question is whether a
+      // LOCK service answers, which is a different question from whether the
+      // shell is up (plan-engine.md §9.5).
+      engine.ask(["omarchy-shell", "lock", "status"], "", function (result) {
+        root.lockProbeBusy = false
+        if (root.lockPhase !== "checking") return
+        if (!result.ok || String(result.stdout || "").trim() === "") return
+        root.lockPhase = "settled"
+        root.lockLog("the lock screen answered; face is on it")
+        lockStatusFile.reload()
+      })
+    }
+  }
+
+  // Nothing answered in 30 s. There is therefore no lock service to destroy,
+  // so disabling the clone destroys nothing -- and it is the only way back into
+  // a session that is locked behind a wrapper that never compiled: disabling
+  // restores `omarchy.lock`, `_syncServices` creates the stock lock service, and
+  // its own checkStrandedLock/recoverStrandedLock (plugins/lock/Service.qml:82-100)
+  // put a real password field over the orphaned compositor lock, by themselves,
+  // within about half a second (plan-engine.md §9.3a).
+  //
+  // `--stranded` is what says "whatever Hyprland's lock flag says". The helper
+  // still refuses if a lock service answers `secure` or `requested` after all:
+  // destroying a live locker is the crashed-lockscreen fallback, never a repair.
+  function lockRecover() {
+    root.lockPhase = "recovering"
+    console.warn("graveklar.face",
+                 "no lock service answered in 30 s — giving Omarchy's lock screen back")
+    engine.ask(engine.lockArgv(["disable", "--stranded"]), "", function (result) {
+      root.lockPhase = "recovered"
+      if (!result.ok)
+        console.warn("graveklar.face", "the lock screen could not be given back:",
+                     result.parsed && result.parsed.error ? String(result.parsed.error) : result.outcome)
+      lockStatusFile.reload()
+    })
+  }
+
+  // --- one notification, per reason (plan-merged.md §1 row 13) ---------------
+  //
+  // The wrapper writes `lock-status.json` and never notifies; this is the only
+  // notifier in the plugin. The reason is remembered twice over: in memory here,
+  // so a re-read of the same file says nothing, and on disk by the helper, so a
+  // shell restart does not say it again.
+
+  readonly property string lockRuntimeDir: Quickshell.env("XDG_RUNTIME_DIR") || ""
+  readonly property string lockStateDir: Quickshell.env("OMARCHY_FACE_DEV_STATE") || ""
+  readonly property string lockStatusPath: lockStateDir !== ""
+    ? lockStateDir + "/lock-status.json"
+    : (lockRuntimeDir !== "" ? lockRuntimeDir + "/omarchy-face/lock-status.json" : "")
+
+  property string lockStatusRaw: ""
+
+  FileView {
+    id: lockStatusFile
+    path: root.lockStatusPath
+    watchChanges: true
+    // Absent is the normal state on a machine that never turned the feature on.
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: {
+      var raw = String(text())
+      if (raw === root.lockStatusRaw) return
+      root.lockStatusRaw = raw
+      var parsed = null
+      try { parsed = JSON.parse(raw) } catch (e) {
+        console.warn("graveklar.face", "ignoring bad lock-status.json", root.lockStatusPath)
+        return
+      }
+      root.noteLockStatus(parsed)
+    }
+    onLoadFailed: root.lockStatusRaw = ""
+  }
+
+  Timer {
+    // Written by same-directory temp + rename, which drops the inotify watch on
+    // the old inode -- the same reason FacePanel re-reads its two files. Quickly
+    // while the wrapper and the health check are still deciding, slowly for ever
+    // after: a FileView reload is a file read, not a subprocess.
+    interval: root.lockPhase === "settled" || root.lockPhase === "off"
+              || root.lockPhase === "recovered" ? 15000 : 2000
+    repeat: true
+    running: root.lockStatusPath !== ""
+    onTriggered: lockStatusFile.reload()
+  }
+
+  function noteLockStatus(document) {
+    if (!document || typeof document !== "object") return
+    var compat = String(document.compat || "")
+    // `ok` and `loading` are not things to interrupt anybody about.
+    if (compat !== "incompatible" && compat !== "failed") return
+    var missing = Array.isArray(document.missing) ? document.missing.join(", ") : ""
+    var key = compat + "|" + missing
+    if (key === root.lockNotifiedKey) return
+    root.lockNotifiedKey = key
+    var reason = compat === "incompatible"
+      ? "Omarchy's lock screen changed" + (missing !== "" ? " (missing: " + missing + ")" : "")
+      : "Omarchy's own lock screen is back" + (missing !== "" ? ": " + missing : "")
+    // The helper decides whether this reason has already been said, records it
+    // and notifies, in one step -- so two reads landing together cannot produce
+    // two notifications.
+    engine.ask(engine.lockArgv(["notify-once", key,
+      "Face unlock is off on the lock screen — " + reason + ". Open Face Unlock → Settings."]),
+      "", null)
+  }
+
   Component { id: sessionComponent; RecordSession {} }
   Component { id: cardComponent;    RecordCard {} }
   Component { id: testComponent;    TestCard {} }
 
-  Component.onCompleted: console.log("graveklar.face", "service loaded")
+  Component.onCompleted: {
+    console.log("graveklar.face", "service loaded")
+    root.lockStartedAt = Date.now()
+    root.lockSync()
+  }
 }

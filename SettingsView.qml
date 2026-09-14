@@ -11,7 +11,11 @@ import qs.Ui
 // the owner's password is asked for every time -- a face can never grant itself
 // Sudo, because Face is never in the polkit stack.
 //
-// The lock screen half is still read-only; its switch is G6 (phase 7).
+// The lock screen switch is G6. It changes no file that PAM or the compositor
+// reads: it turns one setting on in Face's own config and moves the wrapper
+// plugin in and out of `shell.json`. Omarchy's lock screen is Omarchy's either
+// way -- the wrapper loads it rather than replacing it -- so the worst this
+// switch can do is leave the lock screen exactly as Omarchy ships it.
 Column {
   id: view
 
@@ -170,30 +174,182 @@ Column {
   }
 
   // --- lock screen ------------------------------------------------------------
+  //
+  // Two calls, in this order, and neither direction needs a second password to
+  // roll back (plan-engine.md §9.4):
+  //
+  //   on   omarchy-face-lock enable   (no prompt; it waits up to 10 s for the
+  //                                    new lock service to answer)
+  //        then admin lock-on         (prompt). Declined -> `disable`, and the
+  //                                    switch snaps back with nothing changed.
+  //   off  admin lock-off             (prompt), then `disable`.
+  //
+  // **Neither call writes ~/.config/omarchy/plugins.** `enable` and `disable`
+  // edit `shell.json`, which is outside that folder, and the shell swaps the
+  // live lock service with no restart and no reload (E12, E13) -- which is why
+  // this switch can be moved with the popup still open. The wrapper folder was
+  // put in place once, by the Face service at a shell start, and stays there
+  // whether the feature is on or off.
 
+  property var pendingLock: null
+
+  readonly property bool lockOn: view.pendingLock !== null ? view.pendingLock : view.config.lock === true
+
+  readonly property string lockCompat: view.lockState && view.lockState.compat
+                                       ? String(view.lockState.compat) : ""
+  readonly property string lockOther: view.lockState && view.lockState.otherLock
+                                      ? String(view.lockState.otherLock) : ""
+  readonly property var lockMissing: view.lockState && Array.isArray(view.lockState.missing)
+                                     ? view.lockState.missing : []
+
+  // What the engine's five compat words mean to somebody reading this page
+  // (plan-merged.md §1 row 12). `otherLock` is not one of them: it is a reason
+  // `n/a` happened, and it replaces the `n/a` line rather than appearing beside
+  // it.
+  readonly property string lockStatusText: {
+    if (view.lockOther !== "")
+      return "Another lock screen plugin (" + view.lockOther + ") is in use."
+    if (view.lockCompat === "ok") return "Active · follows Omarchy's lock screen."
+    if (view.lockCompat === "loading") return "Starting."
+    if (view.lockCompat === "incompatible")
+      return "Face is off on the lock screen: Omarchy's lock changed"
+             + (view.lockMissing.length > 0 ? " (missing: " + view.lockMissing.join(", ") + ")" : "")
+             + ". Password and fingerprint work as normal."
+    if (view.lockCompat === "failed")
+      return "Omarchy's own lock screen is back"
+             + (view.lockMissing.length > 0 ? ": " + view.lockMissing.join(", ") : "") + "."
+    return "Lock screen face unlock is off."
+  }
+
+  function lockOutcomeText(result) {
+    if (result.outcome === "owner_declined") return "Not authorised — nothing changed."
+    if (result.outcome === "missing") return "Face's system files are not installed."
+    if (result.outcome === "busy") return "Face is busy — try again in a moment."
+    var code = result.parsed && result.parsed.error ? String(result.parsed.error) : result.outcome
+    if (code === "other_lock") {
+      var id = result.parsed && result.parsed.id ? String(result.parsed.id) : "another plugin"
+      return "Another lock screen plugin (" + id + ") is in use."
+    }
+    if (code === "enable_failed")
+      return "Face's lock screen did not start, so Omarchy's is back — nothing changed."
+    if (code === "validate_failed") return "Could not switch the lock screen — nothing changed."
+    if (code === "not_staged") return "Lock screen setup is not finished — see Setup."
+    if (code === "no_template") return "This plugin is missing its lock screen files — reinstall it."
+    if (code === "locked") return "The session is locked — nothing is changed behind a lock screen."
+    if (code === "config_write_failed")
+      return "Face could not write its own configuration, so nothing was changed."
+    if (code === "store_corrupt") return "Face's people store is damaged and nothing was changed."
+    if (code === "not_installed") return "Face is not set up on this machine yet."
+    return "That did not work: " + code + "."
+  }
+
+  function setLock(value) {
+    if (!panel || view.busy !== "") return
+    view.pendingLock = value
+    view.busy = "lock"
+    view.note = ""
+    if (value) view.lockTurnOn()
+    else view.lockTurnOff()
+  }
+
+  function lockFinish(message) {
+    view.busy = ""
+    view.pendingLock = null
+    view.note = message || ""
+    panel.reloadWatched()
+    panel.refresh()
+  }
+
+  function lockTurnOn() {
+    // The clone first, because it is the reversible half: if the owner then
+    // declines the prompt, `disable` puts it back with no password of its own.
+    panel.ask.ask(panel.ask.lockArgv(["enable"]), "", function (enabled) {
+      if (!enabled.ok) { view.lockFinish(view.lockOutcomeText(enabled)); return }
+      panel.ask.ask(panel.ask.adminArgv(["lock-on"]), "", function (result) {
+        if (result.ok) { view.lockFinish(""); return }
+        // The rollback. It is run for EVERY failure of `lock-on`, not only for a
+        // declined prompt: the clone being the lock screen while the daemon
+        // still answers `disabled` is a state nobody asked for, and leaving it
+        // behind would be the switch reporting a failure it did not finish
+        // undoing.
+        var message = view.lockOutcomeText(result)
+        panel.ask.ask(panel.ask.lockArgv(["disable"]), "", function (rolled) {
+          view.lockFinish(rolled.ok
+            ? message
+            : message + " Face's lock screen could not be switched back off either — open Setup.")
+        })
+      })
+    })
+  }
+
+  function lockTurnOff() {
+    // The setting first: it is what the daemon reads before it will look at a
+    // camera at all, so this call -- not the one below -- is what turns face
+    // off. A declined prompt therefore changes nothing and the clone stays as
+    // it was.
+    panel.ask.ask(panel.ask.adminArgv(["lock-off"]), "", function (result) {
+      if (!result.ok) { view.lockFinish(view.lockOutcomeText(result)); return }
+      panel.ask.ask(panel.ask.lockArgv(["disable"]), "", function (disabled) {
+        view.lockFinish(disabled.ok
+          ? ""
+          : "No face will be tried on the lock screen, but Omarchy's own lock screen "
+            + "could not be put back until the next restart.")
+      })
+    })
+  }
+
+  Toggle {
+    width: parent.width
+    label: "Lock screen"
+    description: "Unlock by looking, for people with Lock screen. Face is tried when you wake "
+                 + "the screen — lock, walk away, come back, touch a key and look at the camera."
+    checked: view.lockOn
+    enabled: view.busy === ""
+    foreground: view.foreground
+    fontFamily: view.fontFamily
+    onClicked: view.setLock(!view.lockOn)
+  }
+
+  // The count, and the one thing worth saying in the accent colour: the feature
+  // can be on with nobody behind it, because `lock-on` deliberately does not
+  // refuse that (the daemon fails safe on an empty set) -- so the page has to
+  // say it rather than the switch refusing to move.
   Text {
     textFormat: Text.PlainText
     width: parent.width
-    // The compat states are the engine's vocabulary (plan-merged.md §1 row 12);
-    // their user-facing copy lands with the toggle that can change them.
-    text: "Lock screen: " + (view.config.lock === true ? "on" : "off")
-          + (view.lockFaces > 0 ? " · " + view.lockFaces + " face(s)" : "")
-          + (view.lockState.compat ? " · " + view.lockState.compat : "")
-          + (view.lockState.otherLock ? " · another lock plugin: " + view.lockState.otherLock : "")
-    color: view.foreground
+    leftPadding: Style.space(6)
+    text: view.lockFaces === 0
+      ? "Nobody has Lock screen yet — set it on a person."
+      : (view.lockFaces === 1 ? "1 person can unlock the lock screen"
+                              : view.lockFaces + " people can unlock the lock screen")
+        + " · " + view.lockStatusText
+    color: view.lockFaces === 0 ? Color.accent : view.dim
     font.family: view.fontFamily
-    font.pixelSize: Style.font.body
+    font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap
   }
 
   Text {
     textFormat: Text.PlainText
     width: parent.width
-    text: "The lock screen switch arrives with the lock-screen phase. Until then this line only reports what the engine already says."
+    visible: view.lockFaces === 0
+    leftPadding: Style.space(6)
+    text: view.lockStatusText
     color: view.dim
     font.family: view.fontFamily
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap
+  }
+
+  Text {
+    textFormat: Text.PlainText
+    width: parent.width
+    visible: view.busy === "lock"
+    leftPadding: Style.space(6)
+    text: "Working…"
+    color: view.dim
+    font.family: view.fontFamily
+    font.pixelSize: Style.font.caption
   }
 
   Text {

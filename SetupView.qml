@@ -12,10 +12,10 @@ import qs.Ui
 // Phase 2 makes `legacy`, `camera` and `system` real, which means their Fix
 // buttons: purge-legacy, the first install, and the system-file update. Phase 3
 // adds `engine`, which is the one row that is not a single state: it carries the
-// build job's step list, its elapsed time and a tail of its log. The remaining
-// rows render their state and no button, because the verbs behind them answer
-// not_implemented until their own phase -- a Fix that cannot fix anything is
-// worse than no Fix at all.
+// build job's step list, its elapsed time and a tail of its log. Phase 5 wires
+// `sudo`'s two repairs and phase 7 the lock screen's three. A row whose verb is
+// not built yet renders its state and no button: a Fix that cannot fix anything
+// is worse than no Fix at all.
 Column {
   id: view
 
@@ -75,6 +75,11 @@ Column {
     // words say which way it goes rather than "Fix" (plan-gui.md §4 row 6).
     if (row.fix === "sudo-on") return "Turn on Face for sudo"
     if (row.fix === "sudo-off") return "Turn off Face for sudo"
+    // The three lock-screen repairs (plan-gui.md §4 row 8). Two of them write
+    // the plugins folder and say so before the click, in the row itself.
+    if (row.fix === "lock-stage") return "Finish lock screen setup"
+    if (row.fix === "lock-enable") return "Put face back on the lock screen"
+    if (row.fix === "lock-sync") return "Finish the update"
     return ""
   }
 
@@ -198,6 +203,18 @@ Column {
       return "/etc/pam.d/sudo is not the shape Face wrote, so it was left exactly as it is."
     if (code === "start_failed")
       return "The engine build could not be started — systemd would not take the job."
+    // The lock screen's own refusals (plan-merged.md §2.5).
+    if (code === "locked")
+      return "Nothing is changed behind a lock screen — unlock the session and try again."
+    if (code === "not_staged") return "The lock screen files are not in place — use Finish lock screen setup."
+    if (code === "no_template") return "This plugin is missing its lock screen files — reinstall it."
+    if (code === "validate_failed") return "Face's lock screen files did not pass Omarchy's plugin check."
+    if (code === "other_lock") {
+      var other = result.parsed && result.parsed.id ? String(result.parsed.id) : "another plugin"
+      return "Another lock screen plugin (" + other + ") is in use."
+    }
+    if (code === "enable_failed")
+      return "Face's lock screen did not start, so Omarchy's is back — nothing changed."
     return "It did not work: " + code + "."
   }
 
@@ -247,6 +264,12 @@ Column {
       argv = panel.ask.adminArgv(["install-engine"])
     } else if (row.fix === "sudo-on" || row.fix === "sudo-off") {
       argv = panel.ask.adminArgv([String(row.fix)])
+    } else if (row.fix === "lock-stage") {
+      argv = panel.ask.lockArgv(["stage"])
+    } else if (row.fix === "lock-enable") {
+      argv = panel.ask.lockArgv(["enable"])
+    } else if (row.fix === "lock-sync") {
+      argv = panel.ask.lockArgv(["sync"])
     } else if (row.fix === "install-first") {
       var script = String(installScript.text() || "")
       if (script.trim() === "") {
@@ -416,6 +439,37 @@ Column {
         text: "Face builds its engine — howdy and dlib — from the Arch User Repository, at the two " +
               "revisions this version of Face was tested against, and installs them with pacman. " +
               "It takes several minutes and runs without a graphics toolkit."
+        color: view.dim
+        font.family: view.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+
+      // The two lock-screen fixes that write ~/.config/omarchy/plugins, and
+      // therefore close this popup (E13). Said BEFORE the click, in the row, so
+      // the window disappearing is something the person chose rather than
+      // something that happened to them.
+      Text {
+        textFormat: Text.PlainText
+        width: parent.width
+        visible: !rowItem.stale && rowItem.modelData.fix === "lock-stage"
+        wrapMode: Text.WordWrap
+        leftPadding: Style.space(22)
+        text: "This puts Face's lock screen files in place. Face will close and reopen — "
+              + "open it again from the bar. Your lock screen is not changed by it; "
+              + "switching face on there is a separate step, in Settings."
+        color: view.dim
+        font.family: view.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        width: parent.width
+        visible: !rowItem.stale && rowItem.modelData.fix === "lock-sync"
+        wrapMode: Text.WordWrap
+        leftPadding: Style.space(22)
+        text: "The shell will restart to pick this up; you stay logged in and nothing else "
+              + "closes. Face will close and reopen — open it again from the bar."
         color: view.dim
         font.family: view.fontFamily
         font.pixelSize: Style.font.caption

@@ -19,13 +19,27 @@ for the people you choose.
 > **`sudo` can now be answered by a face.** Settings → *Face for sudo* adds four
 > marked lines to `/etc/pam.d/sudo` and takes them out again; nothing else in that
 > file is touched, and turning the switch off is what makes the check stop,
-> whether or not the lines can be removed. The lock screen is still untouched.
+> whether or not the lines can be removed.
+>
+> **The lock screen can now be opened by a face, and it is still Omarchy's lock
+> screen.** Face adds no lock screen of its own: a second plugin holds nothing
+> but a loader that runs *Omarchy's own* lock code and adds a face check beside
+> the password field and the fingerprint reader. When Omarchy changes its lock
+> screen, the new one simply runs; if it changes the names the loader depends on,
+> face turns itself off there, says so, and the lock screen keeps working exactly
+> as Omarchy ships it. **Face acts when you WAKE the screen, never when you lock
+> it** — lock, walk away, come back, touch a key and look at the camera. If you
+> lock and touch a key straight away the screen never went dark, so face does not
+> try and the password field works as always. The limit that comes with that: a
+> bump of the mouse wakes the screen, and so can a program running as you, so the
+> wake rule makes face *predictable*, not *safe*. It is off until you turn it on
+> in Settings, and turning it off needs your password.
 >
 > **Other programs can now ask "who is at the camera?"** A root daemon answers
 > that question over a socket in `/run`, for callers that hold no privilege of
 > their own — the Profiles plugin, which can open a profile with a bound face
-> instead of its password, and the lock screen wrapper that arrives in the next
-> phase. The socket is reachable by every local process on purpose; the daemon
+> instead of its password, and the lock screen loader above. The socket is
+> reachable by every local process on purpose; the daemon
 > asks the kernel who is on the other end and answers **only** this account.
 > Nothing it says authenticates anybody: `sudo` never goes near it, and the worst
 > a wrong answer can cost is a profile that opens or a lock screen that does not.
