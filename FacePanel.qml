@@ -186,6 +186,17 @@ Panel {
   function popView() { if (viewStack.length > 1) viewStack = viewStack.slice(0, -1) }
   function resetView(v) { viewStack = [v] }
 
+  // Every view but Setup opens ON TOP of Setup, never alone -- so the header's
+  // Back button (`visible: viewStack.length > 1`, below) always has somewhere
+  // to go, and Setup's People / Settings / Remove row is always one click
+  // away. Real gap found via live use: a fully set-up machine's bar click
+  // opened straight to People with `viewStack == ["people"]` -- no back
+  // button, no click path to Settings or Remove, only Esc, which closes the
+  // whole popup (post-ship revision).
+  function openWithBase(v) {
+    root.viewStack = (v === "setup" || v === "") ? ["setup"] : ["setup", v]
+  }
+
   function openPerson(name) {
     root.personName = String(name || "")
     root.pushView("person")
@@ -239,7 +250,7 @@ Panel {
       root.resetView("setup")
       root.openPerson(target.name)
     } else if (target.view !== "") {
-      root.resetView(target.view)
+      root.openWithBase(target.view)
     }
     root.open()
   }
@@ -261,7 +272,7 @@ Panel {
     "setup":    { title: "Face Unlock",  meta: "What still needs doing",
                   hint: "esc closes" },
     "people":   { title: "People",       meta: "Who this machine knows",
-                  hint: "esc closes · back returns to setup" },
+                  hint: "esc goes back" },
     "person":   { title: "",             meta: "Appearances and permissions",
                   hint: "esc goes back" },
     "settings": { title: "Settings",     meta: "Where a face is accepted",
@@ -498,7 +509,7 @@ Panel {
       // Opening from the bar starts where the button said it would. Closing
       // leaves the stack alone, so reopening returns to the same place.
       if (!root.opened && root.viewStack.length === 1 && root.view !== root.barTarget)
-        root.resetView(root.barTarget)
+        root.openWithBase(root.barTarget)
       root.toggle()
     }
 
