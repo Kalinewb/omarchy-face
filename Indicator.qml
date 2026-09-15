@@ -340,50 +340,50 @@ Item {
 
       Rectangle {
         id: card
-        // Under the lens rather than in the middle of the display: looking at
-        // the card then points the face at the camera, which is the one thing
-        // the person has to get right. Fixed position, entirely unchanged by
-        // the animation below -- only the card's own size and roundedness
-        // move, growing down and outward from this same anchored point.
+        // Flush against the true physical top edge (post-ship revision,
+        // found via live use -- a 44px gap from the true edge read as
+        // floating below the bar rather than attached to the screen).
+        // Horizontally centered under the lens, same as before: looking at
+        // the card still points the face at the camera. Fixed anchor point,
+        // entirely unchanged by the animation below -- only the card's own
+        // size and roundedness move, growing outward from the middle while
+        // staying attached to the top edge.
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
-        anchors.topMargin: Style.space(44)
+        anchors.topMargin: 0
 
         // The card's size at rest -- what it grows toward and shrinks from.
         readonly property real fullWidth: Math.min(parent.width - Style.space(40), Style.space(300))
         readonly property real fullHeight: content.implicitHeight + Style.space(28)
-        // 0 = a small round nub, 1 = fully grown. Not flush against any
-        // screen edge the way the notification popup's shape is -- this card
-        // sits a deliberate 44px below the true top edge so it never covers
-        // the webcam, so there is no edge here for it to read as "merging
-        // into"; a plain grow-from-a-point-under-the-lens is what fits.
+        // 0 = a small round nub flush with the top edge, 1 = fully grown.
         readonly property real sizeP: Math.max(0, Math.min(1, root.cardProgress))
         readonly property real minNub: Math.min(28, fullWidth, fullHeight)
         width: minNub + (fullWidth - minNub) * sizeP
         height: minNub + (fullHeight - minNub) * sizeP
-        // Pill-shaped while small, relaxing into the theme's real corner
-        // radius as it fills out -- the same shape language as the
-        // notification popup's entrance, independently implemented here.
+        // Rounded on the bottom only -- the top stays flush (zero radius)
+        // against the screen edge it's attached to, the same "flat where it
+        // meets the edge" shape language as the notification popup's corner.
         readonly property real capsuleR: Math.min(width, height) / 2
-        radius: capsuleR + (Style.cornerRadius - capsuleR) * Math.pow(sizeP, 2.2)
+        readonly property real bottomR: capsuleR + (Style.cornerRadius - capsuleR) * Math.pow(sizeP, 2.2)
+        topLeftRadius: 0
+        topRightRadius: 0
+        bottomLeftRadius: bottomR
+        bottomRightRadius: bottomR
         // content below is sized for the card's full, settled dimensions
         // (so its own text layout never reflows mid-animation) and only
         // fades in once the card is mostly grown -- clip keeps that content
         // from visibly overflowing the still-growing card in between.
         clip: true
-        // The polkit palette, because this card is that dialog's sibling: it
-        // appears at the same moment, for the same authentication, and the two
-        // should not look like they came from different programs.
-        //
-        // Forced opaque. The polkit surface is semi-transparent on purpose --
-        // Hyprland blurs it through a layer rule matched on its namespace -- but
-        // there is no blur rule behind this namespace, so an alpha here would
-        // simply let whatever is underneath read through the text.
-        color: Qt.rgba(Color.polkit.background.r, Color.polkit.background.g,
-                       Color.polkit.background.b, 1)
-        border.width: 1
-        border.color: Qt.rgba(Color.polkit.border.r, Color.polkit.border.g,
-                              Color.polkit.border.b, 0.35)
+        // True black, always -- not the polkit/theme palette. Matches the
+        // OLED-black treatment the user asked for everywhere Face shows a
+        // card, independent of whatever theme is active. No border: a
+        // visible outline is the opposite of "seamless with the screen,"
+        // which is the whole point of this look (post-ship revision, found
+        // via live use -- the theme-colored card with a teal outline read as
+        // an ordinary bordered dialog, not a black surface merging into the
+        // edge).
+        color: "#000000"
+        border.width: 0
 
         Column {
           id: content
