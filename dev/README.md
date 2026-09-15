@@ -537,6 +537,8 @@ a TTY, or an ssh session from another device):
 | the live swap | `enable`/`disable` on the running shell: no restart, no plugin reload, the popup stays open, `omarchy-shell lock status` keeps answering |
 | the lid | close → suspend → open: which of `dpmsStatus` or `disabled` fires, if either. The README's wording is chosen from the answer |
 | the stranded case | a broken staged wrapper present at a shell start while Hyprland holds the lock: a password field has to appear on its own within 30 s, with no TTY used |
+| the **non**-drawing clone | the same run, read the other way: destroying a stranded clone that nobody is looking at must disturb nothing else — no other plugin disabled, no bar widget lost, `shell.json` otherwise untouched |
+| a **drawing** clone under load | with face on the lock screen and the session locked, put artificial load on the shell's IPC (`for i in $(seq 200); do omarchy-shell -q shell ping & done`) and confirm `omarchy-shell lock status` still answers `secure` throughout. That is the margin `locker_settled`'s three probes are betting on; if it does not answer reliably under load, the retry count is not enough |
 
 ## F0
 

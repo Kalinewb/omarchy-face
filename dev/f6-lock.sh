@@ -74,6 +74,7 @@ CALLS=$root/calls.log
 mkdir -p "$CONTROL"
 printf 'unlocked\n' >"$CONTROL/locker"      # secure | requested | unlocked | silent
 printf '1\n' >"$CONTROL/compositor"         # 0 locked · 1 unlocked · 2 undetermined
+printf '0\n' >"$CONTROL/stall"              # how many `lock status` calls answer nothing first
 printf '{"plugins":[],"disabledPlugins":[]}\n' >"$SHELL_JSON"
 
 # --- the stand-ins ------------------------------------------------------------
@@ -108,6 +109,15 @@ cat >"$root/bin/omarchy-shell" <<STANDIN
 #!/bin/bash
 printf 'omarchy-shell %s\n' "\$*" >>"$CALLS"
 if [[ "\$1 \$2" == "lock status" ]]; then
+  # A stalled IPC, counted down: the first N calls answer nothing at all, which
+  # is what \`omarchy-shell\` does when \`qs ipc\` times out. Exactly the state the
+  # final safety probe of the §9.3a recovery has to survive -- a stall arriving
+  # while a lock clone IS drawing must not read as "nothing to destroy".
+  stall=\$(cat "$CONTROL/stall" 2>/dev/null || echo 0)
+  if [[ \$stall =~ ^[0-9]+\$ ]] && ((stall > 0)); then
+    printf '%s\n' "\$((stall - 1))" >"$CONTROL/stall"
+    exit 1
+  fi
   case \$(cat "$CONTROL/locker") in
     secure)    printf '{"locked":true,"requested":false,"secure":true}\n'; exit 0 ;;
     requested) printf '{"locked":true,"requested":true,"secure":false}\n'; exit 0 ;;
@@ -146,6 +156,7 @@ run() { # run <verb…>
 
 locker() { printf '%s\n' "$1" >"$CONTROL/locker"; }
 compositor() { printf '%s\n' "$1" >"$CONTROL/compositor"; }
+stall() { printf '%s\n' "$1" >"$CONTROL/stall"; }
 calls() { cat "$CALLS" 2>/dev/null; }
 reset_calls() { : >"$CALLS"; }
 
@@ -353,14 +364,87 @@ note "disabling is what re-creates Omarchy's stock lock service, whose own"
 note "checkStrandedLock puts a password field over the orphaned compositor lock"
 
 step "GATE: a locker that DOES answer is never destroyed"
+# Enabled on an unlocked session, the way the switch does it, so the clone really
+# IS the lock screen when the recovery is pointed at it below. (A verb that writes
+# refuses while locked, so this cannot be set up the other way round.)
+locker unlocked
+compositor 1
 run enable >/dev/null 2>&1
+check "the clone is the lock screen to begin with" "graveklar.face-lock" \
+  "$(jq -r '.plugins[0].id // ""' "$SHELL_JSON")"
 reset_calls
 locker secure
 compositor 0
 out=$(run disable --stranded)
 check "the recovery refuses" "live_locker" "$(jq -r '.error' <<<"$out")"
 check "…and nothing was disabled" "0" "$(calls | grep -c 'plugin disable')"
+check "…so the drawing clone is still the lock screen" "graveklar.face-lock" \
+  "$(jq -r '.plugins[0].id // ""' "$SHELL_JSON")"
 note "destroying a live locker is the crashed-lockscreen fallback (shell.qml:1030-1032)"
+
+step "GATE: a drawing clone that missed one probe is still never destroyed"
+# The phase-7 security review's one Low. A single probe treats a timeout as
+# "nothing answers, so there is nothing to destroy" -- which is right unless a
+# stall lands inside the recovery window while a clone IS drawing. Destroying a
+# drawing clone is worse than the stranded state this recovery ends: the fresh
+# `omarchy.lock` would not relock, because its stranded detection only fires when
+# the compositor is NOT already locked (plugins/lock/Service.qml:399).
+reset_calls
+locker secure
+compositor 0
+stall 1
+out=$(run disable --stranded)
+check "one stalled probe does not become permission to destroy it" "live_locker" \
+  "$(jq -r '.error' <<<"$out")"
+check "…and the clone is still the lock screen" "graveklar.face-lock" \
+  "$(jq -r '.plugins[0].id // ""' "$SHELL_JSON")"
+check "…it was asked more than once before it was believed" "true" \
+  "$([[ $(calls | grep -c 'omarchy-shell lock status') -ge 2 ]] && echo true || echo false)"
+note "asked $(calls | grep -c 'omarchy-shell lock status') times"
+
+reset_calls
+stall 2
+out=$(run disable --stranded)
+check "two stalled probes in a row are still not enough" "live_locker" \
+  "$(jq -r '.error' <<<"$out")"
+
+# The residual limit, pinned rather than left to be discovered: a stall sustained
+# across every probe still reads as "nothing answers". That is the bar the fix
+# raises -- from one hiccup to several seconds of sustained stall -- and it is not
+# a bar it removes.
+reset_calls
+stall 9
+out=$(run disable --stranded)
+check "a stall sustained across every probe does still recover (the residual limit)" \
+  "true" "$(jq -r '.ok' <<<"$out")"
+check "…having spent three probes on it, not one" "3" \
+  "$(calls | grep -c 'omarchy-shell lock status')"
+note "that is the bar the retry raises -- from one 2 s hiccup to several seconds of"
+note "sustained stall -- and not a bar it removes"
+
+step "GATE: destroying a clone that is NOT drawing disturbs nothing"
+stall 0
+locker unlocked
+compositor 1
+run enable >/dev/null 2>&1
+reset_calls
+rm -f "$STATUS"
+locker silent          # no lock service answers: the stranded orphan
+compositor 0           # …and Hyprland is holding the lock
+out=$(run disable --stranded)
+check "the recovery runs" "true true" "$(jq -r '"\(.ok) \(.recovered)"' <<<"$out")"
+check "…having asked three times before believing it" "3" \
+  "$(calls | grep -c 'omarchy-shell lock status')"
+check "…and disabled the clone exactly once" "1" \
+  "$(calls | grep -c 'omarchy plugin disable graveklar.face-lock')"
+check "…so Omarchy's own lock is back in shell.json" "0" \
+  "$(jq -r '(.disabledPlugins // []) | length' "$SHELL_JSON")"
+check "…and nothing else in shell.json moved" "0" \
+  "$(jq -r '(.plugins // []) | length' "$SHELL_JSON")"
+events=$(watch_plugins run disable --stranded)
+check "…and not one byte was written under the plugins folder" "" "$events"
+
+stall 0
 locker unlocked
 compositor 1
 run disable >/dev/null

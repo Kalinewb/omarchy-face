@@ -35,7 +35,9 @@
 #    locker, because there being no answer at all is the whole reason it is
 #    running -- there is no lock service to destroy, and disabling is what puts
 #    Omarchy's own lock screen back so its stranded-lock recovery can put a
-#    password field on the screen.
+#    password field on the screen. That one probe is asked up to three times
+#    before it is believed (`locker_settled`), because it is the only question in
+#    this file whose wrong answer destroys a lock screen somebody is looking at.
 
 set -uo pipefail
 unset IFS
@@ -142,6 +144,40 @@ locker_state() { # locker_state [ipc timeout]
     false) return 1 ;;
     *) return 2 ;;
   esac
+}
+
+# The same question, asked until it is answered, for the ONE caller that destroys
+# a lock screen on the strength of it: `recover_disable`.
+#
+# A single probe treats a timeout as "nothing answers, so there is nothing to
+# destroy". That is right in every ordinary case -- a lock client that is drawing
+# answers `lock status` promptly, because its IpcHandler is created in the same
+# synchronous pass as the service itself (shell.qml:914-919) -- and a shell that
+# is not there at all fails FAST rather than timing out (`qs ipc` cannot connect,
+# so `omarchy-shell` exits at once). The timeout therefore only elapses when the
+# shell is present and stalled, which is the one state where a single probe could
+# be wrong: a sustained same-user IPC stall landing inside the recovery window
+# while a clone genuinely IS drawing a secure lock would read as "safe to
+# destroy", and destroying a drawing clone is WORSE than the stranded state this
+# recovery exists to end -- the freshly re-created `omarchy.lock` would not
+# relock, because its own stranded detection only fires when the compositor is
+# not already locked (plugins/lock/Service.qml:399).
+#
+# So: up to three probes, a second apart, and any ANSWER ends it -- `secure` is
+# final (refuse), and so is `not locked` (the IPC works and there is no locker to
+# preserve). Only a timeout is retried. That raises the bar from one 2 s hiccup to
+# a stall sustained across several seconds. It costs the legitimate stranded case
+# about two seconds, because its probes fail fast rather than timing out.
+locker_settled() {
+  local attempt state
+  for attempt in 1 2 3; do
+    locker_state
+    state=$?
+    ((state == 2)) || return "$state"
+    ((attempt == 3)) && break
+    sleep 1
+  done
+  return 2
 }
 
 # Question 2: does the COMPOSITOR hold an ext-session-lock? True with no answer
@@ -267,7 +303,10 @@ write_failed_status() { # write_failed_status <reason>
 # secure is a live lock client, and destroying one is the crashed-lockscreen
 # fallback (shell.qml:1030-1032), never a recovery.
 recover_disable() { # recover_disable <reason>  -> 0 when the status was written too
-  locker_state
+  # `locker_settled`, not a single probe: this is the one place in the plugin
+  # that destroys a lock screen, and a timeout is the only thing that could make
+  # it destroy the wrong one (see the function for why).
+  locker_settled
   if (($? == 0)); then
     die live_locker reason '"a lock screen answered after all; it was left alone"'
   fi
