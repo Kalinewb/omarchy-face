@@ -51,7 +51,9 @@ written to the system journal with whose face it was. The lock screen's record i
 your own session, so a program running as you could fake or remove it.
 
 **Names are visible on this computer.** The list of people and their display names can be
-read by every account on the machine. Faces cannot.
+read by every account on the machine. Faces cannot. So is the record of what was last
+checked and who it matched — any account can ask "is Anna at the camera right now?" and
+get an answer, and can read who last approved what.
 
 **It is not Windows Hello.** There is no secure chip. The face data and the matching code
 live on this computer's disk, and anyone with root can change what "your face" means.
