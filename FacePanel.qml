@@ -53,6 +53,8 @@ Panel {
   property var status: null
   property string statusOutcome: ""
   property bool statusBusy: false
+  // One follow-up read, remembered rather than dropped (see refresh()).
+  property bool refreshQueued: false
 
   readonly property var rows: status && Array.isArray(status.rows) ? status.rows : []
   readonly property var config: status && status.config ? status.config : ({})
@@ -72,20 +74,36 @@ Panel {
   // Read on open, after every write, and on a timer. `omarchy-face-status`
   // never prompts, never opens the camera and never needs root (§2 rule 1), so
   // polling it costs a subprocess and nothing else.
+  //
+  // A call that arrives while a read is in flight is QUEUED, not dropped. It was
+  // dropped until this was found in use: the 30 s poll and the follow-up read a
+  // verb makes when it lands overlap often enough, and the one that lost is
+  // always the one that knew something -- the verb's. A switch in Settings shows
+  // `config.sudo` again the moment its `pendingSudo` clears, so a dropped
+  // follow-up meant a toggle that visibly fell back to the old value and stayed
+  // there until the next tick, up to thirty seconds later. At most one is
+  // remembered: the point is the freshest answer, and a queue of reads for a
+  // document that is re-read every second of the day is a subprocess storm, not
+  // a fix (post-ship revision, plan-gui.md §2.3).
   function refresh() {
-    if (root.statusBusy) return
+    if (root.statusBusy) { root.refreshQueued = true; return }
     root.statusBusy = true
+    root.refreshQueued = false
     engine.ask(engine.statusArgv(), "", function (result) {
       root.statusBusy = false
       root.statusOutcome = result.outcome
       if (result.outcome === "ok" && result.parsed && typeof result.parsed === "object") {
         root.status = result.parsed
-        return
+      } else {
+        // Keep the last good document rather than blanking the views: a status
+        // helper that fails once should not empty a popup someone is reading.
+        if (result.outcome === "missing") root.status = null
+        console.warn("graveklar.face", "status read failed:", result.outcome, result.code)
       }
-      // Keep the last good document rather than blanking the views: a status
-      // helper that fails once should not empty a popup someone is reading.
-      if (result.outcome === "missing") root.status = null
-      console.warn("graveklar.face", "status read failed:", result.outcome, result.code)
+      // Somebody asked while this one was out, and what they knew has not been
+      // read yet. Ask again -- including after a failure, which is exactly when
+      // the queued caller's answer is the one worth having.
+      if (root.refreshQueued) { root.refreshQueued = false; root.refresh() }
     })
   }
 
@@ -171,6 +189,65 @@ Panel {
   function openPerson(name) {
     root.personName = String(name || "")
     root.pushView("person")
+  }
+
+  // --- the handoff back from a recording card (plan-gui.md §5.3) ------------
+  //
+  // `open(view, name)` is not an ordinary navigation: it is the announcement
+  // that an `enroll-session` has just committed, and it arrives at the one
+  // moment the watched documents are known to be out of date. people.json was
+  // rewritten milliseconds ago, by temp + rename, which drops the inotify watch
+  // on the inode this FileView is holding -- so nothing has told it yet.
+  //
+  // A reload is asynchronous: measured on this machine it lands about 110-145 ms
+  // after it is asked for. Opening first and reloading after therefore paints
+  // the first frames of the view -- the ones somebody is watching appear -- from
+  // the store as it was BEFORE the recording: an appearance count short by the
+  // appearance they just took, or a person who does not exist yet. So the read
+  // is started first and the view is shown on its answer.
+  //
+  // The guard timer is the other half: a popup that never opened because a file
+  // read stalled would be a worse failure than a stale count (post-ship
+  // revision).
+  property var pendingOpen: null
+  readonly property int pendingOpenMs: 400
+
+  function openAt(viewName, name) {
+    var v = String(viewName || "")
+    var who = String(name || "")
+    if (v !== "" && root.viewChrome[v] === undefined) return "unknown view: " + v
+    if (v === "person" && who === "") {
+      // A person view with no person is a page that can only say "No such
+      // person: ". Open the popup where it was and say why, rather than
+      // rendering that.
+      root.open()
+      return "person needs a name"
+    }
+    root.pendingOpen = { view: v, name: who }
+    root.reloadWatched()
+    root.refresh()
+    pendingOpenGuard.restart()
+    return "ok"
+  }
+
+  function finishPendingOpen() {
+    if (!root.pendingOpen) return
+    var target = root.pendingOpen
+    root.pendingOpen = null
+    pendingOpenGuard.stop()
+    if (target.view === "person") {
+      root.resetView("setup")
+      root.openPerson(target.name)
+    } else if (target.view !== "") {
+      root.resetView(target.view)
+    }
+    root.open()
+  }
+
+  Timer {
+    id: pendingOpenGuard
+    interval: root.pendingOpenMs
+    onTriggered: root.finishPendingOpen()
   }
 
   function navBack() {
@@ -265,14 +342,24 @@ Panel {
     onFileChanged: reload()
     onLoaded: {
       var raw = String(text())
-      if (raw === root.peopleRaw) return
-      root.peopleRaw = raw
-      try { root.people = JSON.parse(raw) } catch (e) {
-        console.warn("graveklar.face", "ignoring bad people.json", root.peoplePath, e)
+      if (raw !== root.peopleRaw) {
+        root.peopleRaw = raw
+        try { root.people = JSON.parse(raw) } catch (e) {
+          console.warn("graveklar.face", "ignoring bad people.json", root.peoplePath, e)
+        }
       }
+      // A view waiting for this read is shown now, and only now: this is the
+      // answer it was waiting for, whether or not the bytes turned out to have
+      // changed. `loaded` is re-emitted by every reload, which is what makes
+      // that true (hence peopleRaw above).
+      if (root.pendingOpen) root.finishPendingOpen()
     }
     // Absent is the normal state before Setup has run; it is not a warning.
-    onLoadFailed: { root.peopleRaw = ""; root.people = null }
+    onLoadFailed: {
+      root.peopleRaw = ""
+      root.people = null
+      if (root.pendingOpen) root.finishPendingOpen()
+    }
   }
 
   FileView {
@@ -346,21 +433,11 @@ Panel {
     // accepted *values* -- an empty view means "just open, wherever you were" --
     // which is what a keybind or a menu entry sends.
     function open(view: string, name: string): string {
-      var v = String(view || "")
-      var who = String(name || "")
-      if (v !== "" && root.viewChrome[v] === undefined) return "unknown view: " + v
-      if (v === "person") {
-        // A person view with no person is a page that can only say "No such
-        // person: ". Open the popup where it was and say why, rather than
-        // rendering that.
-        if (who === "") { root.open(); return "person needs a name" }
-        root.resetView("setup")
-        root.openPerson(who)
-      } else if (v !== "") {
-        root.resetView(v)
-      }
-      root.open()
-      return "ok"
+      // The body is openAt() above, because what this call has to do -- read
+      // before it shows -- is the panel's business and not the IPC surface's,
+      // and because a gate cannot call an IpcHandler method from inside the
+      // same process.
+      return root.openAt(view, name)
     }
 
     // What the popup is doing, as JSON. This is how the phase-1 gate observes
@@ -381,6 +458,15 @@ Panel {
         // the rest is: phase 3's gate is "closing the popup or restarting the
         // shell mid-build loses nothing", and a shell that has just restarted
         // cannot be asked what it is rendering any other way.
+        // The two things the panel can be waiting for, neither of which is
+        // visible from outside this process any other way: a status read queued
+        // behind one in flight, and a view held back until people.json has been
+        // re-read (both post-ship revisions, above).
+        reads: {
+          statusBusy: root.statusBusy,
+          refreshQueued: root.refreshQueued,
+          pendingOpen: root.pendingOpen ? String(root.pendingOpen.view) : ""
+        },
         install: {
           state: String(build.state || "idle"),
           step: String(build.step || ""),
