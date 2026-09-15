@@ -583,13 +583,67 @@ The crop is measured rather than guessed: the popup is shot closed and open, and
 the bounding box of the pixels that changed is the card.
 
 Two things in it are synthetic and both are deliberate. The **status document**
-is the fixture, because a row can only read `ok` on a machine with howdy built,
-sudo wired, the lock screen on and somebody enrolled — and **this machine's IR
-emitter is not driven**, so nobody can be enrolled here at all (see F5). The
+is the fixture, so that the shot does not depend on the state of whichever
+machine takes it: a row only reads `ok` with howdy built, sudo wired, the lock
+screen on and somebody enrolled. (An earlier version of this paragraph said the
+development machine's IR emitter was not driven and nobody could be enrolled on
+it at all. That was wrong: the emitter works, and this machine has a real person
+enrolled from a real capture. The fixture stays for the reason above.) The
 **display** is nested, because the session this runs in may be locked and its
 plugin folder must not be written to. Everything else — the shell, the bar, the
 theme, the QML, the fonts — is real, and `grim` is the same tool Omarchy's own
 screenshots use.
+
+## G8 — the post-ship fixes
+
+```
+./dev/g8-post-ship.sh
+```
+
+Four things a week of real use found, after the eight phases shipped. None of
+them could have been caught by the phase gates: two are about a tenth of a second
+on somebody's screen, and two are about what a view chooses *not* to say.
+
+1. **A status read asked for while one is in flight was dropped.** The periodic
+   30 s poll and the follow-up read a verb makes when it lands overlap often, and
+   the one that lost was always the one that knew something. A Settings toggle
+   shows `config.sudo` again the moment its pending value clears, so a dropped
+   follow-up was a switch that visibly fell back to its old position and stayed
+   there until the next tick. It is queued now, at most one deep.
+2. **The popup returning from a recording card opened on the store as it was
+   before the recording.** `FileView.reload()` is asynchronous — 110–145 ms
+   measured on this machine, and `blockLoading` does not make it synchronous,
+   only the initial load — so the first frames showed an appearance count short
+   by the one just taken. The panel now starts the read and opens on its answer.
+3. **The appearance picker could not say which appearances were already
+   recorded**, and its button said "Again" whichever was chosen. Marks in the
+   picker, and a button that names what it would do to the appearance the picker
+   is on.
+3b. **The People list said "0 appearances" about everybody.** A `Repeater` hands
+   its delegate `modelData` through a QVariant: a nested array arrives with a
+   correct `length` and with `Array.isArray()` answering **false**, so the guard
+   in front of it threw away every appearance of every person. A rendering bug,
+   not a staleness one — the document was right and the row drew it wrong. It was
+   found by looking at `preview.png`, which is the argument for having a
+   screenshot in the repository at all.
+4. **Setup collapses.** An all-`ok` machine gets one line, a machine with nothing
+   installed gets one button, and anything actionable brings the whole checklist
+   back (`plan-gui.md §4a`).
+
+The two timing cases are the interesting ones to run, because both are
+reproducible only against a helper that is slow on purpose:
+
+- the status stub here sleeps 600 ms, and **arms its own change from inside the
+  read**: it decides its answer, then creates the marker, then sleeps. So the
+  read that caused the change is the one read that cannot see it, with no sleep
+  race between two processes deciding who got there first.
+- the handoff case rewrites `people.json` by temp + rename with the popup closed
+  — which is exactly what drops the panel's inotify watch — and then calls
+  `openAt()`, the IPC handler's own body, and records the appearance count at the
+  instant the popup opens.
+
+Run it against a checkout with the fixes backed out and cases 1 and 2 fail: that
+is the only evidence that it is testing anything.
 
 ## F0
 

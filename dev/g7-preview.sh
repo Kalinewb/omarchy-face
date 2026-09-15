@@ -1,7 +1,14 @@
 #!/bin/bash
 
-# preview.png: a real `grim` screenshot of the real Setup view, taken against
+# preview.png: a real `grim` screenshot of the real People view, taken against
 # this checkout (plan-gui.md §7.2 "Preview image", plan-merged.md §4 phase 8).
+#
+# It used to photograph Setup. Since the post-ship revision (plan-gui.md §4a)
+# Setup on a healthy machine is one line saying so -- which is the point, and
+# which makes it the wrong view to show somebody deciding whether they want this
+# plugin. People is what the bar button opens on a working machine (`barTarget`,
+# §3), and it is where the plugin has something to show: who is recorded, what
+# each of them may do, and the count sudo matches against.
 #
 #   ./dev/g7-preview.sh            writes preview.png at the plugin root
 #   ./dev/g7-preview.sh --keep     …and leaves the nested session up to look at
@@ -14,10 +21,9 @@
 #   * the STATUS DOCUMENT is `dev/fixtures/configured/status.json`, served by the
 #     dev stub the same way every offscreen suite is fed one. A row can only read
 #     `ok` on a machine with howdy built, sudo wired, the lock screen enabled and
-#     somebody enrolled; this machine's IR emitter is not driven, so a real
-#     capture ends in `black_frames` and nobody can be enrolled here at all
-#     (dev/README.md, F5). The fixture is that machine's answer, not a mock-up of
-#     the view;
+#     somebody enrolled, and a screenshot must not depend on the state of
+#     whichever machine takes it. The fixture is a machine's answer, not a
+#     mock-up of the view;
 #   * the DISPLAY is a nested Hyprland with one headless output, so the shot can
 #     be taken without touching the session this runs in -- which may be locked,
 #     and whose plugin folder must not be written to (every write there reloads
@@ -177,7 +183,7 @@ for _ in $(seq 1 30); do
 done
 ((settled)) || { echo "${RED}the nested screen never held still${RESET}"; exit 1; }
 
-qs ipc --pid "$shell_pid" call graveklar.face open setup "" >/dev/null || exit 1
+qs ipc --pid "$shell_pid" call graveklar.face open people "" >/dev/null || exit 1
 sleep 2
 timeout 20 grim -o HEADLESS-1 "$root/open.png" || exit 1
 
