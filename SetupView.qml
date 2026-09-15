@@ -40,6 +40,141 @@ Column {
     return !!row && String(row.state) !== "ok"
   }
 
+  // --- what this view is for, right now (post-ship revision, plan-gui.md §4) --
+  //
+  // Setup was a permanent checklist: nine rows, each with its own state, on
+  // screen for ever on a machine where every one of them said `ok`. Two things
+  // came out of using it. A list that always asks for attention stops being
+  // read, so the day one row DOES need something it is a row in a list nobody
+  // looks at any more. And the install was two buttons -- system files, then the
+  // engine -- for something that was never two decisions: the first install
+  // starts the build itself (plan-engine.md §5.1), so pressing the first one and
+  // watching a build begin looked like something had happened that nobody asked
+  // for.
+  //
+  // So the view has three presentations, and picks by what is true:
+  //
+  //   firstRun  nothing is installed (or the engine is still to build): ONE
+  //             action, with the whole sequence named before it is pressed, and
+  //             the build's own step list underneath it
+  //   calm      everything Setup covers is `ok` and nothing is happening: one
+  //             line saying so, and where a face is accepted
+  //   detail    anything else, and anything at all on request: the checklist,
+  //             exactly as it always was
+  //
+  // Nothing is hidden that is asking for something. `asking` below is the rule,
+  // and it is deliberately wider than `panel.setupNeeded`: that one answers the
+  // bar button's question ("is this machine set up"), and a `lock` row with a
+  // repair on it is not that, but it is still somebody having to do something.
+  // `!!` rather than a ternary: a host that does not carry these at all -- the
+  // offscreen gates put a stand-in panel in front of this view -- must fall back
+  // to the checklist, not to an unassignable undefined.
+  readonly property bool setupNeeded: !!(panel && panel.setupNeeded)
+  readonly property bool attention: !!(panel && panel.attention)
+
+  // A row that wants a decision. `sudo` is excluded: it is a switch whose home
+  // is Settings, its position is named in the calm summary below, and a machine
+  // whose owner has deliberately left it off must not be nagged by Setup for
+  // ever because of it. `install-job` never renders as a row at all.
+  readonly property bool asking: {
+    for (var i = 0; i < view.rows.length; i++) {
+      var r = view.rows[i]
+      if (!r || r.id === "install-job" || r.id === "sudo") continue
+      if (String(r.state) === "broken") return true
+      if (String(r.state) !== "ok" && !!r.fixable) return true
+    }
+    return false
+  }
+
+  // Something is happening, or the last click has something to say.
+  readonly property bool working: view.busyRow !== "" || view.buildShown || view.noteText !== ""
+
+  readonly property bool calm: !!panel && !!panel.status && view.rows.length > 0
+                               && !view.setupNeeded && !view.attention
+                               && !view.asking && !view.working
+
+  // The row the one-button path is about: the first install, or -- once that has
+  // landed -- the engine build it chains into.
+  readonly property var primaryRow: {
+    if (!panel || !panel.status || view.legacyBlocking) return null
+    // With no infrared camera the engine hides every other row (plan-gui.md §4
+    // row 2); there is nothing to install for, and the camera row says so.
+    var camera = panel.row("camera")
+    if (!camera || String(camera.state) !== "ok") return null
+    var system = panel.row("system")
+    if (system && String(system.fix) === "install-first") return system
+    if (!system || String(system.state) !== "ok") return null
+    var engine = panel.row("engine")
+    if (engine && String(engine.state) !== "ok") return engine
+    return null
+  }
+
+  readonly property bool firstRun: view.primaryRow !== null
+
+  // Bindings inside an invisible item still evaluate, so the block below reads
+  // the primary row through these rather than dereferencing a null.
+  readonly property string primaryFix: view.primaryRow ? String(view.primaryRow.fix || "") : ""
+  readonly property string primaryId: view.primaryRow ? String(view.primaryRow.id || "") : ""
+
+  // The label on the one button. While a build runs there is none: the row is
+  // already showing the build, and `install-engine` would answer exit 3.
+  readonly property string primaryLabel: {
+    if (!view.primaryRow) return ""
+    if (view.busyRow === String(view.primaryRow.id)) return "Working…"
+    if (view.buildRunning) return ""
+    if (String(view.primaryRow.fix || "") === "install-first") return "Install Face Unlock"
+    return view.fixLabel(view.primaryRow)
+  }
+
+  // The checklist is shown when it has something to say, and on request. Asked
+  // for by the person rather than pushed at them is the whole difference
+  // between a disclosure and a nag.
+  property bool detailsShown: false
+  readonly property bool collapsible: view.calm || view.firstRun
+  readonly property bool rowsShown: !view.collapsible || view.detailsShown
+
+  // A machine that was calm and has stopped being calm must not still be hiding
+  // its rows behind a disclosure somebody opened and closed a week ago.
+  onCollapsibleChanged: if (!view.collapsible) view.detailsShown = false
+
+  // --- the calm summary -------------------------------------------------------
+
+  readonly property var store: panel && panel.people ? panel.people : ({})
+  readonly property int sudoFaces: store && typeof store.sudo_faces === "number" ? store.sudo_faces : 0
+  readonly property var config: panel && panel.config ? panel.config : ({})
+
+  readonly property int peopleCount: view.store && Array.isArray(view.store.people)
+                                     ? view.store.people.length : -1
+
+  readonly property string calmDetail: {
+    var line = "Camera, system files and engine are in place"
+    // The count from the store, because the `people` row's own detail is a
+    // fragment ("1 on this machine") that reads as one when it is appended to a
+    // sentence. The row's wording is still the fallback: it is the engine's
+    // answer, and a store that has not been read yet has none of its own.
+    if (view.peopleCount >= 0)
+      return line + " · " + (view.peopleCount === 1 ? "1 person recorded"
+                                                    : view.peopleCount + " people recorded") + "."
+    var people = panel ? panel.row("people") : null
+    var known = people ? String(people.detail || "") : ""
+    return line + (known !== "" ? " · " + known : "") + "."
+  }
+
+  // Where a face is accepted, said in the calm state because it is the one thing
+  // the rows above no longer say and the only thing left that could surprise
+  // somebody: a machine that is set up and accepts a face nowhere is a normal
+  // machine, not a broken one, and this is where that is admitted.
+  readonly property string calmWhere: {
+    var sudo = view.config.sudo === true && view.sudoFaces > 0
+    var lock = view.config.lock === true
+    if (!sudo && !lock) return "No face is accepted anywhere yet — Settings is where that is turned on."
+    var parts = []
+    if (sudo) parts.push(view.sudoFaces === 1 ? "1 face can approve sudo"
+                                              : view.sudoFaces + " faces can approve sudo")
+    if (lock) parts.push("a face unlocks the lock screen")
+    return parts.join(" · ") + "."
+  }
+
   width: parent ? parent.width : implicitWidth
   spacing: Style.space(8)
 
@@ -61,7 +196,11 @@ Column {
   function fixLabel(row) {
     if (!row || !row.fixable) return ""
     if (row.fix === "purge-legacy") return "Remove the old install"
-    if (row.fix === "install-first") return "Install Face's system files"
+    // Not "Install Face's system files": that is what the verb does, not what
+    // the person is asking for, and it read as the first of two optional steps
+    // when it is in fact the whole install -- it starts the engine build itself
+    // (post-ship revision).
+    if (row.fix === "install-first") return "Install Face Unlock"
     if (row.fix === "install-system") return "Update Face system files"
     if (row.fix === "install-engine") {
       // While a build runs there is no button at all. `install-engine` would
@@ -323,6 +462,185 @@ Column {
     font.pixelSize: Style.font.body
   }
 
+  // --- calm: everything Setup covers is in place ------------------------------
+  //
+  // One row's worth of shape -- the good dot, a line, a detail -- standing for
+  // nine rows that all say `ok`. It is not a summary the view invents: every
+  // part of it is read from the same status document the rows are, and the
+  // moment any of them stops being `ok` this block goes and they come back.
+
+  Column {
+    width: parent.width
+    visible: view.calm && !view.detailsShown
+    spacing: Style.space(2)
+
+    Row {
+      width: parent.width
+      spacing: Style.space(10)
+
+      Text {
+        textFormat: Text.PlainText
+        text: "●"
+        color: view.foreground
+        font.family: view.fontFamily
+        font.pixelSize: Style.font.caption
+        anchors.verticalCenter: parent.verticalCenter
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        width: parent.width - Style.space(22)
+        text: "Face Unlock is set up."
+        color: view.foreground
+        font.family: view.fontFamily
+        font.pixelSize: Style.font.body
+        elide: Text.ElideRight
+        anchors.verticalCenter: parent.verticalCenter
+      }
+    }
+
+    Text {
+      textFormat: Text.PlainText
+      width: parent.width
+      leftPadding: Style.space(22)
+      text: view.calmDetail
+      color: view.dim
+      font.family: view.fontFamily
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.WordWrap
+    }
+
+    Text {
+      textFormat: Text.PlainText
+      width: parent.width
+      leftPadding: Style.space(22)
+      text: view.calmWhere
+      color: view.dim
+      font.family: view.fontFamily
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.WordWrap
+    }
+  }
+
+  // --- firstRun: the one action that installs Face ----------------------------
+
+  Column {
+    width: parent.width
+    visible: view.firstRun && !view.detailsShown
+    spacing: Style.space(6)
+
+    Text {
+      textFormat: Text.PlainText
+      width: parent.width
+      text: view.primaryFix === "install-first"
+            ? "Face Unlock is not installed on this machine yet."
+            : "Face's system files are in place. The engine is what is left."
+      color: view.foreground
+      font.family: view.fontFamily
+      font.pixelSize: Style.font.body
+      wrapMode: Text.WordWrap
+    }
+
+    // The whole sequence, before the click rather than discovered during it.
+    // "and then starts building" is the sentence whose absence made a build look
+    // like something that happened by itself.
+    Text {
+      textFormat: Text.PlainText
+      width: parent.width
+      visible: view.primaryFix === "install-first"
+      text: "One action does all of it: it installs Face's helpers, its service and its polkit "
+            + "policy, and then starts building the face engine — howdy and dlib from the Arch "
+            + "User Repository, at the two revisions this version of Face was tested against, "
+            + "installed with pacman. The build takes several minutes, needs nothing from you "
+            + "once it starts, and you can close this window while it runs."
+      color: view.dim
+      font.family: view.fontFamily
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.WordWrap
+    }
+
+    Text {
+      textFormat: Text.PlainText
+      width: parent.width
+      visible: view.primaryFix === "install-engine" && !view.buildShown
+      text: "Face builds its engine — howdy and dlib — from the Arch User Repository, at the two "
+            + "revisions this version of Face was tested against, and installs them with pacman. "
+            + "It takes several minutes and runs without a graphics toolkit."
+      color: view.dim
+      font.family: view.fontFamily
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.WordWrap
+    }
+
+    // The one dialog Face cannot put its own message on (plan-gui.md §4 row 3),
+    // said here for the same reason it was said in the row: a generic "run
+    // /bin/bash as the super user" that arrives unexplained is exactly the
+    // prompt people are told never to approve.
+    Text {
+      textFormat: Text.StyledText
+      width: parent.width
+      visible: view.primaryFix === "install-first"
+      text: "Your password dialog will say it wants to run <b>/bin/bash</b> as the super user. "
+            + "That is this installer: Face's own helpers cannot ask with their own message until "
+            + "they exist. It is the only time you will see that dialog."
+      color: view.dim
+      font.family: view.fontFamily
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.WordWrap
+    }
+
+    // The build, where it has always been -- under the action it belongs to,
+    // with its step list, its clock and its log. It is the reason the engine is
+    // still allowed a step of its own: a compile that takes minutes has to be
+    // able to say where it has got to (plan-gui.md §4 row 4).
+    Loader {
+      width: parent.width
+      active: view.buildShown
+      visible: active
+      sourceComponent: buildComponent
+    }
+
+    Button {
+      visible: view.primaryLabel !== ""
+      text: view.primaryLabel
+      bordered: true
+      enabled: view.busyRow === ""
+      foreground: view.foreground
+      fontFamily: view.fontFamily
+      onClicked: view.runFix(view.primaryRow)
+    }
+
+    Text {
+      textFormat: Text.PlainText
+      width: parent.width
+      visible: view.noteText !== "" && view.noteRow === view.primaryId
+      text: view.noteText
+      color: Color.urgent
+      font.family: view.fontFamily
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.WordWrap
+    }
+  }
+
+  // The disclosure. Only where something is actually folded away: in the states
+  // that show every row there is nothing behind it, and a control that opens
+  // nothing is a control that lies.
+  Text {
+    textFormat: Text.PlainText
+    visible: view.collapsible
+    topPadding: Style.space(2)
+    text: view.detailsShown ? "▾ Hide details" : "▸ Show details"
+    color: view.dim
+    font.family: view.fontFamily
+    font.pixelSize: Style.font.caption
+
+    MouseArea {
+      anchors.fill: parent
+      cursorShape: Qt.PointingHandCursor
+      onClicked: view.detailsShown = !view.detailsShown
+    }
+  }
+
   Repeater {
     model: view.rows
 
@@ -344,7 +662,18 @@ Column {
       readonly property bool stale: view.legacyBlocking && modelData.id !== "legacy"
       readonly property string fixText: view.fixLabel(modelData)
 
-      visible: !hidden
+      // `rowsShown` is the post-ship collapse: the checklist renders when it has
+      // something to ask for and when somebody asks to see it, and not on a
+      // machine where all nine rows say `ok`. An invisible child is out of the
+      // Column's layout entirely, so a hidden checklist costs no space.
+      //
+      // A property rather than the expression alone, because `visible` is the
+      // EFFECTIVE one -- an item in a harness with no window is never visible,
+      // whatever it decided -- and the gate has to be able to ask what this row
+      // decided (dev/g8-post-ship.sh).
+      readonly property bool rendered: !hidden && view.rowsShown
+
+      visible: rendered
       width: view.width
       spacing: Style.space(4)
       topPadding: hidden ? 0 : Style.space(4)
@@ -416,9 +745,11 @@ Column {
                  && rowItem.modelData.fix === "install-first"
         wrapMode: Text.WordWrap
         leftPadding: Style.space(22)
-        text: "Your password dialog will say it wants to run <b>/bin/bash</b> as the super user. " +
-              "That is this installer: Face's own helpers cannot ask with their own message until " +
-              "they exist. It is the only time you will see that dialog."
+        text: "This installs Face's system files and then starts the engine build by itself — " +
+              "one action, not two. Your password dialog will say it wants to run " +
+              "<b>/bin/bash</b> as the super user. That is this installer: Face's own helpers " +
+              "cannot ask with their own message until they exist. It is the only time you will " +
+              "see that dialog."
         color: view.dim
         font.family: view.fontFamily
         font.pixelSize: Style.font.caption

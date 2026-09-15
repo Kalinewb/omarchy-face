@@ -37,6 +37,16 @@ ShellRoot {
     readonly property bool failed: rootObj.caseName === "failed"
     readonly property bool idle: rootObj.caseName === "idle"
 
+    // What the panel carries besides the rows. Setup reads all of it since the
+    // post-ship revision that collapses the checklist (SetupView.qml): a
+    // stand-in that answered for less than the real panel would be testing a
+    // view nobody runs.
+    property var status: ({ok: true})
+    property var config: ({account: "graveklar", sudo: true, lock: false})
+    property var people: ({sudo_faces: 1})
+    readonly property bool setupNeeded: true
+    readonly property bool attention: fakePanel.failed
+
     property var rows: [
       {id: "legacy", label: "Old install", state: "ok", detail: "", fixable: false, fix: ""},
       {id: "camera", label: "Infrared camera", state: "ok", detail: "ok", fixable: false, fix: ""},
