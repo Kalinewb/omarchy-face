@@ -29,6 +29,12 @@ import qs.Ui
 // Fixed from the old GUI: the card is pinned to the built-in screen, and it
 // really does name the requester -- the old README claimed it and the old code
 // never did it.
+//
+// Also new: the card grows in and shrinks out rather than just appearing and
+// disappearing (see the entrance/exit block below `targetScreens`). Purely a
+// visual change -- everything above about staleness, polling, the safety
+// timer and suppression decides the exact same things at the exact same
+// moments it always did.
 Item {
   id: root
 
@@ -242,13 +248,78 @@ Item {
     return builtin.length > 0 ? builtin : Quickshell.screens
   }
 
+  // What the state file and the suppression flags together say should be on
+  // screen -- but not the same thing as the window's own lifetime, below.
   readonly property bool visibleNow: root.showing && !root.suppressedNow
+
+  // --- entrance/exit -----------------------------------------------------
+  //
+  // visibleNow flips the instant handle() or a suppression change says so --
+  // the same timing this card has always had (10 s stale filter, 12 s safety
+  // timer, suppression, all untouched above). windowUp is what actually
+  // drives the Variants model below, and it lags visibleNow turning false by
+  // exactly as long as the exit animation takes: destroying the layer-shell
+  // surface the instant visibleNow goes false would give beginExit() nothing
+  // to animate, the same surface-lifecycle-races-animation lesson as the
+  // notifications popup, applied here before it became a second bug rather
+  // than after.
+  //
+  // cardProgress lives on root, not inside the PanelWindow, because the
+  // window is destroyed and recreated (see the Variants comment below) --
+  // an animation driving a property on an Item that is about to be torn
+  // down cannot be trusted to finish. Reused as-is by whichever window
+  // exists at the time; there is only ever at most one.
+  property bool windowUp: false
+  property bool exiting: false
+  property real cardProgress: 0
+
+  onVisibleNowChanged: {
+    if (root.visibleNow) {
+      exitAnim.stop()
+      root.exiting = false
+      root.windowUp = true
+      enterAnim.restart()
+    } else {
+      root.beginExit()
+    }
+  }
+
+  function beginExit() {
+    if (!root.windowUp || root.exiting) return
+    root.exiting = true
+    exitAnim.restart()
+  }
+
+  // A fast, slightly springy grow -- not a bouncy elastic wobble -- then a
+  // plain ease back down on the way out. No `from:` on the entrance: a
+  // restart mid-exit (a fresh request landing while the last one is still
+  // shrinking away) grows back out from wherever it currently is instead of
+  // popping to zero first.
+  NumberAnimation {
+    id: enterAnim
+    target: root
+    property: "cardProgress"
+    to: 1
+    duration: 380
+    easing.type: Easing.OutBack
+    easing.overshoot: 1.3
+  }
+
+  NumberAnimation {
+    id: exitAnim
+    target: root
+    property: "cardProgress"
+    to: 0
+    duration: 200
+    easing.type: Easing.InOutCubic
+    onFinished: { root.windowUp = false; root.exiting = false }
+  }
 
   Variants {
     // No window at all while nothing is happening: this service is keepLoaded
     // and lives for the whole session, and a permanent layer-shell surface with
     // an empty input region is still a surface every compositor has to composite.
-    model: root.visibleNow ? root.targetScreens : []
+    model: root.windowUp ? root.targetScreens : []
 
     PanelWindow {
       id: window
@@ -271,14 +342,35 @@ Item {
         id: card
         // Under the lens rather than in the middle of the display: looking at
         // the card then points the face at the camera, which is the one thing
-        // the person has to get right.
+        // the person has to get right. Fixed position, entirely unchanged by
+        // the animation below -- only the card's own size and roundedness
+        // move, growing down and outward from this same anchored point.
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
         anchors.topMargin: Style.space(44)
-        width: Math.min(parent.width - Style.space(40), Style.space(300))
-        implicitHeight: content.implicitHeight + Style.space(28)
-        height: implicitHeight
-        radius: Style.cornerRadius
+
+        // The card's size at rest -- what it grows toward and shrinks from.
+        readonly property real fullWidth: Math.min(parent.width - Style.space(40), Style.space(300))
+        readonly property real fullHeight: content.implicitHeight + Style.space(28)
+        // 0 = a small round nub, 1 = fully grown. Not flush against any
+        // screen edge the way the notification popup's shape is -- this card
+        // sits a deliberate 44px below the true top edge so it never covers
+        // the webcam, so there is no edge here for it to read as "merging
+        // into"; a plain grow-from-a-point-under-the-lens is what fits.
+        readonly property real sizeP: Math.max(0, Math.min(1, root.cardProgress))
+        readonly property real minNub: Math.min(28, fullWidth, fullHeight)
+        width: minNub + (fullWidth - minNub) * sizeP
+        height: minNub + (fullHeight - minNub) * sizeP
+        // Pill-shaped while small, relaxing into the theme's real corner
+        // radius as it fills out -- the same shape language as the
+        // notification popup's entrance, independently implemented here.
+        readonly property real capsuleR: Math.min(width, height) / 2
+        radius: capsuleR + (Style.cornerRadius - capsuleR) * Math.pow(sizeP, 2.2)
+        // content below is sized for the card's full, settled dimensions
+        // (so its own text layout never reflows mid-animation) and only
+        // fades in once the card is mostly grown -- clip keeps that content
+        // from visibly overflowing the still-growing card in between.
+        clip: true
         // The polkit palette, because this card is that dialog's sibling: it
         // appears at the same moment, for the same authentication, and the two
         // should not look like they came from different programs.
@@ -296,8 +388,20 @@ Item {
         Column {
           id: content
           anchors.centerIn: parent
-          width: parent.width - Style.space(28)
+          // Fixed to the card's settled width, not its currently-animated
+          // one -- so text wrapping never reflows mid-grow. Only visible
+          // (see opacity below) once the card is most of the way there, and
+          // clipped by the card itself before then regardless.
+          width: card.fullWidth - Style.space(28)
           spacing: Style.space(8)
+
+          // Pops and fades in only once the card is mostly at full size, so
+          // nothing looks cramped or clipped inside a still-small shape --
+          // same formula on the way out, so content is already gone before
+          // the card shrinks small enough for it to look wrong.
+          readonly property real settleP: Math.max(0, Math.min(1, (card.sizeP - 0.7) / 0.3))
+          opacity: settleP
+          scale: 0.94 + 0.06 * settleP
 
           // The face glyph while it is looking, then an answer. Two plain
           // characters rather than two more Nerd Font codepoints: this card is
