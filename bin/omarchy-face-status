@@ -18,11 +18,13 @@
 # useful while the GUI exists (§8.1), and because it has to be able to answer
 # "nothing is installed" on a machine where nothing is installed.
 #
-# Phase 2 (F1) makes `legacy`, `camera` and `system` real, and answers the other
-# rows from whatever exists on disk -- there is no people store, engine or lock
-# wrapper before phases 3 to 7, so those rows report their absence rather than
-# guessing. What each of them will NOT do before its phase is offer a Fix: a
-# `fixable` row whose verb answers not_implemented is a button that lies.
+# All nine rows of plan-engine.md §10.1 are answered here -- `legacy`, `camera`,
+# `system`, `engine`, `install-job`, `people`, `sudo`, `polkit-1`, `lock` -- each
+# from what is on disk and none of them from a guess. A row offers a Fix only
+# where a verb can actually perform it: `people` never carries one (its repair is
+# the GUI's enrol flow) and a `system` row that is `broken` at the same release
+# version carries none on purpose, so a same-user edit of the plugin's own copy
+# can never become an owner prompt (plan-merged.md §5 risk 7).
 
 set -uo pipefail
 unset IFS
@@ -356,12 +358,11 @@ else
   add_row system "Face's system files" ok "installed, version $installed_version" false ""
 fi
 
-# --- rows the later phases fill in ------------------------------------------
+# --- the engine, the store, sudo and the lock screen ------------------------
 #
-# Each is answered from what is on disk, which before its phase is nothing.
-# `engine` and `install-job` are real from phase 3; `people`, `sudo` and `lock`
-# offer no Fix before their own phase, because a `fixable` row whose verb answers
-# not_implemented is a button that lies.
+# Each is answered from what is on disk, and on a machine where Setup has not run
+# that is nothing at all -- which is a state, not a failure: `needs_action` with
+# the verb that changes it.
 
 engine_installed=false
 howdy_version=""
@@ -496,7 +497,12 @@ sudo_fixable=false
 ((owner_appearances > 0 && sudo_faces > 0)) && sudo_fixable=true
 
 if [[ $config_sudo == true && $sudo_blocks == 1 && $sudo_lines == 2 ]] && ((sudo_faces > 0)); then
-  add_row sudo "Face for sudo" ok "$sudo_faces face(s) can approve sudo" false ""
+  # "face(s)" is how a program writes; this row is read by a person.
+  if ((sudo_faces == 1)); then
+    add_row sudo "Face for sudo" ok "1 face can approve sudo" false ""
+  else
+    add_row sudo "Face for sudo" ok "$sudo_faces faces can approve sudo" false ""
+  fi
 elif [[ $config_sudo != true && $sudo_blocks == 0 && $sudo_lines == 0 ]]; then
   add_row sudo "Face for sudo" needs_action "off" "$sudo_fixable" sudo-on
 elif [[ $config_sudo != true ]]; then

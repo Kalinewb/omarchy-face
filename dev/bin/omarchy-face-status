@@ -29,5 +29,25 @@ if [[ ! -f $FILE ]]; then
   exit 0
 fi
 
+# A machine the stub's `purge` has been through. The fixture is a snapshot of one
+# state, and the Remove view's second gate clause is about the state AFTER a
+# purge: reopening the popup has to find `removal` empty. So the marker the admin
+# stub drops turns the same fixture into a purged machine -- the read half's
+# answer changing because something was removed, not because a second fixture was
+# hand-written to say so.
+MARKER=${OMARCHY_FACE_DEV_STATE:-$FIXTURES/$FIXTURE}/purged
+if [[ -e $MARKER ]] && command -v jq >/dev/null 2>&1; then
+  jq -c '.removal = {people: [], pam: [], lockWrapper: false, helpers: 0,
+                     daemon: false, policy: false, packages: []}
+         | .config.sudo = false
+         | .engine.installed = false
+         | .rows = [.rows[] | if .id == "system"
+                              then {id: "system", label: "Face'"'"'s system files",
+                                    state: "needs_action", detail: "not installed",
+                                    fixable: true, fix: "install-first"}
+                              else . end]' "$FILE"
+  exit 0
+fi
+
 cat "$FILE"
 exit 0

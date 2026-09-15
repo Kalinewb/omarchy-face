@@ -79,9 +79,35 @@ case "$verb" in
     exit 0
     ;;
   purge)
-    systemctl --user stop "$STANDIN_UNIT.service" >/dev/null 2>&1
-    [[ -n ${OMARCHY_FACE_DEV_STATE:-} ]] &&
+    # Exit 3 while a build runs, exactly as the real verb does -- it will not
+    # delete /var/lib from under a compile (plan-engine.md §10.2 step 2). The
+    # stand-in build unit is this machine's version of "the install job is
+    # active", and the Remove view's "Wait for the engine build to finish"
+    # depends on getting the code.
+    if systemctl --user is-active --quiet "$STANDIN_UNIT.service" 2>/dev/null; then
+      printf '{"error":"install_running","dev":true}\n'
+      exit 3
+    fi
+    if [[ -n ${OMARCHY_FACE_DEV_PURGE_ERROR:-} ]]; then
+      printf '{"error":"%s","dev":true}\n' "$OMARCHY_FACE_DEV_PURGE_ERROR"
+      exit 1
+    fi
+    # A purge takes a while on a real machine (pacman -Rns alone does), and the
+    # gate's second clause is about closing the popup in the middle of one.
+    sleep "${OMARCHY_FACE_DEV_PURGE_SECONDS:-0}"
+    if [[ -n ${OMARCHY_FACE_DEV_STATE:-} ]]; then
       rm -f "$OMARCHY_FACE_DEV_STATE/install.json" "$OMARCHY_FACE_DEV_STATE/install.log"
+      # What a purged machine looks like to the read half: the status stub serves
+      # an empty `removal` while this marker is there, which is what "reopening
+      # shows removal empty" means with a fixture behind it.
+      [[ -n ${OMARCHY_FACE_DEV_PURGE_INCOMPLETE:-} ]] || : >"$OMARCHY_FACE_DEV_STATE/purged"
+    fi
+    # A non-empty `incomplete` is the outcome that must stop the flow before the
+    # plugin is removed (plan-gui.md §7.1 step 2).
+    if [[ -n ${OMARCHY_FACE_DEV_PURGE_INCOMPLETE:-} ]]; then
+      printf '{"ok":true,"incomplete":["%s"],"dev":true}\n' "$OMARCHY_FACE_DEV_PURGE_INCOMPLETE"
+      exit 0
+    fi
     printf '{"ok":true,"incomplete":[],"dev":true}\n'
     exit 0
     ;;

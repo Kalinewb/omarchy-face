@@ -45,9 +45,16 @@ terminal's, so exporting the variables in a shell does nothing. `./install.sh
 OMARCHY_FACE_DEV_FIXTURE=three-people ./install.sh --dev
 ```
 
-Fixtures so far: `fresh` (nothing installed) and `three-people` (engine
-installed, sudo on, an owner and two others). More arrive with the views that
-need them.
+Fixtures: `fresh` (nothing installed), `three-people` (engine installed, sudo
+on, an owner and two others) and `configured` (the finished machine — every row
+`ok`, the lock screen on, three people; it is what `g7-remove-offscreen.sh` and
+`g7-preview.sh` are written against).
+
+Two markers the stubs drop in `$OMARCHY_FACE_DEV_STATE` are part of the same
+idea and are git-ignored: `verbs.log` (every verb, in order) and `purged` (the
+admin stub's `purge` writes it, and the status stub then answers with an empty
+`removal` — a purged machine, read back through the read half rather than
+through a second hand-written fixture).
 
 ## Asking the popup what it is doing
 
@@ -74,7 +81,7 @@ unprivileged helpers that ship with the plugin (`plan-engine.md §8.1`):
 | | |
 |---|---|
 | `system/install.sh` | the first install. The GUI reads it and passes its **text** to `pkexec /bin/bash -c`, so what polkit authorised is what runs. It installs `omarchy-face-admin` from a root-owned snapshot and hands over. |
-| `system/omarchy-face-admin` | every privileged verb, behind `no.graveklar.face.owner`. Phase 2 implements `install-system`, `purge` and `purge-legacy`; the rest answer `not_implemented`. |
+| `system/omarchy-face-admin` | every privileged verb, behind `no.graveklar.face.owner`: the installs, the store and its permissions, the sudo wiring, the lock setting, and `purge`. |
 | `system/omarchy-face-camera` | which V4L2 node is the infrared one. Runs as anybody, and the status script runs the plugin's own copy before anything is installed. |
 | `system/omarchy-face-{gate,verify}` | phase 5: the two lines `sudo-on` puts in `/etc/pam.d/sudo`. The gate decides whether asking the camera is worth it (exit 0 = skip); the verifier is the only file in this project whose exit 0 authenticates somebody. |
 | `system/omarchy-faced` | phase 6: the socket daemon, and the one listening thing in the project. It is the only root process that opens the camera for a caller holding no privilege, which is why peer credentials and draining are gates on it rather than details. |
@@ -539,6 +546,50 @@ a TTY, or an ssh session from another device):
 | the stranded case | a broken staged wrapper present at a shell start while Hyprland holds the lock: a password field has to appear on its own within 30 s, with no TTY used |
 | the **non**-drawing clone | the same run, read the other way: destroying a stranded clone that nobody is looking at must disturb nothing else — no other plugin disabled, no bar widget lost, `shell.json` otherwise untouched |
 | a **drawing** clone under load | with face on the lock screen and the session locked, put artificial load on the shell's IPC (`for i in $(seq 200); do omarchy-shell -q shell ping & done`) and confirm `omarchy-shell lock status` still answers `secure` throughout. That is the margin `locker_settled`'s three probes are betting on; if it does not answer reliably under load, the retry count is not enough |
+
+## F7/G7 — removal, the README and the preview
+
+```sh
+./dev/f7-purge.sh                # the purge order, its refusals, and the final step
+./dev/g7-remove-offscreen.sh     # THE PHASE-8 GATE: the Remove view end to end
+./dev/g7-preview.sh              # writes preview.png
+```
+
+`f1-round-trip.sh` already runs install → purge → the §10.3 checklist, so
+`f7-purge.sh` does not repeat it for its own sake: it adds `purge` refusing with
+exit 3 while the engine builds (and removing *nothing* when it does), a second
+purge on a machine it has already been through, and the last three items of
+§10.3 — the plugin folders, the `.graveklar.face*` backups and `shell.json` —
+which `purge` never touches because they belong to the Remove view's final step.
+That step is **read out of `RemoveView.qml`** rather than copied into the test,
+and it is launched from a process whose whole group is then SIGKILLed, which is
+what a plugins-folder reload does to the `Process` children of the popup it
+destroys. `setsid -f` is what the work has to survive it with.
+
+`g7-remove-offscreen.sh` runs the real `RemoveView.qml` against a **throwaway
+plugins folder** with a stand-in `omarchy` in front of the real one, so the final
+command really deletes a plugin folder, really calls `plugin remove --yes`, and
+really clears the backup that leaves behind. The fake panel has a real `opened`,
+so "the result is on screen before the reload closes the popup" is measured at
+the moment the result appears — the view is asked whether the plugins folder has
+been touched yet, and only then is the popup closed.
+
+### preview.png
+
+`g7-preview.sh` starts a **nested Hyprland with one headless output**, gives it
+its own `HOME` holding only this checkout, runs the real Omarchy shell in it
+against the `configured` fixture, opens the popup and photographs it with `grim`.
+The crop is measured rather than guessed: the popup is shot closed and open, and
+the bounding box of the pixels that changed is the card.
+
+Two things in it are synthetic and both are deliberate. The **status document**
+is the fixture, because a row can only read `ok` on a machine with howdy built,
+sudo wired, the lock screen on and somebody enrolled — and **this machine's IR
+emitter is not driven**, so nobody can be enrolled here at all (see F5). The
+**display** is nested, because the session this runs in may be locked and its
+plugin folder must not be written to. Everything else — the shell, the bar, the
+theme, the QML, the fonts — is real, and `grim` is the same tool Omarchy's own
+screenshots use.
 
 ## F0
 

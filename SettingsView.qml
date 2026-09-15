@@ -363,4 +363,25 @@ Column {
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap
   }
+
+  // --- removal ----------------------------------------------------------------
+  //
+  // The way out of Face, where plan-gui.md §7.1 puts it. It is a page, not a
+  // switch: what it would take off the machine is read from the engine's own
+  // dry run first, and nothing happens on this click.
+
+  PanelSeparator {
+    width: parent.width
+    foreground: view.foreground
+  }
+
+  Button {
+    text: "Remove Face Unlock from this machine"
+    bordered: true
+    enabled: view.busy === ""
+    foreground: view.foreground
+    fontFamily: view.fontFamily
+    fontSize: Style.font.caption
+    onClicked: if (view.panel) view.panel.pushView("remove")
+  }
 }

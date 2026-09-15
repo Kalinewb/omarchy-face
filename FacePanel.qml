@@ -195,7 +195,13 @@ Panel {
 
   function chrome() {
     var c = root.viewChrome[root.view]
-    return c ? c : { title: "Face Unlock", meta: "", hint: "" }
+    if (!c) return { title: "Face Unlock", meta: "", hint: "" }
+    // "What still needs doing" is a lie on a machine where nothing does, and
+    // Setup is the view the popup opens on for the rest of its life. The rows
+    // are still there to read; only the line above them changes.
+    if (root.view === "setup" && root.status !== null && !root.setupNeeded && !root.attention)
+      return { title: c.title, meta: "Everything Face needs is in place", hint: c.hint }
+    return c
   }
 
   function viewTitle() {
