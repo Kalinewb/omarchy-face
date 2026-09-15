@@ -187,6 +187,24 @@ ShellRoot {
         ])
         break
 
+      // F6 test 6: Face removed with the clone left behind. There is no
+      // omarchy-face-lock-verify to run, so the check cannot even start -- and
+      // the lock screen has to go on being Omarchy's, with the password field
+      // working and face simply silent.
+      case "wake-missing":
+        // Assigned on the wrapper, which drops the binding above: there is no
+        // helper at all, which is what `omarchy plugin remove` without Remove
+        // Face leaves behind.
+        wrapper.verifyCommand = ["/nonexistent/omarchy-face-lock-verify"]
+        rootObj.play([
+          { after: 300,  run: function () { rootObj.stock().beginLock() } },
+          { after: 1200, run: function () { rootObj.dpmsOn = false } },
+          { after: 1500, run: function () { rootObj.dpmsOn = true } },
+          { after: 3000, run: function () {} },
+          done
+        ])
+        break
+
       // Clamshell: Omarchy toggles the internal monitor's `disabled` flag
       // rather than DPMS, so that transition is a wake too (E7).
       case "wake-clamshell":

@@ -301,8 +301,11 @@ Item {
     root.attemptName = ""
     root.lastOutcome = "checking"
     root.log("the screen woke: one face check, in lock generation " + root.lockGeneration)
-    verifyProcess.running = true
+    // Armed BEFORE the process starts, because a command that cannot be executed
+    // at all fails synchronously inside the next line -- and the handler for that
+    // stops this timer, which it cannot do if the timer has not been armed yet.
     attemptSafety.restart()
+    verifyProcess.running = true
   }
 
   Process {
@@ -313,6 +316,15 @@ Item {
       onStreamFinished: root.attemptName = String(text || "").trim()
     }
     onExited: function (code, status) { root.attemptFinished(code) }
+
+    // A command that cannot be executed AT ALL -- Face removed with the clone
+    // left behind, the one state `omarchy plugin remove` without Remove Face
+    // produces -- never emits `exited`: Quickshell puts `running` straight back
+    // to false and logs. Without this the check would be recorded as still in
+    // flight, and no later wake in this lock would be tried until the safety
+    // timer gave up on it. For an ordinary exit this runs second and finds
+    // nothing to do, because `exited` is emitted before `running` changes.
+    onRunningChanged: if (!running && root.attemptBusy) root.attemptFinished(-1)
   }
 
   Timer {
@@ -329,7 +341,10 @@ Item {
     }
   }
 
+  // Whichever of the two signals above arrives first is the one that answers, and
+  // the second finds nothing left to do.
   function attemptFinished(code) {
+    if (!root.attemptBusy) return
     attemptSafety.stop()
     root.attemptBusy = false
     var who = root.attemptName

@@ -272,6 +272,17 @@ check "the check ran" "1" "$(field attempts "$out")"
 check "…said no" "no" "$(field outcome "$out")"
 check "…and the lock stayed locked" "true" "$(field locked "$out")"
 
+step "GATE (F6 test 6): Face removed, the clone left behind"
+out=$(run_lock wake-missing "$root/fake")
+echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
+check "the wake was still seen" "1" "$(field wakes "$out")"
+check "…the check could not even start" "no" "$(field outcome "$out")"
+check "…nothing was unlocked" "0" "$(field unlocks "$out")"
+check "…and the lock screen is Omarchy's, with its password field" "true" \
+  "$(field locked "$out")"
+note "a plugin removed without Remove Face leaves this state; the README says to"
+note "reinstall the plugin to take the rest off"
+
 step "clamshell: the monitor comes back rather than the DPMS (E7)"
 out=$(run_lock wake-clamshell "$root/fake")
 echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"

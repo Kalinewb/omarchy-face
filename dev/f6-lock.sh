@@ -224,6 +224,21 @@ check "…and the next sync writes nothing (no re-stage loop)" "null" \
   "$(jq -r '.staged' <<<"$out")"
 check "…and asks for no restart" "" "$(calls | grep -c setsid | sed 's/^0$//')"
 
+# F6 test 8's loop clause, as far as it can be run without restarting a real
+# shell five times: five consecutive syncs after an update, none of which may
+# stage or restart. A `stage` that rewrote one byte -- a version, a path -- would
+# make every one of them differ, and with the clone enabled every shell start
+# would restart the shell, for ever.
+run enable >/dev/null
+reset_calls
+staged_again=0
+for _ in 1 2 3 4 5; do
+  [[ $(run sync | jq -r '.staged') == "true" ]] && staged_again=$((staged_again + 1))
+done
+check "five syncs in a row after the update stage nothing" "0" "$staged_again"
+check "…and restart nothing" "0" "$(calls | grep -c '^setsid')"
+run disable >/dev/null
+
 # =============================================================================
 step "GATE: enable and disable never write the plugins folder"
 reset_calls
