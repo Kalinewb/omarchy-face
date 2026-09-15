@@ -115,6 +115,12 @@ Item {
       session: root.session,
       previewDevice: root.previewDevice,
       appearanceLabels: root.appearanceLabels,
+      // Bound, not copied: the indicator re-reads people.json every 200 ms, so
+      // an appearance that was recorded by some other route while this card is
+      // up stops reading as "not recorded yet" on its own.
+      recordedAppearances: Qt.binding(function () {
+        return indicator.appearancesFor(root.cardName)
+      }),
       notice: Qt.binding(function () { return indicator.suppressedNotice })
     })
     if (!root.card) {
@@ -313,7 +319,17 @@ Item {
           countdown: root.session ? root.session.countdown : 0,
           captures: root.session ? root.session.captures : 0,
           verdict: root.session ? String(root.session.verdict) : "",
-          message: root.session ? String(root.session.message) : ""
+          message: root.session ? String(root.session.message) : "",
+          // What the picker is showing and what its button says it will do. The
+          // card has no window anything can question, and this is the only way
+          // to ask whether it is telling the truth about replacing a recording.
+          recorded: root.card.recordedAppearances,
+          capturedNow: root.session ? root.session.capturedLabels : [],
+          marks: root.appearanceLabels.map(function (label) {
+            return root.card.appearanceMark(String(label))
+          }).join(""),
+          action: String(root.card.actionText()),
+          actionNote: String(root.card.actionNote())
         } : null
       })
     }

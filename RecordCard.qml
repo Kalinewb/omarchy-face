@@ -29,6 +29,72 @@ PanelWindow {
   // person view.
   property var appearanceLabels: ["No glasses", "Everyday glasses", "Reading glasses"]
 
+  // Which of them this person already has a recording for, from people.json
+  // (the service reads it; see Service.qml). Without it the picker offers three
+  // identical-looking options and the button says the same word whichever is
+  // chosen, so somebody recording a second appearance cannot tell whether they
+  // are adding one or replacing the one they already took -- which is what
+  // happened in use (post-ship revision, plan-gui.md §5.3).
+  property var recordedAppearances: []
+
+  // A store keeps ONE recording per appearance: `enroll-session`'s `done` drops
+  // every appearance with the label it is about to write before appending the
+  // new one (omarchy-face-admin). So recording an appearance a second time
+  // replaces that appearance, and never adds a fourth to the three.
+  // `length` and an index, not Array.isArray() and indexOf(): this list arrives
+  // through a QML property binding, and a list that has been through a QVariant
+  // answers false to Array.isArray() while its length is perfectly good. That
+  // exact guard is what made the People view say "0 appearances" about
+  // everybody (PeopleView.qml), and it will not be repeated here.
+  function isRecorded(label) {
+    var list = card.recordedAppearances
+    if (!list || list.length === undefined) return false
+    for (var i = 0; i < list.length; i++)
+      if (String(list[i]) === String(label)) return true
+    return false
+  }
+
+  function isCapturedNow(label) {
+    return !!card.session && card.session.hasCaptured(String(label))
+  }
+
+  // ✓ saved · ● taken in this session, not written yet · · nothing yet. The same
+  // three marks the build's step list uses, for the same reason: a colour alone
+  // is a theme's business, and these have to survive a monochrome one.
+  function appearanceMark(label) {
+    if (card.isCapturedNow(label)) return "●"
+    if (card.isRecorded(label)) return "✓"
+    return "·"
+  }
+
+  // What pressing the button will do TO THE APPEARANCE THE PICKER IS ON. It is
+  // not a description of the session: "Again" after a capture of "No glasses"
+  // is a lie the moment the picker is moved to an appearance that has never
+  // been recorded.
+  function actionText() {
+    var label = card.session ? String(card.session.appearance) : ""
+    if (card.session && card.phase === "verdict" && card.session.verdict === "failed"
+        && label === String(card.session.lastAttempt))
+      return "Try again"
+    if (card.isCapturedNow(label)) return "Again"
+    if (card.isRecorded(label)) return "Record again"
+    return "Start"
+  }
+
+  // The sentence under the picker. Every branch names the appearance, because
+  // the whole confusion this answers was about WHICH one a button applied to.
+  function actionNote() {
+    var label = card.session ? String(card.session.appearance) : ""
+    if (label === "") return ""
+    if (card.isCapturedNow(label))
+      return label + " was taken just now — recording it again replaces what you took, "
+             + "and nothing is written until you finish."
+    if (card.isRecorded(label))
+      return label + " is already recorded — recording it again replaces it. "
+             + "A person keeps one recording per appearance."
+    return label + " is not recorded yet."
+  }
+
   // Something asked for root while this card was up. The indicator stands down
   // for this card (it would be two cards in one place), so its line arrives here
   // instead: a person staring into the lens for a countdown must not be the one
@@ -231,13 +297,43 @@ PanelWindow {
 
             Button {
               required property var modelData
-              text: String(modelData)
+              // The mark is in the label rather than beside it: this kit's
+              // Button draws one string, and a second Text next to it would not
+              // move with the button it belongs to.
+              text: card.appearanceMark(String(modelData)) + "  " + String(modelData)
               selected: card.session && card.session.appearance === String(modelData)
-              foreground: card.onScrim
+              foreground: card.isRecorded(String(modelData)) || card.isCapturedNow(String(modelData))
+                          ? card.onScrim : card.onScrimDim
               fontFamily: card.fontFamily
               onClicked: if (card.session) card.session.appearance = String(modelData)
             }
           }
+        }
+
+        // What the marks mean, and what the button below is about to do. Two
+        // short lines rather than a tooltip: the person reading them is looking
+        // into a camera lens from arm's length.
+        Text {
+          textFormat: Text.PlainText
+          width: parent.width
+          visible: card.phase === "framing" || card.phase === "verdict"
+          text: "✓ recorded   ●  taken just now   ·  not recorded"
+          color: card.onScrimDim
+          font.family: card.fontFamily
+          font.pixelSize: Style.font.caption
+          horizontalAlignment: Text.AlignHCenter
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          width: parent.width
+          visible: (card.phase === "framing" || card.phase === "verdict") && text !== ""
+          text: card.actionNote()
+          color: card.onScrimDim
+          font.family: card.fontFamily
+          font.pixelSize: Style.font.caption
+          horizontalAlignment: Text.AlignHCenter
+          wrapMode: Text.WordWrap
         }
 
         // --- the buttons ------------------------------------------------------
@@ -248,7 +344,9 @@ PanelWindow {
 
           Button {
             visible: card.phase === "framing"
-            text: "Start"
+            // "Start" for an appearance with nothing behind it, "Record again"
+            // for one that already has a recording this would replace.
+            text: card.actionText()
             bordered: true
             foreground: card.onScrim
             fontFamily: card.fontFamily
@@ -256,10 +354,12 @@ PanelWindow {
           }
 
           Button {
-            // Again is another capture in the SAME session, so it draws no
-            // second password prompt (plan-merged.md §1 row 4).
+            // Another capture in the SAME session, so it draws no second
+            // password prompt (plan-merged.md §1 row 4). The word depends on
+            // where the picker is: "Again" only re-takes something this session
+            // already has.
             visible: card.phase === "verdict"
-            text: "Again"
+            text: card.actionText()
             bordered: card.session && card.session.verdict !== "good"
             foreground: card.onScrim
             fontFamily: card.fontFamily

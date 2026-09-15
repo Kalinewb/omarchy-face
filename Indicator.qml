@@ -104,6 +104,26 @@ Item {
     return who
   }
 
+  // The appearance labels this person already has a recording for. It lives
+  // here because this file is the one in the service that reads people.json --
+  // every 200 ms, and across the plugins-folder reloads that destroy the popup
+  // (Service.qml) -- and the recording card, which is the service's too, has to
+  // be able to say which appearances are already done (post-ship revision).
+  function appearancesFor(name) {
+    var who = String(name || "")
+    if (who === "") return []
+    var list = root.people && Array.isArray(root.people.people) ? root.people.people : []
+    for (var i = 0; i < list.length; i++) {
+      if (!list[i] || String(list[i].name) !== who) continue
+      var found = Array.isArray(list[i].appearances) ? list[i].appearances : []
+      var labels = []
+      for (var j = 0; j < found.length; j++)
+        if (found[j] && found[j].label !== undefined) labels.push(String(found[j].label))
+      return labels
+    }
+    return []
+  }
+
   readonly property string headline: {
     if (root.authState === "matched")
       return root.service === "identity"

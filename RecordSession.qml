@@ -48,6 +48,19 @@ Item {
   property int captures: 0
   property bool saved: false
 
+  // WHICH appearances this session has in hand, and which one the last capture
+  // was for. `captures` is a count and cannot answer either question, and the
+  // card's picker has to: a person who has just taken "No glasses" and moved the
+  // picker to "Reading glasses" is about to do something different from one who
+  // left it where it was, and the button must not say the same word for both
+  // (post-ship revision, plan-gui.md §5.3).
+  property var capturedLabels: []
+  property string lastAttempt: ""
+
+  function hasCaptured(label) {
+    return session.capturedLabels.indexOf(String(label)) >= 0
+  }
+
   readonly property bool running: proc !== null
   property var proc: null
 
@@ -154,6 +167,13 @@ Item {
 
     if (event.event === "captured") {
       session.captures += 1
+      // The engine names the appearance it captured (§2.4); `lastAttempt` is the
+      // fallback for an event that did not, and never a guess at the picker's
+      // CURRENT value -- that may have been moved while the capture was running.
+      var label = event.appearance !== undefined && String(event.appearance) !== ""
+                  ? String(event.appearance) : session.lastAttempt
+      if (label !== "" && !session.hasCaptured(label))
+        session.capturedLabels = session.capturedLabels.concat([label])
       session.verdict = event.weak ? "weak" : "good"
       session.failCode = ""
       session.phase = "verdict"
@@ -284,6 +304,7 @@ Item {
       countdownTimer.stop()
       // The camera is opened here and nowhere else (§2.4: the IR sensor is
       // opened only on `capture`).
+      session.lastAttempt = session.appearance
       session.send({cmd: "capture", appearance: session.appearance})
     }
   }
