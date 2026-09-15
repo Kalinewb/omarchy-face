@@ -106,7 +106,23 @@ Column {
       id: personRow
       required property var modelData
 
-      readonly property var appearances: Array.isArray(modelData.appearances) ? modelData.appearances : []
+      // NOT `Array.isArray(modelData.appearances)`.
+      //
+      // A Repeater hands its delegate `modelData` through a QVariant, and a
+      // nested array comes out the other side as an object whose `length` is
+      // right and for which **Array.isArray() is false**. So that guard threw
+      // away every appearance of every person, and this list said "0
+      // appearances" against a store that was perfectly good -- for the owner
+      // who had just recorded a second one, most visibly of all.
+      //
+      // Found after shipping, by looking at the preview screenshot. It is not a
+      // staleness bug and no amount of re-reading people.json would have fixed
+      // it: the row was rendering the right document wrongly. `length` is what
+      // survives the round trip, so `length` is what this reads.
+      readonly property int appearanceCount: {
+        var list = modelData.appearances
+        return list && list.length !== undefined ? list.length : 0
+      }
       readonly property string displayLabel: modelData.owner
         ? "You" : String(modelData.label || modelData.name || "")
 
@@ -158,8 +174,8 @@ Column {
           Text {
             textFormat: Text.PlainText
             width: parent.width
-            text: personRow.appearances.length === 1 ? "1 appearance"
-                                                     : personRow.appearances.length + " appearances"
+            text: personRow.appearanceCount === 1 ? "1 appearance"
+                                                  : personRow.appearanceCount + " appearances"
             color: view.dim
             font.family: view.fontFamily
             font.pixelSize: Style.font.caption
