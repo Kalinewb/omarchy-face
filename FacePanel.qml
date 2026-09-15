@@ -561,9 +561,16 @@ Panel {
         interactive: contentHeight > height
         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
+        // A right-side gutter, always reserved rather than only appearing
+        // when the scrollbar shows: `PanelHero`'s trailing control (the Back
+        // button) anchors flush to its own right edge, which is this
+        // column's right edge, which is exactly where the vertical
+        // scrollbar's overlay track sits -- so a visible, taller view used
+        // to render its Back button underneath the scrollbar (post-ship
+        // revision, found via live use).
         Column {
           id: column
-          width: flick.width
+          width: flick.width - Style.space(10)
           spacing: Style.space(12)
 
           PanelHero {
