@@ -26,6 +26,9 @@ ShellRoot {
   readonly property string caseName: Quickshell.env("FACE_HARNESS_CASE") || "list"
   readonly property bool lockEnabled: Quickshell.env("FACE_HARNESS_LOCK_ENABLED") === "1"
 
+  // The view under test, whichever instance the Loader below is holding.
+  readonly property var removeView: removeLoader.item
+
   function log(key, value) { console.log("HARNESS " + key, value) }
 
   // A question about the filesystem, asked the way the GUI asks everything:
@@ -94,12 +97,19 @@ ShellRoot {
 
     Component.onCompleted: fakePanel.refresh()
 
-    Face.RemoveView {
-      id: removeView
-      width: 400
-      panel: fakePanel
-
-      onPhaseChanged: rootObj.phaseSeen(removeView.phase)
+    // Through a Loader, because that is how the popup holds it (one view at a
+    // time, FacePanel.qml) -- and because one of the cases is what happens when
+    // the stack takes the view away with a finished removal still owed.
+    Loader {
+      id: removeLoader
+      active: true
+      sourceComponent: Component {
+        Face.RemoveView {
+          width: 400
+          panel: fakePanel
+          onPhaseChanged: rootObj.phaseSeen(phase)
+        }
+      }
     }
 
     // The status document first: every case reads `removal`, and a view driven
@@ -123,9 +133,14 @@ ShellRoot {
   // --- the cases --------------------------------------------------------------
 
   property bool closedDuringPurge: false
+  // Kept here as well as on the view, because one case destroys the view and
+  // then still has to say where it was pointing.
+  property string pluginsDir: ""
 
   function report() {
     log("case", caseName)
+    log("pluginsDir", rootObj.pluginsDir)
+    if (!removeView) { log("viewGone", true); return }
     log("phase", removeView.phase)
     log("armed", removeView.armed)
     log("finalRan", removeView.finalRan)
@@ -134,11 +149,11 @@ ShellRoot {
     log("lines", removeView.lines.length)
     log("nothingLeft", removeView.nothingLeft)
     log("actionLabel", removeView.actionLabel)
-    log("pluginsDir", removeView.pluginsDir)
     log("finalArgv", JSON.stringify(removeView.finalArgv()))
   }
 
   function run() {
+    rootObj.pluginsDir = removeView.pluginsDir
     if (caseName === "list" || caseName === "reopen") {
       log("linesText", removeView.lines.join(" / "))
       removeView.keepPackages = true
@@ -178,6 +193,14 @@ ShellRoot {
           Qt.exit(0)
           return
         }
+        if (rootObj.caseName === "remove-back") {
+          // Esc from a finished removal pops back to Settings rather than
+          // closing the popup, and the view stack's Loader destroys this view.
+          // The step the result promised still has to happen.
+          removeLoader.active = false
+          finalTimer.start()
+          return
+        }
         // And now the close, which is what runs it.
         fakePanel.close()
         finalTimer.start()
@@ -208,8 +231,8 @@ ShellRoot {
     // Long enough for a detached command with a stand-in `omarchy` in it.
     interval: 2500
     onTriggered: {
-      rootObj.probe(removeView.pluginsDir + "/graveklar.face-lock", "cloneAfterClose", function () {
-        rootObj.probe(removeView.pluginsDir + "/graveklar.face", "sourceAfterClose", function () {
+      rootObj.probe(rootObj.pluginsDir + "/graveklar.face-lock", "cloneAfterClose", function () {
+        rootObj.probe(rootObj.pluginsDir + "/graveklar.face", "sourceAfterClose", function () {
           rootObj.report()
           Qt.exit(0)
         })
@@ -221,8 +244,8 @@ ShellRoot {
     id: stoppedTimer
     interval: 1200
     onTriggered: {
-      rootObj.probe(removeView.pluginsDir + "/graveklar.face-lock", "cloneAfterClose", function () {
-        rootObj.probe(removeView.pluginsDir + "/graveklar.face", "sourceAfterClose", function () {
+      rootObj.probe(rootObj.pluginsDir + "/graveklar.face-lock", "cloneAfterClose", function () {
+        rootObj.probe(rootObj.pluginsDir + "/graveklar.face", "sourceAfterClose", function () {
           rootObj.report()
           Qt.exit(0)
         })

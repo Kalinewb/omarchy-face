@@ -192,6 +192,20 @@ check "nothing else is left in the plugins folder" "" \
   "$(ls -A "$PLUGINS" | tr '\n' ' ' | sed 's/ *$//')"
 
 echo
+echo "${DIM}== GATE: leaving the view, rather than the popup, still finishes it${RESET}"
+# Esc from the Remove view pops back to Settings instead of closing the popup,
+# and the view stack's Loader destroys the view. A step that was owed and then
+# quietly dropped would leave the system half gone, the plugin on the bar, and
+# nothing on screen to say so.
+reset_plugins
+rm -f "$state/purged" "$state/verbs.log"
+out=$(run_case remove-back)
+echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
+check "the view was destroyed with the removal finished" "true" "$(field viewGone "$out")"
+check "…and the final step ran anyway" "gone" "$(field sourceAfterClose "$out")"
+check "…taking the wrapper with it" "gone" "$(field cloneAfterClose "$out")"
+
+echo
 echo "${DIM}== the engine can be kept${RESET}"
 reset_plugins
 rm -f "$state/purged" "$state/verbs.log"

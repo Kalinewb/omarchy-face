@@ -226,6 +226,20 @@ Column {
     function onOpenedChanged() { if (view.panel && !view.panel.opened) view.runFinal() }
   }
 
+  // And on the way out of the view, which is the other way a person leaves a
+  // finished removal: Esc from here pops back to Settings rather than closing
+  // the popup, and the view stack's Loader takes this item with it. Without
+  // this, the step the result promised would simply not happen -- the system
+  // half gone, the plugin still on the bar, and nothing on screen to say so.
+  //
+  // Only with the popup OPEN, which is the whole of the difference between
+  // "they read the result and left this page" and "this item went away with the
+  // window". The second one includes the shell shutting down with a purge that
+  // finished behind a closed popup -- and that case must NOT delete the plugin:
+  // nobody has seen a result, and the view that opens next is what offers the
+  // step that is left (plan-merged.md §4 phase 8, clause 2).
+  Component.onDestruction: if (view.panel && view.panel.opened) view.runFinal()
+
   width: parent ? parent.width : implicitWidth
   spacing: Style.space(6)
 
