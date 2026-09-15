@@ -1,14 +1,14 @@
-# Face Unlock
+# Face ID
 
 Look at your laptop instead of typing your password into `sudo` — for you, and for the
 people you choose.
 
 ## What it is for
 
-**Thirty passwords a day.** Updates, package installs, a file in `/etc`. With Face
-Unlock, `sudo` shows a small card under the camera naming what asked, you glance at it,
-and the command runs. Your password still works every time, and it is still what gets
-you past a login screen or an SSH session.
+**Thirty passwords a day.** Updates, package installs, a file in `/etc`. With Face ID,
+`sudo` shows a small card under the camera naming what asked, you glance at it, and the
+command runs. Your password still works every time, and it is still what gets you past a
+login screen or an SSH session.
 
 **A family machine.** You and your partner both look after this laptop, so both of your
 faces can approve `sudo`. Your kid is a person too — not for `sudo`, but so the Profiles
@@ -24,7 +24,7 @@ you come back, touch a key and look at the screen. There is no face icon on the 
 screen — it simply opens. It follows Omarchy's own lock screen as it updates, and if an
 update changes too much it steps aside, tells you, and your password works as always.
 
-![Face Unlock's Setup view on a finished machine](preview.png)
+![Face ID's Setup view on a finished machine](preview.png)
 
 ## What it is, and what it is not
 
@@ -146,7 +146,7 @@ whole time.
 **The lock screen came back looking like Omarchy's own.** That is on purpose. If Face's
 copy of the lock screen cannot run — after an Omarchy update, or a bad Face update — Face
 steps aside within half a minute and Omarchy's lock screen takes over, with a notification
-saying why. Nothing is lost: your password and fingerprint are unchanged, and Face Unlock →
+saying why. Nothing is lost: your password and fingerprint are unchanged, and Face ID →
 Settings shows the reason.
 
 **You are looking at a locked screen with nothing on it.** Give it thirty seconds without
@@ -169,7 +169,7 @@ need Sudo. Names never change, so a binding never silently retargets somebody el
 
 ## Removing it
 
-**Settings → Remove Face Unlock from this machine.** It lists what would go, asks for your
+**Settings → Remove Face ID from this machine.** It lists what would go, asks for your
 password once, removes Face's system files, the people, the PAM lines, the daemon and the
 engine — and then, as its last step, deletes both plugin folders, which is what closes the
 panel and takes the button off the bar. There is a tick for keeping howdy and dlib

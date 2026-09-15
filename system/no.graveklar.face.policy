@@ -24,7 +24,7 @@
   <vendor_url>https://github.com/Kalinewb/omarchy-face</vendor_url>
 
   <action id="no.graveklar.face.owner">
-    <description>Manage face unlock</description>
+    <description>Manage Face ID</description>
     <message>Authentication is required to change who can unlock with a face</message>
     <defaults>
       <allow_any>no</allow_any>

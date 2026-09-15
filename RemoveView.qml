@@ -3,7 +3,7 @@ import Quickshell
 import qs.Commons
 import qs.Ui
 
-// Remove Face Unlock from this machine.
+// Remove Face ID from this machine.
 //
 // The list is the engine's unprivileged dry run of `purge` -- the `removal`
 // object of plan-merged.md §2.2, not a prompting verb -- so this view can show
@@ -76,7 +76,7 @@ Column {
   // The button's word for what it is about to do. A property rather than an
   // expression on the button, so what it says is a thing a test can read.
   readonly property string actionLabel: view.phase === "idle"
-    ? (view.nothingLeft ? "Remove the plugin" : "Remove Face Unlock")
+    ? (view.nothingLeft ? "Remove the plugin" : "Remove Face ID")
     : "Try again"
 
   // What would go, in the engine's own words. One line per kind of thing, and

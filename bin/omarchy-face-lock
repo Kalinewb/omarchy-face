@@ -547,7 +547,7 @@ case $verb in
     printf '%s' "$key" >"$NOTIFIED_FILE.tmp" 2>/dev/null || die state_dir_unwritable
     mv -f "$NOTIFIED_FILE.tmp" "$NOTIFIED_FILE" 2>/dev/null || die state_dir_unwritable
     if [[ -n $body ]] && have notify-send; then
-      notify-send -a "Face Unlock" "Face unlock is off on the lock screen" "$body" >/dev/null 2>&1
+      notify-send -a "Face ID" "Face ID is off on the lock screen" "$body" >/dev/null 2>&1
       ok said true
     fi
     ok said false

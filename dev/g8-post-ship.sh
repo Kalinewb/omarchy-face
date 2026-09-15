@@ -318,7 +318,7 @@ rm -f "$state/people.json"
 out=$(run_case setup FACE_STATUS_DELAY=0.1)
 echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
 check "it is not calm" false "$(field calm "$out")"
-check "it offers one action" "Install Face Unlock" "$(field primaryLabel "$out")"
+check "it offers one action" "Install Face ID" "$(field primaryLabel "$out")"
 check "…and not a checklist" 0 "$(field rowsVisible "$out")"
 check "the rows are still there to read" 4 "$(field rowsVisibleWithDetails "$out")"
 check "the bar button says set up" setup "$(field barState "$out")"

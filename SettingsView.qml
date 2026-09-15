@@ -376,7 +376,7 @@ Column {
   }
 
   Button {
-    text: "Remove Face Unlock from this machine"
+    text: "Remove Face ID from this machine"
     bordered: true
     enabled: view.busy === ""
     foreground: view.foreground

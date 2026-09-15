@@ -62,11 +62,11 @@ PanelWindow {
     if (card.code === 1) return "Did not recognise " + card.who
     if (card.code === 2) return card.who + " is not set up"
     if (card.code === 4) return "Checked too recently — try again in a moment"
-    if (card.code === 3) return "Face Unlock cannot check right now"
+    if (card.code === 3) return "Face ID cannot check right now"
     // Anything else is the helper not having run at all -- 126/127 from the
     // launcher, or a code this version does not know. It is not an answer about
     // a person, so it never reads like one.
-    return "Face Unlock cannot check right now"
+    return "Face ID cannot check right now"
   }
 
   readonly property bool good: card.phase === "done" && card.code === 0

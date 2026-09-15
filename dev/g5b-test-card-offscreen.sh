@@ -115,7 +115,7 @@ declare -A expected=(
   [0]="Recognised Anna"
   [1]="Did not recognise Anna"
   [2]="Anna is not set up"
-  [3]="Face Unlock cannot check right now"
+  [3]="Face ID cannot check right now"
   [4]="Checked too recently — try again in a moment"
 )
 

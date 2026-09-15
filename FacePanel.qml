@@ -6,7 +6,7 @@ import qs.Commons
 import qs.Ui
 import "common"
 
-// Face Unlock: the bar button and the popup behind it.
+// Face ID: the bar button and the popup behind it.
 //
 // This file owns the shell of the GUI -- the button, the view stack, the status
 // document every view reads, and nothing else. Each view is its own file, and
@@ -160,15 +160,15 @@ Panel {
 
   readonly property string barTooltip: {
     if (barState === "unknown")
-      return statusOutcome === "missing" ? "Face Unlock — not installed" : "Face Unlock — checking"
+      return statusOutcome === "missing" ? "Face ID — not installed" : "Face ID — checking"
     if (barState === "attention") {
-      if (brokenRow) return "Face Unlock — " + String(brokenRow.detail || brokenRow.label || "something is wrong")
-      if (installFailed) return "Face Unlock — the engine build failed"
-      return "Face Unlock — face is off on the lock screen"
+      if (brokenRow) return "Face ID — " + String(brokenRow.detail || brokenRow.label || "something is wrong")
+      if (installFailed) return "Face ID — the engine build failed"
+      return "Face ID — face is off on the lock screen"
     }
-    if (barState === "setup") return "Face Unlock — set up"
-    if (barState === "off") return "Face Unlock — off"
-    return "Face Unlock — sudo · " + sudoFaces + (sudoFaces === 1 ? " face" : " faces")
+    if (barState === "setup") return "Face ID — set up"
+    if (barState === "off") return "Face ID — off"
+    return "Face ID — sudo · " + sudoFaces + (sudoFaces === 1 ? " face" : " faces")
            + (config.lock ? " · lock screen" : "")
   }
 
@@ -269,7 +269,7 @@ Panel {
   // Where each view says it is. A table rather than a ternary chain, so a view
   // that is not built yet still answers a lookup.
   readonly property var viewChrome: ({
-    "setup":    { title: "Face Unlock",  meta: "What still needs doing",
+    "setup":    { title: "Face ID",      meta: "What still needs doing",
                   hint: "esc closes" },
     "people":   { title: "People",       meta: "Who this machine knows",
                   hint: "esc goes back" },
@@ -283,7 +283,7 @@ Panel {
 
   function chrome() {
     var c = root.viewChrome[root.view]
-    if (!c) return { title: "Face Unlock", meta: "", hint: "" }
+    if (!c) return { title: "Face ID", meta: "", hint: "" }
     // "What still needs doing" is a lie on a machine where nothing does, and
     // Setup is the view the popup opens on for the rest of its life. The rows
     // are still there to read; only the line above them changes.

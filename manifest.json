@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "graveklar.face",
-  "name": "Face Unlock",
+  "name": "Face ID",
   "version": "2.0.0-dev",
   "author": "graveklar",
   "license": "MIT",
@@ -16,7 +16,7 @@
     "service": "Service.qml"
   },
   "barWidget": {
-    "displayName": "Face Unlock",
+    "displayName": "Face ID",
     "description": "Whether a face can approve sudo; click to set up people and permissions.",
     "category": "System",
     "allowMultiple": false,

@@ -161,7 +161,7 @@ check "…with the people and their faces counted out of removal.people" \
 check "the tick changes the engine line rather than dropping it" "true" \
   "$([[ $(field linesKept "$out") == *"kept: howdy, python-dlib"* ]] && echo true || echo false)"
 check "there is something to remove" "false" "$(field nothingLeft "$out")"
-check "the button says what it does" "Remove Face Unlock" "$(field actionLabel "$out")"
+check "the button says what it does" "Remove Face ID" "$(field actionLabel "$out")"
 check "the plugins folder is derived from the plugin's own directory" "$PLUGINS" \
   "$(field pluginsDir "$out")"
 check "the final step is one detached command, with --yes in it" "true" \

@@ -538,7 +538,7 @@ Item {
     // and notifies, in one step -- so two reads landing together cannot produce
     // two notifications.
     engine.ask(engine.lockArgv(["notify-once", key,
-      "Face unlock is off on the lock screen — " + reason + ". Open Face Unlock → Settings."]),
+      "Face ID is off on the lock screen — " + reason + ". Open Face ID → Settings."]),
       "", null)
   }
 

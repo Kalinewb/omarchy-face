@@ -122,7 +122,7 @@ Column {
     if (!view.primaryRow) return ""
     if (view.busyRow === String(view.primaryRow.id)) return "Working…"
     if (view.buildRunning) return ""
-    if (String(view.primaryRow.fix || "") === "install-first") return "Install Face Unlock"
+    if (String(view.primaryRow.fix || "") === "install-first") return "Install Face ID"
     return view.fixLabel(view.primaryRow)
   }
 
@@ -200,7 +200,7 @@ Column {
     // the person is asking for, and it read as the first of two optional steps
     // when it is in fact the whole install -- it starts the engine build itself
     // (post-ship revision).
-    if (row.fix === "install-first") return "Install Face Unlock"
+    if (row.fix === "install-first") return "Install Face ID"
     if (row.fix === "install-system") return "Update Face system files"
     if (row.fix === "install-engine") {
       // While a build runs there is no button at all. `install-engine` would
@@ -453,9 +453,9 @@ Column {
       if (!view.panel) return ""
       if (view.panel.statusOutcome === "") return "Checking…"
       if (view.panel.statusOutcome === "missing")
-        return "Face Unlock cannot read its own status: the plugin's bin/omarchy-face-status is missing."
+        return "Face ID cannot read its own status: the plugin's bin/omarchy-face-status is missing."
       if (view.panel.statusOutcome === "ok") return "The engine answered, but sent no rows."
-      return "Face Unlock could not read its own status (" + view.panel.statusOutcome + ")."
+      return "Face ID could not read its own status (" + view.panel.statusOutcome + ")."
     }
     color: view.dim
     font.family: view.fontFamily
@@ -490,7 +490,7 @@ Column {
       Text {
         textFormat: Text.PlainText
         width: parent.width - Style.space(22)
-        text: "Face Unlock is set up."
+        text: "Face ID is set up."
         color: view.foreground
         font.family: view.fontFamily
         font.pixelSize: Style.font.body
@@ -533,7 +533,7 @@ Column {
       textFormat: Text.PlainText
       width: parent.width
       text: view.primaryFix === "install-first"
-            ? "Face Unlock is not installed on this machine yet."
+            ? "Face ID is not installed on this machine yet."
             : "Face's system files are in place. The engine is what is left."
       color: view.foreground
       font.family: view.fontFamily

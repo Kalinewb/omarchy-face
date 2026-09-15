@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "id": "graveklar.face-lock",
-  "name": "Lock Screen (face unlock)",
+  "name": "Lock Screen (Face ID)",
   "version": "1.0.0",
   "author": "graveklar",
   "license": "MIT",
-  "description": "Omarchy's own lock screen, with face unlock added beside password and fingerprint.",
+  "description": "Omarchy's own lock screen, with Face ID added beside password and fingerprint.",
   "kinds": ["service"],
   "keepLoaded": true,
   "entryPoints": { "service": "Service.qml" },
