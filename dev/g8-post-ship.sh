@@ -29,12 +29,14 @@ GREEN=$'\e[32m'
 RED=$'\e[31m'
 DIM=$'\e[2m'
 RESET=$'\e[0m'
+YELLOW=$'\e[33m'
 
 REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 
 failures=0
 checks=0
 
+note() { echo "  ${YELLOW}note${RESET}  $*"; }
 check() { # check <description> <expected> <actual>
   checks=$((checks + 1))
   if [[ $2 == "$3" ]]; then

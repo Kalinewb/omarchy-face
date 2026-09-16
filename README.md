@@ -20,9 +20,10 @@ everyday glasses, reading glasses — because an infrared camera sees those as d
 faces.
 
 **The lock screen, if you want it.** Off by default. Turn it on, lock, walk away; when
-you come back, touch a key and look at the screen. The password field says
+you come back, touch a key and look at the screen. Or press **Enter** on the empty
+password field, any time, to ask for a face check there and then. The password field says
 *Looking for your face…* while it checks, and tells you if it did not recognise you — so
-you can see it working and decide whether to wait or just type. It follows Omarchy's own
+you can see it working and decide whether to press Enter again or just type. It follows Omarchy's own
 lock screen as it updates, and if an update changes too much it steps aside, tells you,
 and your password works as always.
 
@@ -41,8 +42,9 @@ noticing is all it can do. Such a program could already wait for you to type you
 password; face unlock removes the wait, not the permission.
 
 **The lock screen wakes to anything.** A key, a bump of the mouse — or a program running
-as you — wakes the screen and starts one face check. If you are sitting nearby, it can
-open.
+as you — wakes the screen and starts one face check. Enter on the empty password field
+starts one too, and so can a program running as you, the same way. If you are sitting
+nearby, it can open.
 
 **Giving someone Sudo gives them root.** Everyone on this laptop uses the same account.
 When Anna's face approves `sudo`, Anna runs commands as the machine's owner. The switch
@@ -104,8 +106,27 @@ that field the line stops and face unlock carries on without it, never the other
 round. When Omarchy updates its lock screen, the new
 one simply runs. If an update changes the names that loader depends on, face turns itself
 off there and says why, and the lock screen keeps working exactly as Omarchy ships it.
-Face is tried when the screen **wakes**, never when you lock it — otherwise locking the
-machine while you are still sitting in front of it would undo itself.
+Face is tried when the screen **wakes**, or when you press **Enter** on the empty password
+field — never when you lock it, because locking the machine while you are still sitting
+in front of it would otherwise undo itself.
+
+Enter works through Hyprland rather than through Omarchy's password field, which a plugin
+cannot reach. While the screen is locked, and only then, Face registers a Hyprland binding
+on Enter that passes the key straight on to the password field and also tells Face it was
+pressed. It is removed when the lock ends, and your own `bindings.lua` is never touched.
+An Enter that submits a typed password is recognised as one and starts no face check.
+
+**After an update, and at login,** Face checks itself and tells you if something stopped
+working, rather than leaving you to find out at a lock screen. It puts two small hooks in
+`~/.config/omarchy/hooks/` — `post-update.d/graveklar-face.hook` and
+`post-boot.d/graveklar-face.hook` — which Omarchy runs during `omarchy update` and a
+moment after you log in. They read the same status the Setup view shows, as you, without
+the camera and without a password, and send one notification per new problem that opens
+Face ID → Setup. During an update they also catch the three things updates break: a Python
+upgrade the engine was not built for, an Omarchy lock screen that no longer fits Face
+(before the restart that would switch face off on it), and the AUR step that is about to
+rebuild howdy or dlib away from the revisions Face tested. Nothing is printed when all is
+well. If the plugin is removed, each hook deletes itself the next time it runs.
 
 **"Who is at the camera?"** is answered by a small root daemon on a socket in `/run`, for
 callers that hold no privilege of their own: the Profiles plugin and the lock screen
@@ -164,20 +185,45 @@ password dialog's own stack.
 
 ## If something goes wrong
 
-**The lock screen does not react to your face.** Take your hands off it first. The check
-starts when the screen **wakes**, so the screen has to go dark before there is anything to
-wake: leave it alone for five seconds and let it black out. A key pressed while it is
-still lit does not start a check — it puts those five seconds back to the beginning, so
-tapping away at a lit lock screen is the one reliable way to never see a face check at
-all. Once it is dark, tap a key and look at the camera: the password field says
-*Looking for your face…*, the infrared light comes on, and the screen opens about three
-seconds later. If that line never appears, no check was started, and the reason is the
-paragraph above rather than your face.
+**The lock screen does not react to your face.** Press **Enter** on the empty password
+field and look at the camera: the field says *Looking for your face…*, the infrared light
+comes on, and the screen opens about three seconds later. If it says
+*Not recognised — Enter to retry*, the check ran and did not match; press Enter again.
+
+Without Enter, the check starts when the screen **wakes**, so the screen has to go dark
+before there is anything to wake: leave it alone for five seconds and let it black out. A
+key other than Enter pressed while it is still lit does not start a check — it puts those
+five seconds back to the beginning. If *Looking for your face…* never appears after Enter,
+no check was started: see `journalctl --user -t quickshell` for a line saying Enter could
+not be registered.
+
+**Right after opening the lid, it says *Camera waking? Enter to retry*.** Some infrared
+cameras take a few seconds to deliver pictures after the laptop resumes, and a check that
+runs before then sees nothing. Face cannot tell that apart from a face it did not know, so
+for fifteen seconds after a resume it says the camera may still be waking. Press Enter
+again.
 
 Your password works the whole time, and it is quicker than the check — so if you type it
 straight away it wins, and the face result arrives too late and is thrown away. That is
 not a fault, and with the line on screen you can now see it happen and wait a moment
 instead. If the lid was closed, the camera was closed with it: open it and press a key.
+
+**The infrared light flickers, or the check says the picture is too dark.** Many
+infrared cameras fire their light on every other frame, so half of what the engine sees
+is black; howdy's `dark_threshold` setting skips those frames, and Face leaves it at
+howdy's default. If *every* frame is dark — `journalctl -t omarchy-face` keeps giving
+"too dark" and the light next to the camera never glows — the emitter is not being
+switched on at all. That is a firmware quirk on some laptops, and
+[linux-enable-ir-emitter](https://github.com/EmixamPP/linux-enable-ir-emitter) (AUR
+`linux-enable-ir-emitter`) is the community tool for it. Face does not install or
+configure it.
+
+**Setup says there is no infrared camera, and you have one.** Face looks for a camera
+that names itself infrared, or failing that one whose formats are all greyscale — 8-bit
+`GREY`, or 10- or 16-bit `Y10`/`Y16`, which are the ones the engine can read.
+`v4l2-ctl --list-devices` and `v4l2-ctl -d /dev/videoN --list-formats` show what yours
+offers. A camera that offers only formats such as `Y8I` or `Y12I` is refused, because the
+engine would open it and never get a picture.
 
 **You want to know what it actually did.** Every face check for the lock screen is
 recorded by Face's root daemon, match or no, with the reason when it says no:
@@ -218,7 +264,7 @@ need Sudo. Names never change, so a binding never silently retargets somebody el
 
 **Settings → Remove Face ID from this machine.** It lists what would go, asks for your
 password once, removes Face's system files, the people, the PAM lines, the daemon and the
-engine — and then, as its last step, deletes both plugin folders, which is what closes the
+engine — and then, as its last step, deletes the two health hooks and both plugin folders, which is what closes the
 panel and takes the button off the bar. There is a tick for keeping howdy and dlib
 installed if you expect to come back.
 

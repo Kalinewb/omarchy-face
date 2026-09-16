@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Hyprland
 import Quickshell.Io
 
 // The lock-screen wrapper: Omarchy's OWN lock screen, with a face check added
@@ -14,6 +15,7 @@ import Quickshell.Io
 //
 //   · a poll of the monitors while the stock lock says it is locked
 //   · ONE face check per wake, and never on locking
+//   · ONE face check per Enter on an empty password field, while locked
 //   · finishUnlock() when that check says yes, and the lock is still the lock
 //     the check was started for
 //   · a line in $XDG_RUNTIME_DIR/omarchy-face/lock-status.json saying whether
@@ -109,7 +111,19 @@ Item {
   }
 
   readonly property string lineChecking: "Looking for your face…"
-  readonly property string lineNo: "Face not recognised — use your password."
+  // Both say what to do next, because since Enter starts a check there is
+  // something to do next other than typing. Short on purpose: LockView elides
+  // the placeholder, and the room it leaves is 339 px of 18 px italic, or 295 px
+  // with a fingerprint reader enrolled. The line this replaced -- "Face not
+  // recognised — use your password." -- measured 360 px and never once fitted.
+  // dev/g6-lock-offscreen.sh measures every line against the real font.
+  readonly property string lineNo: "Not recognised — Enter to retry"
+  // The same no, said differently inside `resumeWindowMs` of a resume. A
+  // camera that has not finished waking up delivers black or no frames, and
+  // the engine's answer to that is the same exit 1 as a stranger's face (the
+  // client has two exit codes on purpose, omarchy-face-lock-verify:11-17).
+  // So this does not claim to know it was the camera -- it says it may be.
+  readonly property string lineNoResumed: "Camera waking? Enter to retry"
 
   // The loaded stock instance, for a test harness to reach. Nothing outside
   // this process can: there is no IPC handler and the service has no visual
@@ -122,6 +136,12 @@ Item {
   // defaults are what ships and what runs.
   property var monitorCommand: ["hyprctl", "-j", "monitors"]
   property var verifyCommand: ["/usr/local/bin/omarchy-face-lock-verify"]
+  // The Enter binding is registered with `<evalCommand> <lua>`, and the event
+  // it raises is matched by name. Both are properties so the offscreen suite
+  // can log the Lua instead of binding a real key, and listen for an event name
+  // no running wrapper on this machine is listening for.
+  property var evalCommand: ["hyprctl", "eval"]
+  property string enterEvent: "omarchy-face-enter"
 
   // Not readonly, for the same reason the two commands above are properties:
   // the offscreen suite points it at a temporary directory so a test run never
@@ -187,6 +207,10 @@ Item {
     else
       root.log("composed with Omarchy's lock screen at " + root.stockUrl)
     root.writeStatus()
+    // A lock already up by the time the composition is known to fit -- the stock
+    // lock recovering a stranded one at shell start -- never saw the transition
+    // that arms Enter.
+    if (root.lockedNow) root.armEnter()
   }
 
   // A Loader error is the lock path having moved, or the stock file itself
@@ -235,8 +259,14 @@ Item {
       if (!stock.item) return
       if (stock.item.lockRequested) {
         root.lockGeneration = root.lockGeneration + 1
-        root.log("lock " + root.lockGeneration + " begins; face waits for the screen to wake")
-      } else if (root.attemptBusy && verifyProcess.running) {
+        root.log("lock " + root.lockGeneration + " begins; face waits for a wake or Enter")
+        if (root.compat === "ok") root.armEnter()
+        return
+      }
+      // Before the in-flight check below, and whatever its outcome: Enter goes
+      // back to being just Enter the moment there is no lock to open.
+      root.disarmEnter()
+      if (root.attemptBusy && verifyProcess.running) {
         // The lock ended while a check was still in flight, which is almost
         // always the password winning the race. Its ANSWER is already void --
         // the generation check in attemptFinished sees to that -- but the
@@ -291,7 +321,191 @@ Item {
     // baseline is "the screen as it was when the lock began" -- lit, for a lock
     // by hand -- and the blank that follows is seen as a change from it.
     triggeredOnStart: true
-    onTriggered: if (!monitorProcess.running) monitorProcess.running = true
+    onTriggered: {
+      root.noteTick(Date.now())
+      if (!monitorProcess.running) monitorProcess.running = true
+    }
+    onRunningChanged: if (!running) root.lastTickAt = 0
+  }
+
+  // --- a resume from sleep ----------------------------------------------------
+  //
+  // Omarchy locks before it suspends, so a suspend happens inside a lock and
+  // inside this poll -- and a timer frozen by a suspend fires late. The stock
+  // lock reads a resume off exactly this (its idleBlankTimer, Service.qml:418-
+  // 427); so does this file, and for one purpose only: the no that follows a
+  // resume gets `lineNoResumed` instead of `lineNo`. Nothing is delayed, and no
+  // check is skipped or started because of it.
+  property double lastTickAt: 0
+  property double resumedAt: 0
+  readonly property int resumeGapMs: 3000
+  readonly property int resumeWindowMs: 15000
+
+  function noteTick(now) {
+    if (root.lastTickAt > 0 && now - root.lastTickAt > monitorPoll.interval + root.resumeGapMs) {
+      root.resumedAt = now
+      root.log("resumed from sleep (" + Math.round((now - root.lastTickAt) / 1000) + " s gap)")
+    }
+    root.lastTickAt = now
+  }
+
+  function recentlyResumed() {
+    return root.resumedAt > 0 && Date.now() - root.resumedAt < root.resumeWindowMs
+  }
+
+  // --- Enter on an empty password field ------------------------------------
+  //
+  // The second way to ask, and the one a person can always reach: a wake needs
+  // the screen to have gone dark first, and a key pressed on a lit lock screen
+  // starts nothing (README, "The lock screen does not react to your face").
+  //
+  // WHY A HYPRLAND BINDING. This file cannot see the key. The password field
+  // lives in the stock LockView, inside a WlSessionLockSurface that Quickshell
+  // instantiates from a Component and exposes nowhere (plan-merged.md §1 row
+  // 14), and an Enter on an empty field is dropped in LockView's own onAccepted
+  // before the stock service hears of it (LockView.qml:171-175). So while a
+  // lock is up, Hyprland is asked for one binding on Return and one on KP_Enter:
+  //
+  //   locked          it fires with a session lock holding the keyboard
+  //   non_consuming   the key still reaches the password field -- a typed
+  //                   password is submitted exactly as it was without Face
+  //   hl.dsp.event    it runs no process: Hyprland writes `custom>>NAME` to its
+  //                   event socket, which Quickshell.Hyprland already reads
+  //
+  // It is registered when a lock begins and removed when the lock ends, so an
+  // unlocked session has no binding on Enter at all. It does not live in the
+  // user's bindings.lua, so nothing of the user's is edited, and a config reload
+  // (which drops runtime bindings) is answered by registering it again.
+  //
+  // WHAT THIS DOES NOT CHANGE. Any process running as this account can raise
+  // the same event with `hyprctl dispatch`, exactly as it can already produce a
+  // wake with `hyprctl dispatch dpms` -- both start one camera check, bounded by
+  // the daemon's rate limit, and neither can make a face match. The README says
+  // so. There is still no IpcHandler: nothing here opens a lock on anyone's say.
+  //
+  // WHICH ENTER. The binding fires for every Enter, including the one that
+  // submits a typed password, and the event and the key arrive by different
+  // paths in no promised order. So nothing is decided on the event itself:
+  // `enterSettleMs` later, an Enter that submitted a password shows as either
+  // `authenticatingPassword` or a change to the stock's `enteredPassword`
+  // (onAccepted clears it, LockView.qml:173). An Enter on an empty field changes
+  // neither, and only that one starts a check.
+
+  property double passwordChangedAt: 0
+  readonly property int enterSettleMs: 200
+  property int enterCount: 0
+  property bool enterArmed: false
+
+  readonly property string armLua:
+    'local old = _G.omarchy_face_enter_binds ' +
+    'if old then for _, b in ipairs(old) do pcall(function() b:unbind() end) end end ' +
+    'local t = {} ' +
+    'for _, key in ipairs({"Return", "KP_Enter"}) do ' +
+    'table.insert(t, hl.bind(key, hl.dsp.event("' + root.enterEvent + '"), ' +
+    '{ locked = true, non_consuming = true })) end ' +
+    '_G.omarchy_face_enter_binds = t'
+
+  readonly property string disarmLua:
+    'local old = _G.omarchy_face_enter_binds ' +
+    'if old then for _, b in ipairs(old) do pcall(function() b:unbind() end) end end ' +
+    '_G.omarchy_face_enter_binds = nil'
+
+  // The event name is pasted into Lua above, so it may only ever be a plain word.
+  readonly property bool enterEventValid: /^[a-z0-9-]{1,64}$/.test(root.enterEvent)
+
+  function armEnter() {
+    if (!root.enterEventValid) {
+      console.warn("graveklar.face-lock", "refusing an Enter event name that is not a plain word")
+      return
+    }
+    root.enterArmed = true
+    root.runEval(root.armLua, "armed Enter for face")
+  }
+
+  // Also run once at start: a shell that died inside a lock left its binding
+  // behind, and a stray binding would raise an event nobody acts on for every
+  // Enter in the unlocked session.
+  function disarmEnter() {
+    root.enterArmed = false
+    root.runEval(root.disarmLua, "")
+  }
+
+  // Serialised like the status writer: an arm and a disarm a moment apart must
+  // land in that order, and the last one asked for is the one that must win.
+  property var pendingEval: null
+
+  function runEval(lua, success) {
+    var job = { command: root.evalCommand.concat([lua]), success: success }
+    if (evalProcess.running) { root.pendingEval = job; return }
+    root.startEval(job)
+  }
+
+  function startEval(job) {
+    evalProcess.success = job.success
+    evalProcess.command = job.command
+    evalProcess.running = true
+  }
+
+  Process {
+    id: evalProcess
+    property string success: ""
+    stdout: StdioCollector { id: evalOut; waitForEnd: true }
+    onExited: function (code, status) {
+      var said = String(evalOut.text || "").trim()
+      if (code !== 0)
+        console.warn("graveklar.face-lock", "hyprctl eval failed (exit " + code + "):", said,
+                     "- Enter will not start a face check on this lock")
+      else if (evalProcess.success !== "")
+        root.log(evalProcess.success)
+      if (root.pendingEval !== null) {
+        var job = root.pendingEval
+        root.pendingEval = null
+        root.startEval(job)
+      }
+    }
+  }
+
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      if (!event) return
+      if (event.name === "custom" && event.data === root.enterEvent) root.enterPressed()
+      // A reload rebuilds Hyprland's Lua state and every runtime binding with
+      // it. Registering again is idempotent: armLua unbinds whatever it finds.
+      else if (event.name === "configreloaded" && root.enterArmed && root.lockedNow) root.armEnter()
+    }
+  }
+
+  // `enteredPassword` is optional, like `failureMessage`: if Omarchy renames it,
+  // `authenticatingPassword` still catches every password that is being
+  // checked, and only a password rejected in under `enterSettleMs` is missed --
+  // which costs one camera check, never an unlock.
+  Connections {
+    target: stock.item
+    ignoreUnknownSignals: true
+    function onEnteredPasswordChanged() { root.passwordChangedAt = Date.now() }
+  }
+
+  function enterPressed() {
+    if (!root.lockedNow) return
+    root.enterCount = root.enterCount + 1
+    enterSettle.restart()
+  }
+
+  Timer {
+    id: enterSettle
+    interval: root.enterSettleMs
+    onTriggered: root.enterSettled()
+  }
+
+  function enterSettled() {
+    if (!root.lockedNow) return
+    var sinceTyping = Date.now() - root.passwordChangedAt
+    if (stock.item.authenticatingPassword === true || sinceTyping < root.enterSettleMs + 300) {
+      root.log("Enter submitted a password: no face check")
+      return
+    }
+    root.startAttempt("Enter")
   }
 
   Process {
@@ -349,10 +563,10 @@ Item {
     if (!woke) return
 
     root.wakeCount = root.wakeCount + 1
-    root.startAttempt()
+    root.startAttempt("the screen woke")
   }
 
-  // --- one attempt per wake -------------------------------------------------
+  // --- one attempt per wake or Enter ---------------------------------------
 
   property bool attemptBusy: false
   property string attemptName: ""
@@ -368,12 +582,15 @@ Item {
   // and no later wake would be tried.
   readonly property int attemptSafetyMs: 30000
 
-  function startAttempt() {
+  // `why` is what the journal says started it: "the screen woke" or "Enter".
+  // An Enter that wakes a dark screen is both, and whichever lands first is the
+  // one check; the other meets `attemptBusy`.
+  function startAttempt(why) {
     // A second key press during a check is ignored: no queued request, so no
     // `camera_busy` from the daemon and no slot spent out of the shared rate
     // budget (plan-engine.md §6.2).
     if (root.attemptBusy) {
-      root.log("the screen woke again while a check was running: ignored")
+      root.log(why + " while a check was running: ignored")
       return
     }
     if (!root.lockedNow) return
@@ -384,7 +601,7 @@ Item {
     root.attemptName = ""
     root.attemptCancelled = false
     root.lastOutcome = "checking"
-    root.log("the screen woke: one face check, in lock generation " + root.lockGeneration)
+    root.log(why + ": one face check, in lock generation " + root.lockGeneration)
     root.showLine(root.lineChecking)
     // Armed BEFORE the process starts, because a command that cannot be executed
     // at all fails synchronously inside the next line -- and the handler for that
@@ -467,7 +684,7 @@ Item {
       // on screen: Omarchy clears it the moment a key is typed into the
       // password field, which is exactly when it stops being true.
       root.clearLine(root.lineChecking)
-      root.showLine(root.lineNo)
+      root.showLine(root.recentlyResumed() ? root.lineNoResumed : root.lineNo)
       return
     }
 
@@ -526,5 +743,8 @@ Item {
     }
   }
 
-  Component.onCompleted: root.log("loaded; Omarchy's lock screen is at " + root.stockUrl)
+  Component.onCompleted: {
+    root.log("loaded; Omarchy's lock screen is at " + root.stockUrl)
+    root.disarmEnter()
+  }
 }

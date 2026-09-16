@@ -577,6 +577,22 @@ compiled, and the case waits out the service's own 30 s deadline to see it run
 and asserts `notify-once` was called **once**, although the file is re-read every
 two seconds — "one notification, never one per check".
 
+**Enter** is the wrapper's second trigger, and its harder half to test: the key
+never reaches QML the wrapper can see, so a Hyprland binding raises a `custom>>`
+event while a lock is up. `g6` hands the wrapper a stand-in `evalCommand` that logs
+`arm`/`disarm` instead of binding a real key, and a per-run event name, then raises
+that event through the **real** compositor (`hl.dispatch(hl.dsp.event(...))`) —
+so the name, `Quickshell.Hyprland`'s event parsing and the wrapper's guards are
+all under test, and the wrapper this session runs never hears it. Two cases pin
+the part that matters most: an Enter that submits a typed password starts no face
+check, both while PAM is still checking and when PAM said no before the wrapper
+looked. `lock-lines.qml` measures every line the wrapper writes against the real
+lock font and the field's real room — the line this replaced was 360 px in 339.
+
+`g9-enter-live.sh` is the part a suite cannot do: virtual keyboards do not fire
+Hyprland bindings, so it registers the same binding unlocked and asks a person to
+press Enter once.
+
 `lock-on`/`lock-off` are tested in `f3-people-store.sh`, which is the suite with
 a store and a derived lock set in it. They wire nothing: the assertion beside
 them is that `/etc/pam.d` is byte-identical across both. The socket client the
@@ -594,6 +610,8 @@ a TTY, or an ssh session from another device):
 | the blank is 5 s | that Omarchy's `idleBlankTimer` really fires, and that a key press really flips `dpmsStatus` back |
 | face opens the real lock | `finishUnlock()` on the REAL stock instance, with a real match through the real engine |
 | the live swap | `enable`/`disable` on the running shell: no restart, no plugin reload, the popup stays open, `omarchy-shell lock status` keeps answering |
+| Enter on the lock screen | lit screen: Enter on the empty field → *Looking for your face…* → opens. A typed wrong password + Enter → *Authentication failed*, and `journalctl --user -t quickshell` says "Enter submitted a password: no face check". After unlocking, `hyprctl binds -j \| jq '.[] \| select(.key=="Return" and .modmask==0)'` is empty |
+| the resume line | close the lid, wait for suspend, open, Enter at once: a no within 15 s reads *Camera waking? Enter to retry* |
 | the lid | close → suspend → open: which of `dpmsStatus` or `disabled` fires, if either. The README's wording is chosen from the answer |
 | the stranded case | a broken staged wrapper present at a shell start while Hyprland holds the lock: a password field has to appear on its own within 30 s, with no TTY used |
 | the **non**-drawing clone | the same run, read the other way: destroying a stranded clone that nobody is looking at must disturb nothing else — no other plugin disabled, no bar widget lost, `shell.json` otherwise untouched |

@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 2.0.1
+# omarchy-face-version: 2.0.2
 #
 # The read half of the contract (plan-merged.md §2.2, plan-engine.md §10.1,
 # §11.1): one JSON document describing everything the GUI renders.
@@ -426,8 +426,43 @@ fi
 # engine.json from before an upgrade describes a howdy that is no longer there.
 engine_configured=false
 engine_problem=""
+
+# A Python upgrade. python-dlib is a compiled extension, installed into the one
+# /usr/lib/pythonX.Y/site-packages that existed when it was built, and a new
+# minor Python does not look there -- so after `pacman -Syu` moves python from
+# 3.14 to 3.15, every package is still installed, engine.json still agrees with
+# howdy, and the engine cannot import dlib at all. Nothing else on this row can
+# see that, and the first place anybody would is a sudo prompt that quietly
+# falls through to the password.
+#
+# The comparison is two paths and no Python: the directory pacman says the
+# package was installed into, and the versioned name /usr/bin/python3 links to.
+# `import dlib` would be the direct test, and it is exactly what this script must
+# not do -- the GUI runs it every few seconds, and importing dlib takes longer
+# than the rest of this file. A package listing that names no single directory,
+# or a python3 that is not a link to pythonX.Y, answers nothing, and nothing is
+# not a problem: the row falls through to the checks below as it did before.
+python_built=""
+python_running=""
 if [[ $engine_installed == true ]]; then
-  if [[ ! -r $ENGINE_FILE ]]; then
+  python_built=$(pacman -Qlq python-dlib 2>/dev/null |
+    sed -n 's#^/usr/lib/python\([0-9][0-9]*\.[0-9][0-9]*\)/site-packages/.*#\1#p' | sort -u)
+  python_running=$(readlink -f /usr/bin/python3 2>/dev/null |
+    sed -n 's#^.*/python\([0-9][0-9]*\.[0-9][0-9]*\)$#\1#p')
+fi
+
+if [[ $engine_installed == true ]]; then
+  if [[ $python_built =~ ^[0-9]+\.[0-9]+$ && $python_running =~ ^[0-9]+\.[0-9]+$ &&
+        $python_built != "$python_running" ]]; then
+    # First, because building the engine again is also the repair for every
+    # problem below it: a row that said "not configured the way Face needs it"
+    # here would send somebody to the wrong fix.
+    if version_newer "$python_running" "$python_built"; then
+      engine_problem="Python was upgraded to $python_running, but the face engine was built for $python_built — build the engine again"
+    else
+      engine_problem="Python is now $python_running, but the face engine was built for $python_built — build the engine again"
+    fi
+  elif [[ ! -r $ENGINE_FILE ]]; then
     engine_problem="howdy is installed but has not been configured for this camera"
   elif ! jq -e . "$ENGINE_FILE" >/dev/null 2>&1; then
     engine_problem="the engine's record of its own configuration cannot be read"

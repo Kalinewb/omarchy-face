@@ -1,0 +1,400 @@
+#!/bin/bash
+#
+# omarchy-face v2
+# omarchy-face-version: 2.0.2
+#
+# Is Face still working after something else changed this machine?
+#
+#   omarchy-face-health post-update     run by Omarchy's post-update hook
+#   omarchy-face-health post-boot       run by Omarchy's post-boot hook
+#   omarchy-face-health install-hooks   put both hooks in place (the Face service)
+#   omarchy-face-health remove-hooks    take both hooks out again
+#
+# Exit codes:
+#
+#   0  post-update and post-boot: ALWAYS, whatever they found and whatever
+#      failed while finding it. They run inside `omarchy update`, and nothing
+#      Face has to say is a reason for an update to stop.
+#   0  install-hooks / remove-hooks: both hook files are as asked
+#   1  install-hooks / remove-hooks: a hook file could not be written or removed
+#   2  usage
+#
+# WHY THIS EXISTS. Face breaks in three ways that nobody finds out about until a
+# lock screen that does not react, or a sudo prompt that quietly falls through
+# to the password -- which is the one moment a person least wants to debug it:
+#
+#   1. a Python minor upgrade leaves python-dlib in the old site-packages, and
+#      the engine cannot import it (the `engine` row says so since 2.0.2)
+#   2. `omarchy update` runs `yay -Sua`, which rebuilds howdy and python-dlib
+#      from AUR HEAD, off the revisions Face pinned and configured
+#   3. an Omarchy update renames something lock/Service.qml depends on, which
+#      the wrapper only finds out when the shell restarts
+#
+# Omarchy runs `~/.config/omarchy/hooks/post-update.d/*` after the system
+# packages and migrations and BEFORE the AUR step (omarchy-update), and
+# `post-boot.d/*` a moment after the session starts (default/hypr/autostart.lua).
+# So `post-update` sees (1) and (3) on disk before anybody restarts, and can say
+# (2) is about to happen; `post-boot` sees whatever is true now.
+#
+# The same rules as the status helper, because it is a reader of it:
+#
+#   it never prompts, never opens the camera, never needs root
+#   it writes nothing outside $XDG_STATE_HOME/omarchy-face and the two hooks
+#   a check it cannot make says nothing -- it is never reported as healthy, and
+#   it is never reported as broken either
+#
+# It is NOT a second status helper. Every row comes from `omarchy-face-status
+# --json`, so the Setup view and this notification can never disagree about
+# what is wrong; the only checks made here are the two the status helper cannot
+# make because they are about the future: the lock screen Omarchy has just put
+# on disk but not yet run, and the AUR update that has not happened yet.
+
+set -uo pipefail
+unset IFS
+umask 077
+
+# Every decision here matches another program's output (`yay`, `grep` over QML),
+# and C pins what the character classes mean.
+export LC_ALL=C
+
+PLUGIN_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+PLUGIN_ID=graveklar.face
+
+# The status helper, from the same place the GUI takes it (common/Ask.qml
+# `pluginBin`): the development stubs when OMARCHY_FACE_DEV_BIN is set, which is
+# what lets dev/h1-health.sh run every case below against a fixture.
+if [[ -n ${OMARCHY_FACE_DEV_BIN:-} ]]; then
+  STATUS_BIN=$OMARCHY_FACE_DEV_BIN/omarchy-face-status
+else
+  STATUS_BIN=$PLUGIN_DIR/bin/omarchy-face-status
+fi
+
+# Where `omarchy-hook` looks, spelled exactly the way it spells it: $HOME/.config,
+# not $XDG_CONFIG_HOME. A hook written anywhere else is a hook that never runs,
+# and on every Omarchy machine the two are the same directory anyway (Omarchy's
+# own plugin scripts use $HOME/.config too).
+HOOKS_DIR=$HOME/.config/omarchy/hooks
+HOOK_NAME=graveklar-face.hook
+HOOK_VERBS=(post-update post-boot)
+
+STATE_DIR=${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-face
+NOTIFIED_FILE=$STATE_DIR/health-notified
+
+# Omarchy's lock screen as it is ON DISK, which after `omarchy update` is not the
+# one the running shell loaded. $OMARCHY_PATH and not the systemd user
+# environment `omarchy-face-lock` prefers: the question here is what the package
+# manager just installed, and the hook runs inside `omarchy update` with the
+# session's own OMARCHY_PATH already set.
+STOCK_LOCK=${OMARCHY_PATH:-/usr/share/omarchy}/shell/plugins/lock/Service.qml
+
+# THE LOCK SCREEN CONTRACT. These are the names lock/Service.qml needs from
+# Omarchy's lock screen: its `contractProperties`, plus finishUnlock(). The two
+# lists are the same list and must stay so -- dev/h1-health.sh reads both files
+# and fails when they drift. `failureMessage` is deliberately absent here for the
+# reason it is absent there: losing it costs the on-screen line, not face.
+LOCK_CONTRACT_PROPERTIES=(lockRequested pendingSessionLock locked authenticatingPassword)
+LOCK_CONTRACT_FUNCTION=finishUnlock
+
+# The bar's own glyph (FacePanel.qml, U+F004D), so the notification is
+# recognisably Face's. Spelled as its UTF-8 bytes: under LC_ALL=C, bash's
+# $'\U000f004d' cannot encode the character and yields the escape as text.
+GLYPH=$'\xf3\xb0\x81\x8d'
+
+# The status helper answers in well under a second. This is only a ceiling for a
+# machine where something it asks (systemctl, the camera helper) hangs, so that
+# `omarchy update` is never held up by a notifier.
+STATUS_TIMEOUT=60
+AUR_TIMEOUT=30
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+usage() {
+  echo "usage: omarchy-face-health post-update|post-boot|install-hooks|remove-hooks" >&2
+  exit 2
+}
+
+# --- the hooks ---------------------------------------------------------------
+
+# The hook is deliberately tiny and knows one thing: where the plugin lives.
+#
+# If the plugin is gone, the hook deletes itself. That is the whole of the
+# clean-up for a plugin removed any way other than Face's own Remove (which
+# deletes both hooks in its final step): `omarchy plugin remove`, an `rm -rf`, a
+# reinstall under another id. Nothing else would ever notice, and a hook that
+# runs a missing file prints "Hook failed" at every update forever.
+#
+# It always exits 0, and it does not `exec` the helper for that reason: exec
+# would hand `omarchy-hook` whatever the helper exited with, and the promise that
+# Face can never make an update print "Hook failed" should not rest on a file
+# that a plugin update can replace between two runs.
+hook_text() { # hook_text <verb>
+  cat <<HOOK
+#!/bin/bash
+#
+# Face ID ($PLUGIN_ID): check that face unlock still works after $1.
+#
+# Written by the plugin (bin/omarchy-face-health install-hooks) and removed by
+# Face ID's Remove. If the plugin is no longer installed, this file deletes
+# itself. It never makes the update fail.
+
+health=\${XDG_CONFIG_HOME:-\$HOME/.config}/omarchy/plugins/$PLUGIN_ID/bin/omarchy-face-health
+
+if [[ ! -x \$health ]]; then
+  rm -f -- "\$0"
+  exit 0
+fi
+
+"\$health" $1 || true
+exit 0
+HOOK
+}
+
+# Idempotent, and quietly so: a hook whose content is already right is not
+# rewritten, because the Face service calls this at every shell start and a
+# write that changes nothing is still an mtime that says something happened.
+# Temp + rename in the same directory, so `omarchy-hook` running at the same
+# moment sees the old file or the new one and never half of one; the temp name
+# starts with a dot because `omarchy-hook` runs `*` and `*` skips dot files.
+install_hooks() {
+  local verb dir file tmp written=0 failed=0
+  for verb in "${HOOK_VERBS[@]}"; do
+    dir=$HOOKS_DIR/$verb.d
+    file=$dir/$HOOK_NAME
+    if ! mkdir -p "$dir" 2>/dev/null; then
+      failed=1
+      continue
+    fi
+    if [[ -f $file && ! -L $file ]] && cmp -s <(hook_text "$verb") "$file"; then
+      # Right content, and possibly the wrong mode: chmod alone moves no mtime.
+      [[ $(stat -c '%a' "$file" 2>/dev/null) == 755 ]] || chmod 0755 "$file" 2>/dev/null || failed=1
+      continue
+    fi
+    tmp=$(mktemp "$dir/.$HOOK_NAME.XXXXXX" 2>/dev/null) || { failed=1; continue; }
+    if hook_text "$verb" >"$tmp" 2>/dev/null && chmod 0755 "$tmp" 2>/dev/null &&
+       mv -f -- "$tmp" "$file" 2>/dev/null; then
+      written=$((written + 1))
+    else
+      rm -f -- "$tmp"
+      failed=1
+    fi
+  done
+  jq -nc --argjson ok "$([[ $failed == 0 ]] && echo true || echo false)" \
+    --argjson written "$written" '{ok: $ok, written: $written}' 2>/dev/null
+  return "$failed"
+}
+
+remove_hooks() {
+  local verb failed=0
+  for verb in "${HOOK_VERBS[@]}"; do
+    rm -f -- "$HOOKS_DIR/$verb.d/$HOOK_NAME" 2>/dev/null || failed=1
+  done
+  return "$failed"
+}
+
+# --- the checks --------------------------------------------------------------
+
+# Which rows are news. Every row that is `broken`, and of the `needs_action`
+# rows only the ones that mean something that used to work has stopped --
+# because this runs at every boot, and a notifier that repeats the setup
+# checklist to somebody who chose not to finish it is a notifier they learn to
+# swipe away before the one that matters.
+#
+#   broken, any row          -- except the three below
+#   install-job              never: the GUI folds it into `engine`, and a failed
+#                            rebuild with the old engine still `ok` is not a
+#                            stoppage
+#   lock, incompatible/failed  never: Service.qml's `notify-once` is the single
+#                            notifier for those reasons (plan-merged.md §1 row
+#                            13), and this would be a second one for the same
+#                            reason. `otherLock` is still reported.
+#   camera, needs_action     yes: Face is installed and there is no infrared
+#                            camera -- a driver or a cable that went away
+#   system, install-system   yes: the plugin moved on and the system half did not
+#                            (a plugin update); install-first is "not installed"
+#   engine, needs_action     only once somebody had a face recorded or a switch
+#                            on: "not built yet" on a machine that had one is a
+#                            package that went away
+#   lock, lock-stage/enable  only with config.lock on: the person asked for face
+#                            on the lock screen and it is not there
+#
+#   NOT: people "record your face first", sudo "off", lock "waiting for a
+#   restart" (the next shell start does it by itself), and every `unknown` row --
+#   a build that is running, a lock screen that is starting. Unknown is not
+#   healthy, but it is not news either.
+ROW_FILTER='
+  def row($id): first(.rows[]? | select(.id == $id)) // null;
+  . as $doc
+  | ((row("people").state // "") == "ok" or $doc.config.sudo == true or $doc.config.lock == true) as $wasWorking
+  | [ .rows[]?
+      | select(.state != "unknown")
+      | select(
+          (.state == "broken"
+             and .id != "install-job"
+             and (.id != "lock" or ((($doc.lock.compat // "") == "incompatible"
+                                     or ($doc.lock.compat // "") == "failed") | not)))
+          or (.state == "needs_action"
+             and ((.id == "camera")
+                  or (.id == "system" and .fix == "install-system")
+                  or (.id == "engine" and $wasWorking)
+                  or (.id == "lock" and $doc.config.lock == true
+                      and (.fix == "lock-stage" or .fix == "lock-enable")))))
+      | "\(.label): \(.detail)" ]
+  | .[]'
+
+# Is any of Face's system half on this machine? The `system` row says so
+# directly -- `install-first` is exactly "nothing installed and no config". With
+# no infrared camera the status helper hides that row, and then the `removal`
+# object (the same dry run Remove shows) is the answer.
+INSTALLED_FILTER='
+  (first(.rows[]? | select(.id == "system")) // null) as $system
+  | if $system != null then ($system.fix != "install-first")
+    else ((.removal.helpers // 0) > 0 or .removal.daemon == true or .removal.policy == true
+          or ((.removal.pam // []) | length) > 0 or ((.config.account // "") != ""))
+    end'
+
+# The lock screen Omarchy has just installed, read as text. The wrapper checks
+# the same names on the live object (lock/Service.qml); this is the preview of
+# that check for the restart this update is about to ask for. A declaration is
+# `[readonly|required|default] property <type> <name>`, which is what makes a
+# name a property rather than a word in a comment or a binding.
+lock_preview() {
+  local name missing=()
+  if [[ ! -r $STOCK_LOCK ]]; then
+    printf '%s\n' "after this update's restart, face will be off on the lock screen: Omarchy's lock screen is no longer at $STOCK_LOCK"
+    return
+  fi
+  for name in "${LOCK_CONTRACT_PROPERTIES[@]}"; do
+    grep -Eq "^[[:space:]]*((readonly|required|default)[[:space:]]+)*property[[:space:]]+[A-Za-z_][A-Za-z0-9_.<>]*[[:space:]]+$name([[:space:]]*[:;]|[[:space:]]*$)" \
+      "$STOCK_LOCK" 2>/dev/null || missing+=("$name")
+  done
+  grep -Eq "^[[:space:]]*function[[:space:]]+$LOCK_CONTRACT_FUNCTION[[:space:]]*\(" "$STOCK_LOCK" 2>/dev/null ||
+    missing+=("$LOCK_CONTRACT_FUNCTION()")
+  ((${#missing[@]} == 0)) && return
+  local list="" item
+  for item in "${missing[@]}"; do list+="${list:+, }$item"; done
+  printf '%s\n' "after this update's restart, face will be off on the lock screen: Omarchy's lock screen changed (missing: $list)"
+}
+
+# The AUR step runs after this hook and rebuilds whatever `yay -Qua` lists. For
+# howdy and python-dlib that is AUR HEAD, not the revisions Face reviewed and
+# configured, so the engine row will be `broken` the next time anything reads
+# it. Saying so now is the difference between a notification that explains a
+# prompt falling through and one that arrives a day later. No network, a slow
+# AUR, or no yay: nothing to say, because nothing was found out.
+aur_preview() {
+  have yay || return
+  local out packages
+  out=$(timeout "$AUR_TIMEOUT" yay -Qua </dev/null 2>/dev/null) || [[ -n $out ]] || return
+  packages=$(awk '$1 == "howdy" || $1 == "python-dlib" { print $1 }' <<<"$out" | sort -u | paste -sd, - | sed 's/,/, /g')
+  [[ -n $packages ]] || return
+  printf '%s\n' "the AUR update that runs next will rebuild $packages; Face's engine will need building again afterwards (Face ID → Setup)"
+}
+
+# One notification, through Omarchy's own sender so it carries the bar glyph and
+# a click that opens the panel on Setup -- `open(view, name)` is FacePanel.qml's
+# IPC handler, and both arguments are required (Quickshell checks arity), hence
+# the empty name. The click is an argv, never a shell string
+# (omarchy-notification-send --exec). If the bar widget is not on the bar there
+# is no such IPC target and the click does nothing, which is the most it can do.
+#
+# notify-send only when Omarchy's sender is missing or failed, and it cannot
+# carry a click. Success is reported, because a notification that never reached
+# anybody must not be recorded as said.
+notify() { # notify <title> <body>
+  if have omarchy-notification-send &&
+     omarchy-notification-send --app-name "Face ID" -u critical -g "$GLYPH" "$1" "$2" \
+       --exec omarchy-shell "$PLUGIN_ID" open setup "" >/dev/null 2>&1; then
+    return 0
+  fi
+  have notify-send && notify-send -a "Face ID" -u critical "$1" "$2" >/dev/null 2>&1
+}
+
+run_checks() { # run_checks post-update|post-boot
+  local verb=$1 doc problems=() line
+
+  # Without jq the status document cannot be read at all, and the status helper
+  # itself would only say `unknown`.
+  have jq || return 0
+
+  doc=$(timeout "$STATUS_TIMEOUT" "$STATUS_BIN" --json </dev/null 2>/dev/null) || true
+  if ! jq -e '(.rows | type) == "array"' >/dev/null 2>&1 <<<"$doc"; then
+    # Unreadable is not healthy: say nothing, and forget nothing either, so a
+    # problem already notified is not notified again when this clears up.
+    return 0
+  fi
+
+  # Nothing set up, so nothing to have stopped working.
+  if [[ $(jq -r "$INSTALLED_FILTER" <<<"$doc" 2>/dev/null) != true ]]; then
+    rm -f -- "$NOTIFIED_FILE" 2>/dev/null
+    return 0
+  fi
+
+  while IFS= read -r line; do
+    [[ -n $line ]] && problems+=("$line")
+  done < <(jq -r "$ROW_FILTER" <<<"$doc" 2>/dev/null)
+
+  if [[ $verb == post-update ]]; then
+    if [[ $(jq -r '.config.lock == true or .lock.enabled == true' <<<"$doc" 2>/dev/null) == true ]]; then
+      line=$(lock_preview)
+      [[ -n $line ]] && problems+=("$line")
+    fi
+    if [[ $(jq -r '.engine.installed == true or ((.removal.packages // []) | length) > 0' <<<"$doc" 2>/dev/null) == true ]]; then
+      line=$(aur_preview)
+      [[ -n $line ]] && problems+=("$line")
+    fi
+  fi
+
+  if ((${#problems[@]} == 0)); then
+    # Healthy, so the next breakage -- even one worded exactly like the last --
+    # is news again.
+    rm -f -- "$NOTIFIED_FILE" 2>/dev/null
+    return 0
+  fi
+
+  # The terminal gets the block every time, deduplicated or not: somebody
+  # reading their update's output is asking right now.
+  if [[ $verb == post-update ]]; then
+    printf '\nFace ID needs attention:\n'
+    printf '  · %s\n' "${problems[@]}"
+    printf '  Open Face ID → Setup to repair it.\n\n'
+  fi
+
+  # The desktop gets it once per set of problems. Without this a machine with
+  # one lasting problem says it at every login, and that is the notification
+  # people learn to ignore.
+  local key
+  key=$(printf '%s\n' "${problems[@]}" | sha256sum | cut -d' ' -f1)
+  [[ -r $NOTIFIED_FILE && $(cat "$NOTIFIED_FILE" 2>/dev/null) == "$key" ]] && return 0
+
+  local body
+  body=$(printf '%s\n' "${problems[@]}")
+  notify "Face ID needs attention" "$body" || return 0
+
+  mkdir -p "$STATE_DIR" 2>/dev/null || return 0
+  local tmp
+  tmp=$(mktemp "$STATE_DIR/.health-notified.XXXXXX" 2>/dev/null) || return 0
+  if printf '%s\n' "$key" >"$tmp" 2>/dev/null; then
+    mv -f -- "$tmp" "$NOTIFIED_FILE" 2>/dev/null || rm -f -- "$tmp"
+  else
+    rm -f -- "$tmp"
+  fi
+  return 0
+}
+
+case ${1:-} in
+  post-update | post-boot)
+    run_checks "$1"
+    exit 0
+    ;;
+  install-hooks)
+    install_hooks
+    exit $?
+    ;;
+  remove-hooks)
+    remove_hooks
+    exit $?
+    ;;
+  *)
+    usage
+    ;;
+esac

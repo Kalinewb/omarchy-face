@@ -112,12 +112,18 @@ exec "$@"
 STANDIN
 chmod +x "$root/bin/pkexec"
 
+# Unique to this run: a real Hyprland event with this name reaches the harness's
+# wrapper and nothing else, because the wrapper this session runs listens for
+# `omarchy-face-enter`.
+ENTER_EVENT=omarchy-face-enter-g6-$$
+
 run_lock() { # run_lock <case> <omarchy path> [env…]
   local name=$1 omarchy=$2
   shift 2
   cp "$REPO/dev/qml-harness/lock.qml" "$root/shell.qml"
+  rm -f "$status/eval.log"
   env FACE_HARNESS_CASE="$name" FACE_HARNESS_OMARCHY="$omarchy" \
-    FACE_HARNESS_STATUS="$status" "$@" \
+    FACE_HARNESS_STATUS="$status" FACE_HARNESS_EVENT="$ENTER_EVENT" "$@" \
     timeout 90 quickshell -p "$root" -n 2>&1 |
     sed -n 's/^.*HARNESS \([a-zA-Z]*\) \(.*\)$/\1=\2/p'
 }
@@ -134,6 +140,7 @@ run_view() { # run_view <case> [env…]
 }
 
 field() { sed -n "s/^$1=//p" <<<"$2" | head -1; }
+evals() { tr -s ' \n' ' ' <"$status/eval.log" 2>/dev/null | sed 's/ *$//'; }
 
 echo "G6 — the lock screen wrapper, offscreen"
 echo "${DIM}shell: $SHELL_PATH/shell   plugin: $REPO${RESET}"
@@ -297,6 +304,88 @@ out=$(run_lock wake-clamshell "$root/fake")
 echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
 check "a disabled monitor coming back is a wake too" "1" "$(field wakes "$out")"
 check "…and starts one check" "1" "$(field attempts "$out")"
+
+step "the composed wrapper never arms Enter on a lock screen it does not fit"
+out=$(run_lock incompatible "$root/scratch")
+check "…it only ever clears a stale binding, at start" "disarm" "$(evals)"
+
+# =============================================================================
+# Enter on an empty password field
+# =============================================================================
+
+step "GATE: the Enter binding exists only while a lock does"
+out=$(run_lock enter-arming "$root/fake")
+check "cleared at start, then armed and disarmed once per lock" \
+  "disarm arm disarm arm disarm" "$(evals)"
+check "…every registration names this wrapper's own event, and a plain word" \
+  "0" "$(grep -c 'wrong-event' "$status/eval.log" 2>/dev/null)"
+check "the shipped Lua binds both Enters, locked and non-consuming" "true" \
+  "$(grep -q 'ipairs({"Return", "KP_Enter"})' "$REPO/lock/Service.qml" &&
+     grep -q 'locked = true, non_consuming = true' "$REPO/lock/Service.qml" &&
+     echo true || echo false)"
+check "…and raises an event, never a command" "0" \
+  "$(code | grep -c 'dsp.exec')"
+
+step "GATE: Enter on a lit lock screen"
+out=$(run_lock enter-lit "$root/fake")
+echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
+enter_path=$(field enterPath "$out")
+[[ $enter_path == hyprland ]] ||
+  note "no compositor here: Enter was called directly, the event path is untested"
+check "nothing woke" "0" "$(field wakes "$out")"
+check "…Enter was heard" "1" "$(field enters "$out")"
+check "…one check ran" "1" "$(field attempts "$out")"
+check "…and it opened the lock" "unlocked" "$(field outcome "$out")"
+
+step "Enter with no lock up"
+out=$(run_lock enter-unlocked "$root/fake")
+check "is not counted" "0" "$(field enters "$out")"
+check "…and starts nothing" "0" "$(field attempts "$out")"
+
+step "GATE: Enter that submits a typed password"
+out=$(run_lock enter-password "$root/fake")
+echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
+check "Enter was heard" "1" "$(field enters "$out")"
+check "…but no face check ran beside the password" "0" "$(field attempts "$out")"
+check "…and the lock is still the password's to open" "true" "$(field locked "$out")"
+
+step "GATE: the same, with PAM rejecting before the wrapper looks"
+out=$(run_lock enter-fast-reject "$root/fake")
+check "no face check ran" "0" "$(field attempts "$out")"
+
+step "Enter twice while a check runs"
+out=$(run_lock enter-busy "$root/fake")
+check "both were heard" "2" "$(field enters "$out")"
+check "…one check" "1" "$(field attempts "$out")"
+
+step "Enter on a dark screen is a wake and an Enter"
+out=$(run_lock enter-wake "$root/fake")
+echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
+check "one check between them" "1" "$(field attempts "$out")"
+
+step "what a no says"
+out=$(run_lock enter-no "$root/fake")
+check "the line says to press Enter" "$(field lineNo "$out")" "$(field line "$out")"
+check "…and nothing claims a resume" "false" "$(field resumed "$out")"
+out=$(run_lock enter-no-resumed "$root/fake")
+check "a no just after a resume says the camera may be waking" \
+  "$(field lineNoResumed "$out")" "$(field line "$out")"
+check "…because the frozen poll was read as a resume" "true" "$(field resumed "$out")"
+
+step "GATE: every line fits the password field (LockView elides it)"
+lines=$(sed -n 's/^ *readonly property string line[A-Za-z]*: "\(.*\)"$/\1/p' "$REPO/lock/Service.qml")
+cp "$REPO/dev/qml-harness/lock-lines.qml" "$root/shell.qml"
+measured=$(FACE_HARNESS_LINES="$(paste -sd'|' <<<"$lines")" timeout 30 quickshell -p "$root" -n 2>&1 |
+  sed -n 's/^.*HARNESS \([a-zA-Z0-9]*\) \(.*\)$/\1=\2/p')
+room=$(field roomFingerprint "$measured")
+i=0
+while IFS= read -r text; do
+  width=$(field "width$i" "$measured")
+  check "\"$text\" is ${width:-?} px of $room" "true" \
+    "$([[ -n $width && -n $room ]] && ((width <= room)) && echo true || echo false)"
+  i=$((i + 1))
+done <<<"$lines"
+check "…and all three lines were measured" "3" "$i"
 
 # =============================================================================
 # The Settings switch and the Setup row (plan-gui.md §6.1, §4 row 8)

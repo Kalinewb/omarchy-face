@@ -299,7 +299,7 @@ if ((bound_plugin == 1)); then
   umount "$PLUGINS/graveklar.face"
   check "the refused installs changed nothing" \
     bash -c "diff -q '$REPO/system/omarchy-face-camera' /usr/local/bin/omarchy-face-camera >/dev/null &&
-             [[ \$(head -40 /usr/local/bin/omarchy-face-admin | sed -n 's/.*omarchy-face-version: //p') == '2.0.1' ]]"
+             [[ \$(head -40 /usr/local/bin/omarchy-face-admin | sed -n 's/.*omarchy-face-version: //p') == '2.0.2' ]]"
   rm -rf "$evil" "$older"
 else
   note "refusal tests on the plugin folder skipped: it is not this checkout"

@@ -64,6 +64,12 @@ trap 'rm -rf "$root"' EXIT
 harness=$root/harness
 state=$root/state
 PLUGINS=$root/plugins
+# Face's two Omarchy hooks, in the folder the view derives from the plugins
+# folder (`hooksDir`) -- so the final step deletes these, and never this
+# account's own.
+HOOKS=$root/hooks
+HOOK_UPDATE=$HOOKS/post-update.d/graveklar-face.hook
+HOOK_BOOT=$HOOKS/post-boot.d/graveklar-face.hook
 CALLS=$root/calls.log
 
 mkdir -p "$harness" "$state" "$PLUGINS" "$root/bin"
@@ -123,6 +129,9 @@ reset_plugins() {
   cp -r "$REPO/lock" "$PLUGINS/graveklar.face-lock"
   mkdir -p "$PLUGINS/.graveklar.face-lock.old.20260101000000" \
            "$PLUGINS/.graveklar.face-lock.abc123"
+  mkdir -p "${HOOK_UPDATE%/*}" "${HOOK_BOOT%/*}"
+  : >"$HOOK_UPDATE"
+  : >"$HOOK_BOOT"
   : >"$CALLS"
 }
 
@@ -167,6 +176,9 @@ check "the plugins folder is derived from the plugin's own directory" "$PLUGINS"
 check "the final step is one detached command, with --yes in it" "true" \
   "$([[ $(field finalArgv "$out") == '["setsid","-f","bash","-c",'* &&
        $(field finalArgv "$out") == *'plugin remove --yes graveklar.face'* ]] && echo true || echo false)"
+check "…and it is handed both hook paths, beside the plugins folder, as arguments" \
+  "$(jq -c --arg u "$HOOK_UPDATE" --arg b "$HOOK_BOOT" -n '[$u, $b]')" \
+  "$(field finalArgv "$out" | jq -c '.[-2:]')"
 
 echo
 echo "${DIM}== GATE: the result is on screen BEFORE anything writes the plugins folder${RESET}"
@@ -184,6 +196,8 @@ check "…and not yet run" "false" "$(field finalRanAtResult "$out")"
 check "closing the popup ran it" "true" "$(field finalRan "$out")"
 check "the lock screen wrapper is gone" "gone" "$(field cloneAfterClose "$out")"
 check "the plugin itself is gone" "gone" "$(field sourceAfterClose "$out")"
+check "Face's update and boot hooks are gone" "gone" \
+  "$([[ ! -e $HOOK_UPDATE && ! -e $HOOK_BOOT ]] && echo gone || echo present)"
 check "omarchy plugin remove was asked, with --yes" "1" \
   "$(grep -c 'plugin remove --yes graveklar.face' "$CALLS")"
 check "…and the backup it leaves behind was cleared" "" \

@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 2.0.1
+# omarchy-face-version: 2.0.2
 #
 # Which camera is the infrared one (plan-engine.md §8.1).
 #
@@ -63,16 +63,42 @@ is_capture_node() {
   [[ $idx == 0 ]]
 }
 
-# An IR sensor offers 8-bit greyscale and nothing else; a colour webcam always
-# offers YUYV or MJPG. This is the only signal that does not depend on the
-# vendor having named the device honestly -- plenty of laptops call both sensors
+# An IR sensor offers greyscale and nothing else; a colour webcam always offers
+# a colour format. This is the only signal that does not depend on the vendor
+# having named the device honestly -- plenty of laptops call both sensors
 # "Integrated Camera" and leave you to work it out.
+#
+# "Greyscale" is not only 8-bit GREY. Some sensors deliver 10- or 16-bit
+# luminance instead, and those were turned away here while the engine could have
+# read them. So the rule is two halves:
+#
+#   every format offered is a luminance format   -- no colour at all, which is
+#       stricter than the old "no YUYV or MJPG" and is what keeps a colour
+#       webcam with an unusual format list from passing
+#   at least one of them is one the engine reads -- howdy's default recorder is
+#       OpenCV's V4L2 backend, and cap_v4l.cpp converts exactly GREY, Y10, Y16
+#       and big-endian Y16 (its convertableToRgb()). Y12 is in that file's
+#       try-list but not its convertible list, and Y10B, Y14, Y8I and Y12I are
+#       not in the file at all: a sensor offering only those opens and never
+#       delivers a frame, which is worse than being told there is no camera.
+#
+# v4l2-ctl prints one `[N]: 'FOURCC' (description)` line per format, the fourcc
+# padded to four characters and big-endian variants suffixed `-BE`.
+LUMA_FORMATS=" GREY Y10 Y10B Y12 Y12I Y14 Y16 Y16-BE Y8I "
+READABLE_LUMA_FORMATS=" GREY Y10 Y16 Y16-BE "
+
 formats_look_ir() {
-  local node=$1 formats
+  local node=$1 fourcc readable=false
   command -v v4l2-ctl >/dev/null 2>&1 || return 1
-  formats=$(v4l2-ctl -d "$node" --list-formats-ext 2>/dev/null) || return 1
-  [[ $formats == *"'GREY'"* || $formats == *"'Y8 '"* ]] || return 1
-  [[ $formats != *"'YUYV'"* && $formats != *"'MJPG'"* ]]
+  local formats
+  formats=$(v4l2-ctl -d "$node" --list-formats 2>/dev/null) || return 1
+  while IFS= read -r fourcc; do
+    fourcc=${fourcc// /}
+    [[ -n $fourcc ]] || continue
+    [[ $LUMA_FORMATS == *" $fourcc "* ]] || return 1
+    [[ $READABLE_LUMA_FORMATS == *" $fourcc "* ]] && readable=true
+  done < <(sed -n "s/^[[:space:]]*\[[0-9]*\]:[[:space:]]*'\([^']*\)'.*/\1/p" <<<"$formats")
+  [[ $readable == true ]]
 }
 
 find_ir_node() {

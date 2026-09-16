@@ -56,6 +56,13 @@ Item {
     return [pluginBin + "/omarchy-face-lock"].concat(args || [])
   }
 
+  // The post-update/post-boot health check (bin/omarchy-face-health). Not in
+  // dev/bin: the Face service does not call it in development at all, because
+  // its one verb from here writes ~/.config/omarchy/hooks (Service.qml).
+  function healthArgv(args) {
+    return [pluginBin + "/omarchy-face-health"].concat(args || [])
+  }
+
   function identityArgv(args) {
     return [systemBin + "/omarchy-face-identity"].concat(args || [])
   }

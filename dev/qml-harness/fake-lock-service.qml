@@ -21,6 +21,12 @@ Item {
   property bool authenticatingPassword: false
   readonly property bool locked: lockRequested
 
+  // Not part of the five: the two optional names the wrapper reads when they
+  // are there -- the placeholder line it writes, and the typed password whose
+  // change tells an Enter that submitted a password from one on an empty field.
+  property string failureMessage: ""
+  property string enteredPassword: ""
+
   // How the harness sees that the wrapper opened the lock, and how many times.
   property int unlockCount: 0
 
@@ -37,4 +43,19 @@ Item {
   // the person caused.
   function beginLock() { lockRequested = true }
   function passwordUnlock() { lockRequested = false }
+
+  // A person typing, then pressing Enter, in the order the real LockView does
+  // it: onAccepted clears the field first (LockView.qml:173) and submits
+  // second (Service.qml:176-191), which sets `authenticatingPassword` at once.
+  // `rejectAfterMs` is how long PAM takes to say no; 0 means before anything
+  // else can run, which is the case the `enteredPassword` guard is for.
+  function typePassword(text) { enteredPassword = String(text) }
+  function submitTyped(rejectAfterMs) {
+    enteredPassword = ""
+    authenticatingPassword = true
+    if (rejectAfterMs <= 0) { authenticatingPassword = false; return }
+    rejectTimer.interval = rejectAfterMs
+    rejectTimer.restart()
+  }
+  Timer { id: rejectTimer; onTriggered: root.authenticatingPassword = false }
 }

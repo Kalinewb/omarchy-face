@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "graveklar.face",
   "name": "Face ID",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "author": "graveklar",
   "license": "MIT",
   "description": "Look at your laptop instead of typing your password into sudo — for you, and for the people you choose.",

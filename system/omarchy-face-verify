@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 2.0.1
+# omarchy-face-version: 2.0.2
 #
 # PAM verifier for `sudo`: exit 0 AUTHENTICATES (plan-engine.md §4.3).
 #

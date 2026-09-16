@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Io
 import "face/lock" as FaceLock
 
 // The lock wrapper, offscreen, in a real Quickshell runtime.
@@ -47,12 +48,49 @@ ShellRoot {
             String(seconds), String(name), String(code)]
   }
 
+  // The stand-in `hyprctl eval`: nothing is bound, and every call is written to
+  // eval.log as `arm` or `disarm` so the suite can read the order back. Set on
+  // every case, including the three that compose with the REAL lock screen --
+  // the wrapper disarms at start, and a real `hyprctl eval` from a test would
+  // take the binding out from under a wrapper this session is running.
+  readonly property var evalStandIn: ["bash", "-c",
+    'case $1 in *hl.bind*) w=arm ;; *) w=disarm ;; esac; ' +
+    '[[ $w == disarm ]] || grep -q "hl.dsp.event(\\"$FACE_HARNESS_EVENT\\")" <<<"$1" || w="$w-wrong-event"; ' +
+    'printf "%s\\n" "$w" >>"$FACE_HARNESS_STATUS/eval.log"', "--"]
+
+  // Unique per run, so a real event raised below reaches this wrapper and no
+  // other: the wrapper the session is running listens for `omarchy-face-enter`.
+  readonly property string enterEvent: Quickshell.env("FACE_HARNESS_EVENT") || "omarchy-face-enter-harness"
+
   FaceLock.Service {
     id: wrapper
     omarchyPath: rootObj.omarchyPath
     statusDir: rootObj.statusDir
     monitorCommand: rootObj.monitors(rootObj.dpmsOn, rootObj.monitorOff)
     verifyCommand: rootObj.verify(rootObj.verifySeconds, rootObj.verifyName, rootObj.verifyCode)
+    evalCommand: rootObj.evalStandIn
+    enterEvent: rootObj.enterEvent
+  }
+
+  // Enter, by the path a real key takes after Hyprland: a `custom>>` event on
+  // the compositor's socket, read by Quickshell.Hyprland. Raised with a real
+  // `hl.dispatch(hl.dsp.event(...))` when there is a compositor to raise it, so
+  // the event name, the Connections target and the event parsing are all under
+  // test. Without one the wrapper is called directly, and the report says so.
+  readonly property bool realEvents: (Quickshell.env("HYPRLAND_INSTANCE_SIGNATURE") || "") !== ""
+                                     && Quickshell.env("FACE_HARNESS_DIRECT_ENTER") !== "1"
+  Process {
+    id: dispatcher
+    command: ["hyprctl", "eval", 'hl.dispatch(hl.dsp.event("' + rootObj.enterEvent + '"))']
+  }
+  function pressEnter() {
+    if (rootObj.realEvents) {
+      // Two presses inside one Process lifetime would be one event; say so.
+      if (dispatcher.running) console.warn("HARNESS-WARN a second Enter while the first was still dispatching")
+      dispatcher.running = true
+    } else {
+      wrapper.enterPressed()
+    }
   }
 
   // --- the script -----------------------------------------------------------
@@ -103,6 +141,12 @@ ShellRoot {
     console.log("HARNESS outcome", wrapper.lastOutcome)
     console.log("HARNESS unlocks", item && "unlockCount" in item ? item.unlockCount : -1)
     console.log("HARNESS locked", item && "lockRequested" in item ? item.lockRequested : false)
+    console.log("HARNESS enters", wrapper.enterCount)
+    console.log("HARNESS enterPath", rootObj.realEvents ? "hyprland" : "direct")
+    console.log("HARNESS line", item && "failureMessage" in item ? item.failureMessage : "")
+    console.log("HARNESS lineNo", wrapper.lineNo)
+    console.log("HARNESS lineNoResumed", wrapper.lineNoResumed)
+    console.log("HARNESS resumed", wrapper.resumedAt > 0)
     Qt.exit(0)
   }
 
@@ -213,6 +257,111 @@ ShellRoot {
           { after: 1200, run: function () { rootObj.monitorOff = true } },
           { after: 1500, run: function () { rootObj.monitorOff = false } },
           { after: 3000, run: function () {} },
+          done
+        ])
+        break
+
+      // Enter on the empty field of a LIT lock screen: nothing woke, and one
+      // check runs anyway. This is the case the wake rule could never reach.
+      case "enter-lit":
+        rootObj.play([
+          { after: 300,  run: function () { rootObj.stock().beginLock() } },
+          { after: 800,  run: function () { rootObj.pressEnter() } },
+          { after: 2500, run: function () {} },
+          done
+        ])
+        break
+
+      // Enter with no lock up is just Enter. (With the shipped wrapper there is
+      // no binding at all outside a lock; this is the wrapper's own guard.)
+      case "enter-unlocked":
+        rootObj.play([
+          { after: 500,  run: function () { rootObj.pressEnter() } },
+          { after: 1500, run: function () {} },
+          done
+        ])
+        break
+
+      // Enter submitting a typed password: no face check alongside it.
+      case "enter-password":
+        rootObj.play([
+          { after: 300,  run: function () { rootObj.stock().beginLock() } },
+          { after: 500,  run: function () { rootObj.stock().typePassword("hunter2") } },
+          { after: 500,  run: function () { rootObj.stock().submitTyped(1500); rootObj.pressEnter() } },
+          { after: 2500, run: function () {} },
+          done
+        ])
+        break
+
+      // The same, with PAM saying no before the wrapper looks: the only thing
+      // left to tell the two Enters apart is that the typed text changed.
+      case "enter-fast-reject":
+        rootObj.play([
+          { after: 300,  run: function () { rootObj.stock().beginLock() } },
+          { after: 500,  run: function () { rootObj.stock().typePassword("hunter2") } },
+          { after: 500,  run: function () { rootObj.stock().submitTyped(0); rootObj.pressEnter() } },
+          { after: 1500, run: function () {} },
+          done
+        ])
+        break
+
+      // Enter twice while the first check runs: one check.
+      case "enter-busy":
+        rootObj.verifySeconds = 3
+        rootObj.play([
+          { after: 300,  run: function () { rootObj.stock().beginLock() } },
+          { after: 800,  run: function () { rootObj.pressEnter() } },
+          { after: 1000, run: function () { rootObj.pressEnter() } },
+          { after: 4500, run: function () {} },
+          done
+        ])
+        break
+
+      // Enter on a dark screen is a wake AND an Enter. One check.
+      case "enter-wake":
+        rootObj.verifySeconds = 2
+        rootObj.play([
+          { after: 300,  run: function () { rootObj.stock().beginLock() } },
+          { after: 1200, run: function () { rootObj.dpmsOn = false } },
+          { after: 1500, run: function () { rootObj.dpmsOn = true; rootObj.pressEnter() } },
+          { after: 4000, run: function () {} },
+          done
+        ])
+        break
+
+      // A no says what to do next.
+      case "enter-no":
+        rootObj.verifyCode = 1
+        rootObj.play([
+          { after: 300,  run: function () { rootObj.stock().beginLock() } },
+          { after: 800,  run: function () { rootObj.pressEnter() } },
+          { after: 2000, run: function () {} },
+          done
+        ])
+        break
+
+      // A no just after a resume says the camera may still be waking. The
+      // resume is a poll tick that arrives long after the one before it, which
+      // is what a timer frozen by a suspend looks like from inside.
+      case "enter-no-resumed":
+        rootObj.verifyCode = 1
+        rootObj.play([
+          { after: 300,  run: function () { rootObj.stock().beginLock() } },
+          { after: 1500, run: function () { wrapper.lastTickAt = Date.now() - 20000 } },
+          { after: 1500, run: function () { rootObj.pressEnter() } },
+          { after: 2000, run: function () {} },
+          done
+        ])
+        break
+
+      // The binding exists only while a lock does.
+      case "enter-arming":
+        rootObj.play([
+          { after: 800,  run: function () { rootObj.stock().beginLock() } },
+          { after: 800,  run: function () { rootObj.stock().passwordUnlock() } },
+          { after: 800,  run: function () { rootObj.stock().beginLock() } },
+          { after: 800,  run: function () { rootObj.stock().passwordUnlock() } },
+          { after: 800,  run: function () {} },
           done
         ])
         break

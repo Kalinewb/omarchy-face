@@ -3,7 +3,7 @@
  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 <!--
   omarchy-face v2
-  omarchy-face-version: 2.0.1
+  omarchy-face-version: 2.0.2
 
   One action for the whole write surface (plan-engine.md §8.2). Everything that
   changes who can unlock this machine goes through omarchy-face-admin under it.

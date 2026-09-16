@@ -588,6 +588,35 @@ Item {
       "", null)
   }
 
+  // --- the update and boot hooks ---------------------------------------------
+  //
+  // `omarchy update` and every login run the hooks in ~/.config/omarchy/hooks,
+  // and Face puts one in each so that a Python upgrade, an AUR rebuild of the
+  // engine or a renamed lock-screen property is said out loud when it happens,
+  // not found at the next sudo prompt (bin/omarchy-face-health). Installed at
+  // every service start, because that is the one thing every way of installing
+  // or updating the plugin ends in; the helper rewrites nothing that is already
+  // right, so this is a read on every start but the first.
+  //
+  // Detached and unanswered: a hook that could not be written costs a
+  // notification, not anything this service does, and nothing here waits on it.
+  // The hooks folder is outside ~/.config/omarchy/plugins, so writing it reloads
+  // nothing (plan-engine.md E13).
+  //
+  // Not in development. With OMARCHY_FACE_DEV_BIN set this is either a dev
+  // shell or an offscreen harness running a checkout, and both run against
+  // stubs -- a hook written from there would land in this account's real
+  // ~/.config and run the real checks at the next update, which is not what a
+  // test run is allowed to leave behind. A dev shell installs no hooks; the
+  // plugin installed the ordinary way does.
+  function installHooks() {
+    if (engine.dev) {
+      console.log("graveklar.face", "development: not installing the update and boot hooks")
+      return
+    }
+    Quickshell.execDetached(engine.healthArgv(["install-hooks"]))
+  }
+
   Component { id: sessionComponent; RecordSession {} }
   Component { id: cardComponent;    RecordCard {} }
   Component { id: testComponent;    TestCard {} }
@@ -596,5 +625,6 @@ Item {
     console.log("graveklar.face", "service loaded")
     root.lockStartedAt = Date.now()
     root.lockSync()
+    root.installHooks()
   }
 }

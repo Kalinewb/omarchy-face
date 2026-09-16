@@ -252,13 +252,18 @@ final_script=$(sed -n "/readonly property string finalScript:/,/^$/p" "$REPO/Rem
   sed -n "s/^[[:space:]]*'\(.*\)'[[:space:]]*+*[[:space:]]*$/\1/p" |
   sed 's/\\n$//')
 echo "${DIM}$(sed 's/^/    /' <<<"$final_script")${RESET}"
-check "three commands, and it came out of the view" \
-  bash -c "[[ \$(grep -c . <<<'$final_script') == 3 ]]"
+check "four commands, and it came out of the view" \
+  bash -c "[[ \$(grep -c . <<<'$final_script') == 4 ]]"
+check "Face's two Omarchy hooks go first, by argument rather than by text in the script" \
+  bash -c "head -1 <<<'$final_script' | grep -qxF 'rm -f -- \"\$3\" \"\$4\"'"
 check "the plugin is removed with --yes (no tty here, omarchy-plugin-remove:18-30)" \
   bash -c "grep -q 'omarchy plugin remove --yes graveklar.face' <<<'$final_script'"
 
 root=$(mktemp -d /tmp/omarchy-face-f7.XXXXXX)
 PLUGINS=$root/plugins
+# The hooks folder beside it, as RemoveView.qml derives it (`hooksDir`).
+HOOKS=$root/hooks
+HOOK_ARGS=("$HOOKS/post-update.d/graveklar-face.hook" "$HOOKS/post-boot.d/graveklar-face.hook")
 CALLS=$root/calls.log
 SHELL_JSON=$root/config/omarchy/shell.json
 mkdir -p "$PLUGINS" "$root/bin" "$root/config/omarchy"
@@ -325,6 +330,10 @@ seed_plugins() {
   mkdir -p "$PLUGINS/.graveklar.face-lock.old.20260101000000" \
            "$PLUGINS/.graveklar.face-lock.Ab3De9" \
            "$PLUGINS/.graveklar.face.bak.20260101000000"
+  # The two hooks bin/omarchy-face-health install-hooks writes.
+  mkdir -p "$HOOKS/post-update.d" "$HOOKS/post-boot.d"
+  : >"${HOOK_ARGS[0]}"
+  : >"${HOOK_ARGS[1]}"
   : >"$CALLS"
 }
 
@@ -341,7 +350,7 @@ printf '%s\n' "$final_script" >"$root/final.sh"
 cat >"$root/launcher.sh" <<LAUNCH
 #!/bin/bash
 echo \$\$ >"$root/launcher.pid"
-setsid -f bash -c "\$(cat '$root/final.sh')" _ "$PLUGINS/graveklar.face-lock" "$PLUGINS"
+setsid -f bash -c "\$(cat '$root/final.sh')" _ "$PLUGINS/graveklar.face-lock" "$PLUGINS" "${HOOK_ARGS[0]}" "${HOOK_ARGS[1]}"
 sleep 60
 LAUNCH
 chmod 0755 "$root/launcher.sh"
@@ -373,6 +382,8 @@ sleep 0.5
 check "the detached command finished after its launcher was killed" \
   bash -c "grep -q 'plugin remove --yes graveklar.face' '$CALLS'"
 check "the lock screen wrapper folder is gone" test ! -e "$PLUGINS/graveklar.face-lock"
+check "both of Face's Omarchy hooks are gone" \
+  bash -c "[[ ! -e '${HOOK_ARGS[0]}' && ! -e '${HOOK_ARGS[1]}' ]]"
 check "the plugin folder is gone" test ! -e "$PLUGINS/graveklar.face"
 check "no .graveklar.face* backup or staging directory is left" \
   bash -c "! compgen -G '$PLUGINS/.graveklar.face*' >/dev/null"
@@ -387,7 +398,7 @@ step "the same command on a git checkout, which leaves no backup"
 seed_plugins
 rm -rf "$PLUGINS/.graveklar.face.bak.20260101000000"
 mkdir -p "$PLUGINS/graveklar.face/.git"
-PATH="$root/bin:$PATH" bash -c "$final_script" _ "$PLUGINS/graveklar.face-lock" "$PLUGINS"
+PATH="$root/bin:$PATH" bash -c "$final_script" _ "$PLUGINS/graveklar.face-lock" "$PLUGINS" "${HOOK_ARGS[@]}"
 check "a git checkout is deleted rather than backed up" test ! -e "$PLUGINS/graveklar.face"
 check "…and the wider glob still cleared the staging directories" \
   bash -c "! compgen -G '$PLUGINS/.graveklar.face*' >/dev/null"
@@ -396,7 +407,7 @@ step "the same command with nothing there: no output, no failure"
 seed_plugins
 rm -rf "$PLUGINS"
 mkdir -p "$PLUGINS"
-out=$(PATH="$root/bin:$PATH" bash -c "$final_script" _ "$PLUGINS/graveklar.face-lock" "$PLUGINS" 2>&1)
+out=$(PATH="$root/bin:$PATH" bash -c "$final_script" _ "$PLUGINS/graveklar.face-lock" "$PLUGINS" "${HOOK_ARGS[@]}" 2>&1)
 same "an already-removed plugin leaves the command with nothing to say on stdout" "" \
   "$(grep -v 'is not installed' <<<"$out")"
 
