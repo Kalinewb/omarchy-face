@@ -55,7 +55,7 @@ ShellRoot {
   // take the binding out from under a wrapper this session is running.
   readonly property var evalStandIn: ["bash", "-c",
     'case $1 in *hl.bind*) w=arm ;; *) w=disarm ;; esac; ' +
-    '[[ $w == disarm ]] || grep -q "hl.dsp.event(\\"$FACE_HARNESS_EVENT\\")" <<<"$1" || w="$w-wrong-event"; ' +
+    '[[ $w == disarm ]] || grep -qF "Return = \\"$FACE_HARNESS_EVENT\\", KP_Enter = \\"$FACE_HARNESS_EVENT-keypad\\"" <<<"$1" || w="$w-wrong-event"; ' +
     'printf "%s\\n" "$w" >>"$FACE_HARNESS_STATUS/eval.log"', "--"]
 
   // Unique per run, so a real event raised below reaches this wrapper and no
@@ -83,6 +83,22 @@ ShellRoot {
     id: dispatcher
     command: ["hyprctl", "eval", 'hl.dispatch(hl.dsp.event("' + rootObj.enterEvent + '"))']
   }
+  Process {
+    id: keypadDispatcher
+    command: ["hyprctl", "eval", 'hl.dispatch(hl.dsp.event("' + rootObj.enterEvent + '-keypad"))']
+  }
+  // A keypad Enter, as Hyprland delivers it: the Return binding AND the
+  // KP_Enter one both fire for it (measured with a uinput keyboard).
+  function pressKeypadEnter() {
+    if (rootObj.realEvents) {
+      dispatcher.running = true
+      keypadDispatcher.running = true
+    } else {
+      wrapper.hyprlandEvent("custom", rootObj.enterEvent)
+      wrapper.hyprlandEvent("custom", rootObj.enterEvent + "-keypad")
+    }
+  }
+
   function pressEnter() {
     if (rootObj.realEvents) {
       // Two presses inside one Process lifetime would be one event; say so.
@@ -142,6 +158,7 @@ ShellRoot {
     console.log("HARNESS unlocks", item && "unlockCount" in item ? item.unlockCount : -1)
     console.log("HARNESS locked", item && "lockRequested" in item ? item.lockRequested : false)
     console.log("HARNESS enters", wrapper.enterCount)
+    console.log("HARNESS blankArms", item && "blankArms" in item ? item.blankArms : -1)
     console.log("HARNESS enterPath", rootObj.realEvents ? "hyprland" : "direct")
     console.log("HARNESS line", item && "failureMessage" in item ? item.failureMessage : "")
     console.log("HARNESS lineNo", wrapper.lineNo)
@@ -268,6 +285,17 @@ ShellRoot {
           { after: 300,  run: function () { rootObj.stock().beginLock() } },
           { after: 800,  run: function () { rootObj.pressEnter() } },
           { after: 2500, run: function () {} },
+          done
+        ])
+        break
+
+      // A keypad Enter raises both events: one check.
+      case "enter-keypad":
+        rootObj.verifySeconds = 3
+        rootObj.play([
+          { after: 300,  run: function () { rootObj.stock().beginLock() } },
+          { after: 800,  run: function () { rootObj.pressKeypadEnter() } },
+          { after: 4000, run: function () {} },
           done
         ])
         break

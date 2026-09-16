@@ -27,6 +27,11 @@ Item {
   property string failureMessage: ""
   property string enteredPassword: ""
 
+  // The stock blank countdown (Service.qml:162-165), counted instead of run:
+  // the wrapper restarts it while a check runs so the screen stays lit.
+  property int blankArms: 0
+  function armBlankTimer() { blankArms += 1 }
+
   // How the harness sees that the wrapper opened the lock, and how many times.
   property int unlockCount: 0
 

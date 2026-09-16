@@ -264,6 +264,7 @@ Item {
         // one left over from the last lock would put "Camera waking?" on a
         // lock taken by hand a few seconds after unlocking.
         root.resumedAt = 0
+        root.lockBeganAt = Date.now()
         root.log("lock " + root.lockGeneration + " begins; face waits for a wake or Enter")
         if (root.compat === "ok") root.armEnter()
         return
@@ -405,8 +406,8 @@ Item {
     'local old = _G.omarchy_face_enter_binds ' +
     'if old then for _, b in ipairs(old) do pcall(function() b:unbind() end) end end ' +
     'local t = {} ' +
-    'for _, key in ipairs({"Return", "KP_Enter"}) do ' +
-    'table.insert(t, hl.bind(key, hl.dsp.event("' + root.enterEvent + '"), ' +
+    'for key, name in pairs({ Return = "' + root.enterEvent + '", KP_Enter = "' + root.enterEvent + '-keypad" }) do ' +
+    'table.insert(t, hl.bind(key, hl.dsp.event(name), ' +
     '{ locked = true, non_consuming = true })) end ' +
     '_G.omarchy_face_enter_binds = t'
 
@@ -505,7 +506,12 @@ Item {
   // A function rather than inline, so the offscreen suite can deliver a reload
   // without reloading the compositor it runs in.
   function hyprlandEvent(name, data) {
-    if (name === "custom" && data === root.enterEvent) root.enterPressed()
+    // One event per key, so the journal can say which one fired. A keypad Enter
+    // is seen by BOTH bindings (measured on a uinput keyboard: KEY_KPENTER
+    // raised the Return event and the keypad one), which enterSettle folds
+    // into one check.
+    if (name === "custom" && data === root.enterEvent) root.enterPressed("Return")
+    else if (name === "custom" && data === root.enterEvent + "-keypad") root.enterPressed("KP_Enter")
     else if (name === "configreloaded" && root.enterArmed && root.lockedNow) {
       root.log("Hyprland reloaded its config: arming Enter again")
       root.armEnter()
@@ -522,9 +528,18 @@ Item {
     function onEnteredPasswordChanged() { root.passwordChangedAt = Date.now() }
   }
 
-  function enterPressed() {
+  // When this lock began, so every Enter can say how long after it arrived. A
+  // check nobody asked for right after locking is the one failure this feature
+  // must never have -- a lock that scans itself can open under the person who
+  // just locked it -- and "2 s after the lock, no key pressed" is only
+  // diagnosable if the journal says so.
+  property double lockBeganAt: 0
+
+  function enterPressed(key) {
     if (!root.lockedNow) return
     root.enterCount = root.enterCount + 1
+    root.log((key || "Enter") + " pressed, " + Math.round(Date.now() - root.lockBeganAt) +
+             " ms into lock " + root.lockGeneration)
     enterSettle.restart()
   }
 
@@ -639,11 +654,38 @@ Item {
     root.lastOutcome = "checking"
     root.log(why + ": one face check, in lock generation " + root.lockGeneration)
     root.showLine(root.lineChecking)
+    root.holdDisplay()
     // Armed BEFORE the process starts, because a command that cannot be executed
     // at all fails synchronously inside the next line -- and the handler for that
     // stops this timer, which it cannot do if the timer has not been armed yet.
     attemptSafety.restart()
     verifyProcess.running = true
+  }
+
+  // --- the display stays lit while a check runs ------------------------------
+  //
+  // The stock lock blanks 5 s after the last key (idleBlankTimer) and holds off
+  // only for a PASSWORD being checked (Service.qml:428-431). A face check takes
+  // two to seven seconds, so an Enter pressed on a lit screen had its answer
+  // land on a black one -- and a person who sees the screen go dark mid-check
+  // reasonably concludes nothing happened. So while a check runs, the stock's
+  // own blank countdown is restarted, the same call every key press makes
+  // (armBlankTimer, :162-165). It blanks five seconds after the answer, as it
+  // would have after a key.
+  //
+  // `armBlankTimer` is optional, like `failureMessage`: renamed, the screen
+  // blanks as it did before, and face works exactly the same.
+  function holdDisplay() {
+    if (!stock.item || typeof stock.item.armBlankTimer !== "function") return
+    stock.item.armBlankTimer()
+  }
+
+  Timer {
+    id: displayHold
+    interval: 2000
+    repeat: true
+    running: root.attemptBusy && root.lockedNow
+    onTriggered: root.holdDisplay()
   }
 
   Process {
@@ -683,6 +725,9 @@ Item {
   // the second finds nothing left to do.
   function attemptFinished(code) {
     if (!root.attemptBusy) return
+    // Five more seconds of lit screen from the answer, so the line it leaves --
+    // or the lock opening -- is seen rather than blanked the moment it lands.
+    root.holdDisplay()
     attemptSafety.stop()
     root.attemptBusy = false
     var who = root.attemptName

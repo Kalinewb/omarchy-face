@@ -320,7 +320,7 @@ check "cleared at start, then armed and disarmed once per lock" \
 check "…every registration names this wrapper's own event, and a plain word" \
   "0" "$(grep -c 'wrong-event' "$status/eval.log" 2>/dev/null)"
 check "the shipped Lua binds both Enters, locked and non-consuming" "true" \
-  "$(grep -q 'ipairs({"Return", "KP_Enter"})' "$REPO/lock/Service.qml" &&
+  "$(grep -q 'pairs({ Return = .*, KP_Enter = .*-keypad" })' "$REPO/lock/Service.qml" &&
      grep -q 'locked = true, non_consuming = true' "$REPO/lock/Service.qml" &&
      echo true || echo false)"
 check "…and raises an event, never a command" "0" \
@@ -364,6 +364,18 @@ step "Enter twice while a check runs"
 out=$(run_lock enter-busy "$root/fake")
 check "both were heard" "2" "$(field enters "$out")"
 check "…one check" "1" "$(field attempts "$out")"
+check "…and the stock blank countdown was restarted while it ran (start, every 2 s, answer)" "true" \
+  "$( (( $(field blankArms "$out") >= 3 )) && echo true || echo false)"
+
+step "a keypad Enter fires both bindings"
+out=$(run_lock enter-keypad "$root/fake")
+check "both events were heard" "2" "$(field enters "$out")"
+check "…and folded into one check" "1" "$(field attempts "$out")"
+
+step "GATE: nothing starts a check on locking"
+out=$(run_lock wake-quiet "$root/fake")
+check "a lock with no key and no wake: no Enter, no check" "0|0" \
+  "$(field enters "$out")|$(field attempts "$out")"
 
 step "Enter on a dark screen is a wake and an Enter"
 out=$(run_lock enter-wake "$root/fake")
