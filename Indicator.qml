@@ -81,6 +81,12 @@ Item {
   readonly property int staleAfterMs: 10000
   readonly property int safetyMs: 12000
 
+  // The layer-shell namespace of the card's window. Service.qml hands this
+  // to Hyprland in a layer rule that switches the compositor's own
+  // map/unmap animation off for it (see there for why), so it lives here,
+  // once, where the window is made.
+  readonly property string layerNamespace: "omarchy-face-indicator"
+
   // What the engine last said, once it has passed the stale filter.
   property string authState: "idle"
   property string service: ""
@@ -264,14 +270,92 @@ Item {
   // notifications popup, applied here before it became a second bug rather
   // than after.
   //
-  // cardProgress lives on root, not inside the PanelWindow, because the
+  // heightP and widthP live on root, not inside the PanelWindow, because the
   // window is destroyed and recreated (see the Variants comment below) --
   // an animation driving a property on an Item that is about to be torn
   // down cannot be trusted to finish. Reused as-is by whichever window
   // exists at the time; there is only ever at most one.
   property bool windowUp: false
   property bool exiting: false
-  property real cardProgress: 0
+
+  // How far the bar has grown, 0 = the seed it starts from, 1 = its settled
+  // size -- one for its height and one for its width, because they do not
+  // move together (post-ship revision). The bar grows OUT OF the top edge:
+  // its top edge is anchored at y = 0 and is never anywhere else, at any
+  // frame including the first; its position, opacity and scale are never
+  // animated; these two numbers are the only things that change. Height
+  // leads; width follows 50 ms behind and both land together. The fillets
+  // beside the bar are bindings on its height and width (Island.qml), so
+  // they are there from the first frame, scale with the bar, and move in
+  // the same frame it does -- there is no separate animation for them to
+  // fall behind on.
+  property real heightP: 0
+  property real widthP: 0
+
+  // The seed: what is on screen at progress 0, as fractions of the settled
+  // size. Not zero, so that the first frame already has a bar with fillets
+  // on it rather than nothing; not large, so that the growth reads as growth.
+  // heightGone / widthGone are the progress values at which the bar's size
+  // reaches zero -- the exit animates to those, so the bar retracts INTO the
+  // edge rather than shrinking to the seed and then vanishing.
+  readonly property real seedHeightFraction: 0.2
+  readonly property real seedWidthFraction: 0.4
+  readonly property real heightGone: -seedHeightFraction / (1 - seedHeightFraction)
+  readonly property real widthGone: -seedWidthFraction / (1 - seedWidthFraction)
+
+  // The shape, as proportions of the bar's own height so it is the same
+  // shape at every size: bottom corners at a fifth of the height -- a
+  // rounded rectangle, not a capsule, which is what half the height would
+  // be -- and fillets that reach `filletFull` px when the bar is settled,
+  // just enough to soften the join to the screen edge.
+  readonly property real bottomRadiusFraction: 0.2
+  readonly property real filletFull: 10
+
+  readonly property int heightDuration: 350
+  readonly property int widthDelay: 50
+  readonly property int widthDuration: 300
+
+  // The easing is a damped spring, not an ease-out: the step response of a
+  // second-order system with damping ratio `springDamping`, which overshoots
+  // once by exp(-πζ/√(1-ζ²)) -- 3.8 % at ζ = 0.72 -- and settles. It is
+  // sampled into a cubic Bézier spline (eight Hermite segments, C¹, with the
+  // derivative taken from the same closed form) because that is the one
+  // shape of custom curve NumberAnimation accepts, and because a curve on
+  // the animation itself -- rather than a formula applied to a linear timer
+  // -- is what lets a restart mid-exit grow back out from wherever the bar
+  // currently is, and lets the plain exit below run without replaying the
+  // overshoot backwards. `springPeakAt` is where in the duration the
+  // overshoot peaks (0.6 → 210 ms into the height's 350 ms); by the end the
+  // envelope is under half a percent and the residual is taken out linearly
+  // so the curve ends on exactly 1.
+  readonly property real springDamping: 0.72
+  readonly property real springPeakAt: 0.6
+  readonly property real springOvershoot:
+    Math.exp(-Math.PI * springDamping / Math.sqrt(1 - springDamping * springDamping))
+  readonly property var springCurve: buildSpringCurve(springDamping, springPeakAt, 8)
+
+  function buildSpringCurve(zeta, peakAt, segments) {
+    var b = Math.PI / peakAt                    // damped angular frequency
+    var w = b / Math.sqrt(1 - zeta * zeta)      // undamped
+    var a = zeta * w                            // decay rate
+    var k = a / b
+    function raw(t) { return 1 - Math.exp(-a * t) * (Math.cos(b * t) + k * Math.sin(b * t)) }
+    function rawSlope(t) { return Math.exp(-a * t) * (w * w / b) * Math.sin(b * t) }
+    var tail = raw(1) - 1
+    function x(t) { return raw(t) - t * tail }
+    function m(t) { return rawSlope(t) - tail }
+    var points = []
+    var h = 1 / segments
+    for (var i = 0; i < segments; i++) {
+      var t0 = i * h, t1 = (i + 1) * h
+      points.push(t0 + h / 3, x(t0) + m(t0) * h / 3,
+                  t1 - h / 3, x(t1) - m(t1) * h / 3,
+                  t1, x(t1))
+    }
+    points[points.length - 2] = 1
+    points[points.length - 1] = 1
+    return points
+  }
 
   onVisibleNowChanged: {
     if (root.visibleNow) {
@@ -290,28 +374,39 @@ Item {
     exitAnim.restart()
   }
 
-  // A fast, slightly springy grow -- not a bouncy elastic wobble -- then a
-  // plain ease back down on the way out. No `from:` on the entrance: a
-  // restart mid-exit (a fresh request landing while the last one is still
-  // shrinking away) grows back out from wherever it currently is instead of
-  // popping to zero first.
-  NumberAnimation {
+  // No `from:` on either entrance: a restart mid-exit (a fresh request
+  // landing while the last one is still shrinking away) grows back out from
+  // wherever the bar currently is instead of popping to the seed first.
+  ParallelAnimation {
     id: enterAnim
-    target: root
-    property: "cardProgress"
-    to: 1
-    duration: 380
-    easing.type: Easing.OutBack
-    easing.overshoot: 1.3
+    NumberAnimation {
+      target: root
+      property: "heightP"
+      to: 1
+      duration: root.heightDuration
+      easing.type: Easing.BezierSpline
+      easing.bezierCurve: root.springCurve
+    }
+    SequentialAnimation {
+      PauseAnimation { duration: root.widthDelay }
+      NumberAnimation {
+        target: root
+        property: "widthP"
+        to: 1
+        duration: root.widthDuration
+        easing.type: Easing.BezierSpline
+        easing.bezierCurve: root.springCurve
+      }
+    }
   }
 
-  NumberAnimation {
+  // A plain ease back into the edge, both dimensions together, all the way
+  // to zero size -- the fillets are proportional to the height, so they go
+  // with it, and the last frame before the window is destroyed is empty.
+  ParallelAnimation {
     id: exitAnim
-    target: root
-    property: "cardProgress"
-    to: 0
-    duration: 200
-    easing.type: Easing.InOutCubic
+    NumberAnimation { target: root; property: "heightP"; to: root.heightGone; duration: 200; easing.type: Easing.InOutCubic }
+    NumberAnimation { target: root; property: "widthP"; to: root.widthGone; duration: 200; easing.type: Easing.InOutCubic }
     onFinished: { root.windowUp = false; root.exiting = false }
   }
 
@@ -329,7 +424,7 @@ Item {
       anchors { top: true; bottom: true; left: true; right: true }
       color: "transparent"
 
-      WlrLayershell.namespace: "omarchy-face-indicator"
+      WlrLayershell.namespace: root.layerNamespace
       WlrLayershell.layer: WlrLayer.Overlay
       // Never take focus: the password prompt underneath may be mid-typing, and
       // an indicator that swallows keystrokes is worse than no indicator.
@@ -338,70 +433,82 @@ Item {
       // Empty input region: clicks pass through to whatever is behind.
       mask: Region {}
 
-      Rectangle {
+      Island {
         id: card
         // Flush against the true physical top edge (post-ship revision,
         // found via live use -- a 44px gap from the true edge read as
         // floating below the bar rather than attached to the screen).
         // Horizontally centered under the lens, same as before: looking at
         // the card still points the face at the camera. Fixed anchor point,
-        // entirely unchanged by the animation below -- only the card's own
+        // entirely unchanged by the animation below -- only the bar's own
         // size and roundedness move, growing outward from the middle while
         // staying attached to the top edge.
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
         anchors.topMargin: 0
 
-        // The card's size at rest -- what it grows toward and shrinks from.
-        readonly property real fullWidth: Math.min(parent.width - Style.space(40), Style.space(300))
-        readonly property real fullHeight: content.implicitHeight + Style.space(28)
-        // 0 = a small round nub flush with the top edge, 1 = fully grown.
-        readonly property real sizeP: Math.max(0, Math.min(1, root.cardProgress))
-        readonly property real minNub: Math.min(28, fullWidth, fullHeight)
-        width: minNub + (fullWidth - minNub) * sizeP
-        height: minNub + (fullHeight - minNub) * sizeP
-        // Rounded on the bottom only -- the top stays flush (zero radius)
-        // against the screen edge it's attached to, the same "flat where it
-        // meets the edge" shape language as the notification popup's corner.
-        readonly property real capsuleR: Math.min(width, height) / 2
-        readonly property real bottomR: capsuleR + (Style.cornerRadius - capsuleR) * Math.pow(sizeP, 2.2)
-        topLeftRadius: 0
-        topRightRadius: 0
-        bottomLeftRadius: bottomR
-        bottomRightRadius: bottomR
-        // content below is sized for the card's full, settled dimensions
-        // (so its own text layout never reflows mid-animation) and only
-        // fades in once the card is mostly grown -- clip keeps that content
-        // from visibly overflowing the still-growing card in between.
-        clip: true
-        // True black, always -- not the polkit/theme palette. Matches the
-        // OLED-black treatment the user asked for everywhere Face shows a
-        // card, independent of whatever theme is active. No border: a
-        // visible outline is the opposite of "seamless with the screen,"
-        // which is the whole point of this look (post-ship revision, found
-        // via live use -- the theme-colored card with a teal outline read as
-        // an ordinary bordered dialog, not a black surface merging into the
-        // edge).
-        color: "#000000"
-        border.width: 0
+        // The bar's size at rest -- what it grows toward and shrinks from.
+        // A little wider than tall (post-ship revision, by live use: 300
+        // wide read as a banner, a square read as cramped, and this is one
+        // step up from the square). The width comes from a token; the height
+        // from the content, but never less than the square's was, so
+        // widening the bar did not also shorten it. The content's width is
+        // derived from the width token and never from the height, because a
+        // wrapped Text's height depends on its width and the other way
+        // round would be a loop.
+        readonly property real contentWidth: Style.space(144)
+        readonly property real minContentHeight: Style.space(116)
+        readonly property real fullWidth: Math.min(parent.width - Style.space(40), contentWidth + Style.space(28))
+        readonly property real fullHeight: Math.max(content.implicitHeight, minContentHeight) + Style.space(28)
+        // Height and width each follow their own progress (root's heightP /
+        // widthP), from the seed fractions up. Neither is clamped at 1: the
+        // spring's overshoot past the settled size is meant to show. Clamped
+        // at zero size only, for the tail of the exit.
+        barWidth: Math.max(0, fullWidth * (root.seedWidthFraction
+                    + (1 - root.seedWidthFraction) * root.widthP))
+        barHeight: Math.max(0, fullHeight * (root.seedHeightFraction
+                    + (1 - root.seedHeightFraction) * root.heightP))
 
+        // The shape itself is Island.qml's: a plain rectangle, flush and
+        // square-cornered at the top, rounded on the bottom two corners
+        // only, with the two concave fillets that fuse it to the screen
+        // edge drawn beside it rather than cut from it. Both radii are
+        // proportions of the bar's CURRENT height, so the bar is the same
+        // shape at every frame -- the first frame's seed is a small rounded
+        // rectangle with small fillets, the settled bar a large one with
+        // 10 px fillets, and there is no frame where the corners have
+        // become a capsule or the fillets have gone missing. True black, no
+        // border: a visible outline reads as an ordinary dialog, not a
+        // black surface merging into the edge (post-ship revision, found
+        // via live use; reference: an iPhone's Dynamic Island where it
+        // meets the top bezel).
+        bottomRadius: root.bottomRadiusFraction * barHeight
+        filletRadius: root.filletFull * barHeight / fullHeight
+        color: "#000000"
+
+        // The content below lands inside the bar (Island's default property)
+        // and is clipped to it. It is sized for the bar's full, settled
+        // dimensions so its own text layout never reflows mid-animation,
+        // and only fades in once the bar is mostly grown.
         Column {
           id: content
           anchors.centerIn: parent
-          // Fixed to the card's settled width, not its currently-animated
-          // one -- so text wrapping never reflows mid-grow. Only visible
-          // (see opacity below) once the card is most of the way there, and
-          // clipped by the card itself before then regardless.
-          width: card.fullWidth - Style.space(28)
+          // A fixed width, not the bar's currently-animated one -- so text
+          // wrapping never reflows mid-grow. Only visible (see opacity below)
+          // once the bar is most of the way there, and clipped by the bar
+          // itself before then regardless.
+          width: card.contentWidth
           spacing: Style.space(8)
 
-          // Pops and fades in only once the card is mostly at full size, so
-          // nothing looks cramped or clipped inside a still-small shape --
-          // same formula on the way out, so content is already gone before
-          // the card shrinks small enough for it to look wrong.
-          readonly property real settleP: Math.max(0, Math.min(1, (card.sizeP - 0.7) / 0.3))
+          // Fades in only once the bar is mostly at full size in both
+          // dimensions, so text is never seen cramped or half-clipped inside
+          // a still-small bar -- same formula on the way out, so it is gone
+          // before the bar shrinks small enough for it to look wrong. This is
+          // the text inside the bar, not the bar: the bar itself is solid at
+          // every frame, and nothing about it fades or scales.
+          readonly property real settleP:
+            Math.max(0, Math.min(1, (Math.min(root.heightP, root.widthP) - 0.7) / 0.3))
           opacity: settleP
-          scale: 0.94 + 0.06 * settleP
 
           // The face glyph while it is looking, then an answer. Two plain
           // characters rather than two more Nerd Font codepoints: this card is
@@ -437,6 +544,11 @@ Item {
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
             horizontalAlignment: Text.AlignHCenter
+            // Two lines before eliding: "sudo · pacman, from foot" does not
+            // fit one line of a square this size, and the program's name is
+            // the part worth keeping whole.
+            wrapMode: Text.WordWrap
+            maximumLineCount: 2
             elide: Text.ElideRight
           }
         }

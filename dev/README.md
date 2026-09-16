@@ -393,6 +393,58 @@ offscreen runtime has no compositor to ask: the built-in screen filter
 (`/^(eDP|LVDS|DSI)/`), `WlrKeyboardFocus.None` and the empty input region. The
 card on a real screen is checked by looking at it.
 
+## G5c — the island's geometry, as numbers
+
+```sh
+./dev/g5c-island-offscreen.sh
+```
+
+The indicator's shape (`Island.qml`): a bar flush with the top edge of the
+screen, square at its top corners, rounded on its bottom two, with a concave
+fillet beside each top corner that belongs to the background rather than to the
+bar. Whether it looks fused to the edge is a judgement; whether it is *built*
+right is arithmetic, and this does the arithmetic twice.
+
+First against the shipped `Indicator.qml` with the real `Style` behind it: the
+card is drawn for a second and a half on the built-in screen, and the suite
+reads its bar rectangle, both radii and all four arc centres off the `Island`
+— in the bar's own coordinates and the screen's — and checks that the top radii
+are zero, that the bottom radius is a fifth of the height (a rounded rectangle,
+not a capsule), that the fillets are 10 px, that each fillet centre lies one
+radius outside its side and one radius below the edge (outside the bar, which is
+the only place a circle tangent to both lines can be centred), and that the
+entrance is the specified one: height over 350 ms, width from 50 ms over 300 ms,
+on a damped spring (ζ = 0.72, one overshoot of about 4 %). It also polls for the
+card from before the state file is read and records the first frame it exists
+in: top edge at y = 0, non-zero size, fillets already present, corners already
+a fifth of the height. The bar grows out of the edge; it never arrives from
+anywhere else.
+
+Then the compositor. Hyprland animates every layer surface as it maps — a fade
+on stock Omarchy, a pop-in from 92 % about the centre on this machine's
+looknfeel.lua — and the card's window is a fullscreen transparent surface that
+exists only while there is something to show. Without a rule the whole window
+pops in, and the bar inside it spawns in mid-air and flies to the edge while
+every number in QML still says y = 0. `Service.qml` applies the same
+`hl.layer_rule` Omarchy gives its own bar (`no_anim`) for the indicator's
+namespace, with `hyprctl eval`, at start and after every `configreloaded`. The
+suite checks that text, checks this Hyprland accepts the rule, and then proves
+the effect on the real screen: `grim` grabs a 340×160 strip around the bar
+before the card exists and at 0, 30, 60, 150 and 400 ms after its window comes
+up. In every grab that has the bar in it, the first row of new black must be
+row 0 and at least the seed width wide; a grab from before the compositor
+mapped the window shows nothing and is noted rather than counted, and at least
+one grab inside the first 150 ms has to show the bar, so the check cannot pass
+by seeing nothing.
+
+Then `Island.qml` on its own, rendered offscreen with `qml6` at exactly those
+dimensions and sampled pixel by pixel: the bar's top row solid from corner to
+corner (not a pill), each top corner's diagonal solid two pixels out and empty
+five pixels out (a fillet, not a notch), the fillet centres empty, the bottom
+corners empty, and the bar's first and last columns solid down the height of
+the fillet (no seam where the separate items meet). `G5C_KEEP_PNG=/path` keeps
+the render for a person who wants to look anyway.
+
 ## F5 — the daemon, the client, and the Profiles gate
 
 ```sh

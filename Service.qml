@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import Quickshell.Hyprland
 import "common"
 
 // The Face service: everything that has to outlive the popup.
@@ -344,6 +345,41 @@ Item {
     id: indicator
     suppressed: root.card !== null
     suppressedIdentity: root.testCard !== null
+  }
+
+  // Hyprland animates every layer-shell surface as it maps and unmaps -- on
+  // a stock Omarchy `layersIn` is a fade, and a person's looknfeel.lua can
+  // make it a pop-in from 92 % about the surface's centre on an overshoot
+  // curve. The indicator's window is a fullscreen transparent surface that
+  // exists only while there is something to show, so without a rule the
+  // compositor scales or fades the WHOLE window in, and the bar inside it --
+  // anchored to the window's top edge, animating nothing but its own height
+  // and width -- appears to spawn in mid-air and fly up to the edge (found
+  // via live use, post-ship). This is the rule Omarchy gives its own bar
+  // (default/hypr/apps/omarchy-shell.lua), for the indicator's namespace: no
+  // compositor animation, so the surface maps in place and the only motion
+  // on screen is the bar growing out of the edge.
+  //
+  // Applied when the service starts and again after every config reload,
+  // because a reload rebuilds Hyprland's rule list from the config files and
+  // this rule is in none of them. `hyprctl eval`, not `keyword`: Hyprland's
+  // Lua config parser rejects `keyword`. Nothing depends on it succeeding --
+  // on a compositor that is not Hyprland the process fails and the card is
+  // simply animated the way that compositor animates layers.
+  readonly property string indicatorLayerRule:
+    'hl.layer_rule({ match = { namespace = "' + indicator.layerNamespace + '" }, no_anim = true, animation = "none" })'
+
+  Process {
+    id: indicatorLayerRuleProcess
+    command: ["hyprctl", "eval", root.indicatorLayerRule]
+    running: true
+  }
+
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      if (event && String(event.name) === "configreloaded") indicatorLayerRuleProcess.running = true
+    }
   }
 
   // --- the lock screen (G6, plan-gui.md §6.3) ---------------------------------
