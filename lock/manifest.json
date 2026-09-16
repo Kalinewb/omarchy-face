@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "graveklar",
   "license": "MIT",
-  "description": "Omarchy's own lock screen, with Face ID added beside password and fingerprint.",
+  "description": "Omarchy's own lock screen, with a face check alongside password and fingerprint. Draws nothing of its own.",
   "kinds": ["service"],
   "keepLoaded": true,
   "entryPoints": { "service": "Service.qml" },

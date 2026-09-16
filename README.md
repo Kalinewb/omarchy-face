@@ -83,8 +83,10 @@ password retry does not re-open the camera — and at most six attempts a minute
 separate calls.
 
 **The lock screen** is a second plugin, `graveklar.face-lock`, that holds no copy of
-Omarchy's lock screen: it loads *Omarchy's own* lock code and adds a face check beside the
-password field and the fingerprint reader. When Omarchy updates its lock screen, the new
+Omarchy's lock screen: it loads *Omarchy's own* lock code and adds a face check alongside
+the password field and the fingerprint reader. Alongside, not beside: it draws nothing at
+all, because nothing can draw over a session-lock surface. There is no face icon, and no
+sign on screen that a check is running. When Omarchy updates its lock screen, the new
 one simply runs. If an update changes the names that loader depends on, face turns itself
 off there and says why, and the lock screen keeps working exactly as Omarchy ships it.
 Face is tried when the screen **wakes**, never when you lock it — otherwise locking the
@@ -138,10 +140,19 @@ password dialog's own stack.
 
 ## If something goes wrong
 
-**The lock screen does not react to your face.** Press a key and wait about five seconds —
-the check starts when the screen wakes, not when it is already awake. If the lid was
-closed, the camera was closed with it: open it and press a key. Your password works the
-whole time.
+**The lock screen does not react to your face.** Take your hands off it first. The check
+starts when the screen **wakes**, so the screen has to go dark before there is anything to
+wake: leave it alone for five seconds and let it black out. A key pressed while it is
+still lit does not start a check — it puts those five seconds back to the beginning, so
+tapping away at a lit lock screen is the one reliable way to never see a face check at
+all. Once it is dark, tap a key and look at the camera: the infrared light comes on within
+a second or so, and the screen opens about three seconds later.
+
+Your password works the whole time, and it is quicker than the check. Type it straight
+away and it wins the race, the face result arrives too late and is thrown away, and a
+working face check looks exactly like one that never ran — because nothing is drawn on the
+lock screen either way. If the lid was closed, the camera was closed with it: open it and
+press a key.
 
 **The lock screen came back looking like Omarchy's own.** That is on purpose. If Face's
 copy of the lock screen cannot run — after an Omarchy update, or a bad Face update — Face
