@@ -4,6 +4,7 @@ import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
+import "common/spring.js" as Spring
 
 // The indicator (plan-gui.md §6.2): a card under the webcam saying that a face
 // is being checked, and for whom.
@@ -315,47 +316,16 @@ Item {
   readonly property int widthDelay: 50
   readonly property int widthDuration: 300
 
-  // The easing is a damped spring, not an ease-out: the step response of a
-  // second-order system with damping ratio `springDamping`, which overshoots
-  // once by exp(-πζ/√(1-ζ²)) -- 3.8 % at ζ = 0.72 -- and settles. It is
-  // sampled into a cubic Bézier spline (eight Hermite segments, C¹, with the
-  // derivative taken from the same closed form) because that is the one
-  // shape of custom curve NumberAnimation accepts, and because a curve on
-  // the animation itself -- rather than a formula applied to a linear timer
-  // -- is what lets a restart mid-exit grow back out from wherever the bar
-  // currently is, and lets the plain exit below run without replaying the
-  // overshoot backwards. `springPeakAt` is where in the duration the
-  // overshoot peaks (0.6 → 210 ms into the height's 350 ms); by the end the
-  // envelope is under half a percent and the residual is taken out linearly
-  // so the curve ends on exactly 1.
+  // The easing is a damped spring, not an ease-out: one overshoot of about
+  // 4 % and then settled, never the wobble OutElastic draws. common/spring.js
+  // builds the Bezier that NumberAnimation needs out of the closed form, and
+  // says how; the Test and Record cards grow on the same curve, because three
+  // cards in the same piece of screen moving three different ways is three
+  // programs.
   readonly property real springDamping: 0.72
   readonly property real springPeakAt: 0.6
-  readonly property real springOvershoot:
-    Math.exp(-Math.PI * springDamping / Math.sqrt(1 - springDamping * springDamping))
-  readonly property var springCurve: buildSpringCurve(springDamping, springPeakAt, 8)
-
-  function buildSpringCurve(zeta, peakAt, segments) {
-    var b = Math.PI / peakAt                    // damped angular frequency
-    var w = b / Math.sqrt(1 - zeta * zeta)      // undamped
-    var a = zeta * w                            // decay rate
-    var k = a / b
-    function raw(t) { return 1 - Math.exp(-a * t) * (Math.cos(b * t) + k * Math.sin(b * t)) }
-    function rawSlope(t) { return Math.exp(-a * t) * (w * w / b) * Math.sin(b * t) }
-    var tail = raw(1) - 1
-    function x(t) { return raw(t) - t * tail }
-    function m(t) { return rawSlope(t) - tail }
-    var points = []
-    var h = 1 / segments
-    for (var i = 0; i < segments; i++) {
-      var t0 = i * h, t1 = (i + 1) * h
-      points.push(t0 + h / 3, x(t0) + m(t0) * h / 3,
-                  t1 - h / 3, x(t1) - m(t1) * h / 3,
-                  t1, x(t1))
-    }
-    points[points.length - 2] = 1
-    points[points.length - 1] = 1
-    return points
-  }
+  readonly property real springOvershoot: Spring.overshoot(springDamping)
+  readonly property var springCurve: Spring.curve(springDamping, springPeakAt, 8)
 
   onVisibleNowChanged: {
     if (root.visibleNow) {

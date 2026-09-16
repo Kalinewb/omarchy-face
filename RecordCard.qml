@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
+import "common/spring.js" as Spring
 
 // The recording card (plan-gui.md §5.3): a scrim on the built-in screen with a
 // card at the top, under the webcam, so the person is looking at the camera
@@ -123,7 +124,34 @@ PanelWindow {
   WlrLayershell.layer: WlrLayer.Overlay
   WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
 
-  Component.onCompleted: Qt.callLater(function () { keys.forceActiveFocus() })
+  Component.onCompleted: {
+    Qt.callLater(function () { keys.forceActiveFocus() })
+    enterAnim.start()
+  }
+
+  // Grown out of the top edge, on the indicator's curve (common/spring.js):
+  // height over 350 ms, width from 50 ms over 300 ms, both landing together.
+  // The window's position, opacity and scale are never animated -- only the
+  // bar's own height and width, so its top edge is on the screen's top edge
+  // at every frame including the first (post-ship revision).
+  property real heightP: 0
+  property real widthP: 0
+  readonly property var springCurve: Spring.curve(0.72, 0.6, 8)
+
+  ParallelAnimation {
+    id: enterAnim
+    NumberAnimation {
+      target: card; property: "heightP"; to: 1; duration: 350
+      easing.type: Easing.BezierSpline; easing.bezierCurve: card.springCurve
+    }
+    SequentialAnimation {
+      PauseAnimation { duration: 50 }
+      NumberAnimation {
+        target: card; property: "widthP"; to: 1; duration: 300
+        easing.type: Easing.BezierSpline; easing.bezierCurve: card.springCurve
+      }
+    }
+  }
 
   Rectangle {
     anchors.fill: parent
@@ -149,26 +177,68 @@ PanelWindow {
     }
 
     // The card, top-centre, roughly under the built-in camera.
-    Rectangle {
+    // The card is its own surface: a click on it must not reach the scrim.
+    // A sibling of the card rather than a child of it, because Island's
+    // children live inside the bar and so would not cover the two fillets at
+    // its top corners -- and a click on one of those would fall through to the
+    // scrim and discard the session. Declared before the card, so everything
+    // inside it still takes its own clicks first.
+    MouseArea {
+      x: panel.x
+      y: panel.y
+      width: panel.width
+      height: panel.height
+      onClicked: {}
+    }
+
+    // The card, fused to the top edge under the built-in camera. The same
+    // shape as the indicator and the Test card (Island.qml): flush top, square
+    // top corners, an ordinary convex radius on the bottom two, and the two
+    // concave background fillets that carry the sides into the screen edge.
+    // This was a rounded panel floating 44px below the edge until the
+    // indicator stopped being one, and three cards in the same piece of screen
+    // looking like three programs is what that left behind (post-ship
+    // revision, found via live use).
+    Island {
       id: panel
       anchors.horizontalCenter: parent.horizontalCenter
       anchors.top: parent.top
-      anchors.topMargin: Style.space(44)
-      width: Math.min(parent.width - Style.space(40), Style.space(420))
-      implicitHeight: content.implicitHeight + Style.space(28)
-      radius: Style.cornerRadius
-      color: Qt.rgba(0, 0, 0, 0.55)
-      border.width: 1
-      border.color: Qt.rgba(1, 1, 1, 0.18)
+      anchors.topMargin: 0
 
-      // The card is its own surface: a click on it must not reach the scrim.
-      MouseArea { anchors.fill: parent; onClicked: {} }
+      readonly property real fullWidth: Math.min(card.width - Style.space(40), Style.space(420))
+      readonly property real fullHeight: content.implicitHeight + Style.space(28)
+      // Fixed, never the bar's animated width: the preview, the picker and
+      // three wrapping Texts all measure against this, and a column that
+      // re-wraps mid-grow changes the very height it is being measured for.
+      readonly property real contentWidth: fullWidth - Style.space(28)
+
+      // The seed the bar grows from, as fractions of the settled size. Not
+      // zero, so the first frame is already a bar with its fillets on it.
+      readonly property real seedWidthFraction: 0.4
+      readonly property real seedHeightFraction: 0.2
+      barWidth: Math.max(0, fullWidth * (seedWidthFraction
+                  + (1 - seedWidthFraction) * card.widthP))
+      barHeight: Math.max(0, fullHeight * (seedHeightFraction
+                  + (1 - seedHeightFraction) * card.heightP))
+
+      // Absolute, not the indicator's fifth-of-the-height: this card is far
+      // taller than it is wide, and a fifth of its height would be a capsule.
+      // 25 is what the indicator's rule settles at, so the two read as the
+      // same material.
+      bottomRadius: Style.space(25)
+      filletRadius: Style.space(10) * barHeight / fullHeight
+      color: "#000000"
 
       Column {
         id: content
         anchors.centerIn: parent
-        width: parent.width - Style.space(28)
+        width: panel.contentWidth
         spacing: Style.space(10)
+
+        // Only once the bar is mostly grown, so the preview and the picker are
+        // never seen half-clipped inside a bar still arriving. The bar itself
+        // never fades; this is what is in it.
+        opacity: Math.max(0, Math.min(1, (Math.min(card.heightP, card.widthP) - 0.7) / 0.3))
 
         Text {
           textFormat: Text.PlainText

@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
+import "common/spring.js" as Spring
 
 // The Test card (plan-gui.md §5.2): "does it recognise Anna now?" -- a small
 // card under the webcam while `omarchy-face-identity verify <name>` runs, and
@@ -82,30 +83,84 @@ PanelWindow {
   // Only the card takes clicks; everything else on the screen is untouched.
   mask: Region { item: panel }
 
-  Rectangle {
+  // Grown, not appeared -- the same entrance the indicator uses, on the same
+  // curve from common/spring.js. Height first over 350 ms, width from 50 ms
+  // over 300 ms, so both land together. Nothing here animates the window's
+  // position, opacity or scale: the bar's top edge is on the screen's top
+  // edge at every frame including the first, and only its height and width
+  // move (post-ship revision).
+  property real heightP: 0
+  property real widthP: 0
+  readonly property var springCurve: Spring.curve(0.72, 0.6, 8)
+
+  Component.onCompleted: enterAnim.start()
+
+  ParallelAnimation {
+    id: enterAnim
+    NumberAnimation {
+      target: card; property: "heightP"; to: 1; duration: 350
+      easing.type: Easing.BezierSpline; easing.bezierCurve: card.springCurve
+    }
+    SequentialAnimation {
+      PauseAnimation { duration: 50 }
+      NumberAnimation {
+        target: card; property: "widthP"; to: 1; duration: 300
+        easing.type: Easing.BezierSpline; easing.bezierCurve: card.springCurve
+      }
+    }
+  }
+
+  // The same shape as the indicator, for the reason the palette was already
+  // the same: this card appears in the same place, for the same kind of
+  // moment, and the two should not look like different programs. That was
+  // written when both were floating rounded panels 44px below the edge; the
+  // indicator became a bar fused to the top edge and this did not follow it
+  // (post-ship revision, found via live use). Island.qml draws it: flush top,
+  // square top corners, an ordinary convex radius on the bottom two, and the
+  // two concave background fillets that fuse the sides to the screen edge.
+  Island {
     id: panel
     anchors.horizontalCenter: parent.horizontalCenter
     anchors.top: parent.top
-    // The same 44 as the indicator: under the lens, so reading the card points
-    // the face at the camera.
-    anchors.topMargin: Style.space(44)
-    width: Math.min(parent.width - Style.space(40), Style.space(300))
-    implicitHeight: content.implicitHeight + Style.space(28)
-    height: implicitHeight
-    radius: Style.cornerRadius
-    // The indicator's palette: this card appears in the same place, for the
-    // same kind of moment, and the two should not look like different programs.
-    color: Qt.rgba(Color.polkit.background.r, Color.polkit.background.g,
-                   Color.polkit.background.b, 1)
-    border.width: 1
-    border.color: Qt.rgba(Color.polkit.border.r, Color.polkit.border.g,
-                          Color.polkit.border.b, 0.35)
+    anchors.topMargin: 0
+
+    readonly property real fullWidth: Math.min(parent.width - Style.space(40), Style.space(300))
+    readonly property real fullHeight: content.implicitHeight + Style.space(28)
+    // Fixed, never the bar's animated width: a Text that re-wraps mid-grow
+    // reflows the whole column and changes the height it is being measured
+    // for. The indicator solves it the same way and says so.
+    readonly property real contentWidth: fullWidth - Style.space(28)
+
+    // The seed the bar grows from, as fractions of the settled size. Not
+    // zero, so the first frame is already a bar with fillets on it rather
+    // than nothing.
+    readonly property real seedWidthFraction: 0.4
+    readonly property real seedHeightFraction: 0.2
+    barWidth: Math.max(0, fullWidth * (seedWidthFraction
+                + (1 - seedWidthFraction) * card.widthP))
+    barHeight: Math.max(0, fullHeight * (seedHeightFraction
+                + (1 - seedHeightFraction) * card.heightP))
+
+    // An absolute radius rather than the indicator's fifth-of-the-height:
+    // that rule was chosen for a card about as tall as it is wide, and this
+    // one is neither. 25 is what the indicator's rule settles at, so the two
+    // read as the same material. Island clamps it while the bar is still
+    // shorter than the radius, which rounds the bottom fully at the start of
+    // the grow and straightens it out as the bar arrives.
+    bottomRadius: Style.space(25)
+    filletRadius: Style.space(10) * barHeight / fullHeight
+    color: "#000000"
 
     Column {
       id: content
       anchors.centerIn: parent
-      width: parent.width - Style.space(28)
+      width: panel.contentWidth
       spacing: Style.space(8)
+
+      // Only once the bar is mostly there, so nothing is read half-clipped
+      // inside a bar still growing around it. The bar itself never fades:
+      // this is the text, not the card.
+      opacity: Math.max(0, Math.min(1, (Math.min(card.heightP, card.widthP) - 0.7) / 0.3))
 
       Text {
         textFormat: Text.PlainText
