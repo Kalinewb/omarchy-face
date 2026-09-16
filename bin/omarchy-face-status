@@ -558,7 +558,7 @@ fi
 # it decides comes from `omarchy-face-lock status --json`, which is a read: it
 # prompts nothing and writes nothing.
 
-lock_doc='{"enabled":false,"compat":"n/a","missing":[],"otherLock":""}'
+lock_doc='{"enabled":false,"compat":"n/a","missing":[],"otherLock":"","indicator":false}'
 if [[ -x $PLUGIN_DIR/bin/omarchy-face-lock ]]; then
   if out=$("$PLUGIN_DIR/bin/omarchy-face-lock" status --json 2>/dev/null); then
     jq -e . >/dev/null 2>&1 <<<"$out" && lock_doc=$out
@@ -674,7 +674,8 @@ jq -nc \
      engine: {installed: $engineInstalled, howdy: $howdy, threshold: $threshold},
      install: $install,
      lock: {enabled: ($lockDoc.enabled // false), compat: ($lockDoc.compat // "n/a"),
-            missing: ($lockDoc.missing // []), otherLock: ($lockDoc.otherLock // "")},
+            missing: ($lockDoc.missing // []), otherLock: ($lockDoc.otherLock // ""),
+            indicator: ($lockDoc.indicator // false)},
      removal: {people: $removalPeople, pam: $pam, lockWrapper: $lockWrapper,
                helpers: $helpers, daemon: $daemon, policy: $policy, packages: $packages}
    }'

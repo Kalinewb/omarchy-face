@@ -232,7 +232,19 @@ out=$(run_case handoff FACE_STATUS_DELAY=0.1)
 echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
 check "the popup was showing one appearance before the session" 1 "$(field countBefore "$out")"
 check "the call is accepted" ok "$(field openAt "$out")"
-check "the store is still stale at the moment of the call" 1 "$(field countAtCall "$out")"
+# Not a check, because it is a precondition rather than the behaviour, and it
+# is racy by construction: the store is rewritten by temp + rename, and the
+# FileView watching it can be reloaded by inotify before this process's
+# `exited` handler runs. Both starting points are legitimate. What has to hold
+# in either is the pair below -- the popup does not open on whatever it
+# happened to be holding, and it opens on a fresh read showing the appearance
+# that was just recorded. Asserting the precondition as a failure made this
+# suite flake about one run in five (post-ship revision).
+if [[ $(field countAtCall "$out") == 1 ]]; then
+  note "the store was still stale at the moment of the call — the case this was written for"
+else
+  note "the store had already refreshed at the moment of the call — inotify won the race"
+fi
 check "the popup does not open on it" false "$(field openedImmediately "$out")"
 check "it opens on the appearance that was just recorded" 2 "$(field countAtOpen "$out")"
 check "…on that person's view" person "$(field view "$out")"
