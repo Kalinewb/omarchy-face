@@ -663,6 +663,25 @@ def check(verb, model, service, expected, uid, connection):
         return "OK"
 
     state_write("failed", service, "", "engine exit %s" % status)
+
+    # Say why, in the journal, and not only in a state.json the next check
+    # overwrites (post-ship revision). A lock check that says no leaves nothing
+    # else behind: the screen is dark, the wrapper draws nothing, and the
+    # person standing there is shown a password field either way. Without this
+    # line a run of refusals cannot be told apart afterwards -- which is what
+    # happened on 2026-09-15, twenty of them with no recoverable reason left.
+    # `notice` for lock and `debug` for the rest: the same split the match
+    # above uses, because a lock refusal is the one nobody can see happen.
+    reason = {11: "the engine gave up", 12: "too dark to see a face",
+              124: "the engine timed out", 137: "the engine had to be killed",
+              143: "the daemon's own deadline", None: "the engine could not run"}
+    said = "%s: no (%s, engine exit %s)" % (
+        verb, reason.get(status, "no face matched"), status)
+    if service == "lock":
+        notice(said)
+    else:
+        debug(said)
+
     # howdy's own codes first (11 gave up, 12 could not see), then the two that
     # mean the backstop fired: `timeout` exits 124 when it had to signal the
     # engine and 128+9 when the `-k` kill was needed, and 128+15 is this

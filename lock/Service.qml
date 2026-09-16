@@ -209,9 +209,28 @@ Item {
   property var monitorBaseline: null
   property int baselineGeneration: -1
 
+  // Whether any monitor was dark in the last sample. A wake can only follow a
+  // blank, so this is what decides how hard to look -- see the poll below.
+  property bool screenDark: false
+
   Timer {
     id: monitorPoll
-    interval: 1000
+    // How fast to look, which is not one number (post-ship revision).
+    //
+    // While the screen is lit there is nothing to catch: no wake can happen
+    // until it has gone dark first, and a second is plenty for noticing that.
+    // Once it IS dark the next thing to happen is the wake this whole feature
+    // hangs on, and by then the poll is the slowest link in the chain -- the
+    // engine needs about two seconds after it, and a person types a password
+    // they know by heart in about three. A second of polling latency on top of
+    // that loses the race, the face result lands after the password has been
+    // accepted, and the wrapper throws it away as stale. Which is precisely
+    // what kept happening.
+    //
+    // 250 ms while dark costs four `hyprctl` calls a second on a machine that
+    // is locked and idle, and only for as long as it stays dark. It buys back
+    // most of a second at the one moment that decides the outcome.
+    interval: root.screenDark ? 250 : 1000
     repeat: true
     running: root.lockedNow
     // The first sample is taken at once rather than a second later, so the
@@ -248,6 +267,12 @@ Item {
       now[String(monitor.name)] = { dpms: monitor.dpmsStatus === true,
                                     disabled: monitor.disabled === true }
     }
+
+    // Recorded before the baseline is consulted, so the very first sample of a
+    // lock already sets the poll's rate rather than leaving it a tick behind.
+    var dark = false
+    for (var key in now) if (!now[key].dpms || now[key].disabled) dark = true
+    root.screenDark = dark
 
     // A baseline belongs to one lock. Checked here rather than cleared in the
     // transition handler, because the poll's first tick and that handler both
