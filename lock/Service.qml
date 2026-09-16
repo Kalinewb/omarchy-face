@@ -259,6 +259,11 @@ Item {
       if (!stock.item) return
       if (stock.item.lockRequested) {
         root.lockGeneration = root.lockGeneration + 1
+        // A resume belongs to the lock it happened in. Omarchy locks before it
+        // suspends, so the resume of THIS lock is always seen after this line;
+        // one left over from the last lock would put "Camera waking?" on a
+        // lock taken by hand a few seconds after unlocking.
+        root.resumedAt = 0
         root.log("lock " + root.lockGeneration + " begins; face waits for a wake or Enter")
         if (root.compat === "ok") root.armEnter()
         return
@@ -374,8 +379,8 @@ Item {
   //
   // It is registered when a lock begins and removed when the lock ends, so an
   // unlocked session has no binding on Enter at all. It does not live in the
-  // user's bindings.lua, so nothing of the user's is edited, and a config reload
-  // (which drops runtime bindings) is answered by registering it again.
+  // user's bindings.lua, so nothing of the user's is edited. A config reload
+  // drops it, and it stays dropped until the next lock (see the handler below).
   //
   // WHAT THIS DOES NOT CHANGE. Any process running as this account can raise
   // the same event with `hyprctl dispatch`, exactly as it can already produce a
@@ -443,7 +448,20 @@ Item {
   function startEval(job) {
     evalProcess.success = job.success
     evalProcess.command = job.command
+    evalSafety.restart()
     evalProcess.running = true
+  }
+
+  // `hyprctl eval` answers in milliseconds. One that does not -- a compositor
+  // wedged mid-reload -- would hold every later arm and disarm in pendingEval
+  // for good, so it is stopped, and its exit drains the queue as any other does.
+  Timer {
+    id: evalSafety
+    interval: 5000
+    onTriggered: if (evalProcess.running) {
+      console.warn("graveklar.face-lock", "hyprctl eval did not answer; stopping it")
+      evalProcess.signal(15)
+    }
   }
 
   Process {
@@ -451,6 +469,7 @@ Item {
     property string success: ""
     stdout: StdioCollector { id: evalOut; waitForEnd: true }
     onExited: function (code, status) {
+      evalSafety.stop()
       var said = String(evalOut.text || "").trim()
       if (code !== 0)
         console.warn("graveklar.face-lock", "hyprctl eval failed (exit " + code + "):", said,
@@ -470,9 +489,15 @@ Item {
     function onRawEvent(event) {
       if (!event) return
       if (event.name === "custom" && event.data === root.enterEvent) root.enterPressed()
-      // A reload rebuilds Hyprland's Lua state and every runtime binding with
-      // it. Registering again is idempotent: armLua unbinds whatever it finds.
-      else if (event.name === "configreloaded" && root.enterArmed && root.lockedNow) root.armEnter()
+      // A config reload drops the binding, and it is deliberately NOT put back
+      // until the next lock. `non_consuming` is what keeps Enter reaching the
+      // password field; if a Hyprland ever stopped honouring it under a session
+      // lock, `hyprctl reload` from a TTY has to be a way to get Enter back.
+      // Losing Enter-for-face until the next lock is the cheaper failure.
+      else if (event.name === "configreloaded" && root.enterArmed) {
+        root.enterArmed = false
+        root.log("Hyprland reloaded its config: Enter is plain Enter until the next lock")
+      }
     }
   }
 

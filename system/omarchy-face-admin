@@ -729,7 +729,29 @@ engine_packages_cpu_only() {
   pacman -Q python-dlib-cuda >/dev/null 2>&1 && return 1
   pacman -Qi python-dlib 2>/dev/null | sed -n 's/^Depends On[[:space:]]*:[[:space:]]*//p' |
     grep -qi 'cuda' && return 1
+  engine_python_matches || return 1
   return 0
+}
+
+# A python-dlib built for a Python that is no longer /usr/bin/python3 is
+# installed and CPU-only and still cannot be imported: a minor Python upgrade
+# leaves it in the old /usr/lib/pythonX.Y/site-packages, which the new
+# interpreter never looks in. Without this the `engine` row's "build the engine
+# again" Fix skipped every step but `configure` and the row stayed broken.
+#
+# The same comparison omarchy-face-status makes (its `python_built` /
+# `python_running`), kept in step with it by hand: that file runs as the user
+# from the plugin folder, and this one is not going to source it. And the same
+# rule: an answer it cannot read -- two site-packages, no link -- is not a
+# mismatch.
+engine_python_matches() {
+  local built running
+  built=$(pacman -Qlq python-dlib 2>/dev/null |
+    sed -n 's#^/usr/lib/python\([0-9][0-9]*\.[0-9][0-9]*\)/site-packages/.*#\1#p' | sort -u)
+  running=$(readlink -f /usr/bin/python3 2>/dev/null |
+    sed -n 's#^.*/python\([0-9][0-9]*\.[0-9][0-9]*\)$#\1#p')
+  [[ $built =~ ^[0-9]+\.[0-9]+$ && $running =~ ^[0-9]+\.[0-9]+$ ]] || return 0
+  [[ $built == "$running" ]]
 }
 
 # Start the job. 0 started · 3 one is already running · 1 systemd would not.

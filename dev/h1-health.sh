@@ -406,6 +406,16 @@ check "a hook somebody edited is put back" '{"ok":true,"written":1}' "$out"
 check "…as the same text as its sibling, verb aside" "" \
   "$(diff <(sed 's/post-update/VERB/g' "$H_UPDATE") <(sed 's/post-boot/VERB/g' "$H_BOOT"))"
 
+mv "$H_BOOT" "$H_BOOT.keep"
+mkdir "$H_BOOT"
+out=$(hooks_cmd install-hooks); rc=$?
+check "a directory where a hook goes is refused, not filled" "1|0" \
+  "$rc|$(find "$H_BOOT" -mindepth 1 | wc -l)"
+rmdir "$H_BOOT"; mv "$H_BOOT.keep" "$H_BOOT"
+
+check "the hook finds the plugin where Omarchy puts it, not under XDG_CONFIG_HOME" "1|0" \
+  "$(grep -c 'health=\$HOME/.config/omarchy/plugins/' "$H_UPDATE")|$(grep -c XDG_CONFIG_HOME "$H_UPDATE")"
+
 # =============================================================================
 step "the hooks themselves"
 # =============================================================================

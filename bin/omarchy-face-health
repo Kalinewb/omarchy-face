@@ -137,7 +137,7 @@ hook_text() { # hook_text <verb>
 # Face ID's Remove. If the plugin is no longer installed, this file deletes
 # itself. It never makes the update fail.
 
-health=\${XDG_CONFIG_HOME:-\$HOME/.config}/omarchy/plugins/$PLUGIN_ID/bin/omarchy-face-health
+health=\$HOME/.config/omarchy/plugins/$PLUGIN_ID/bin/omarchy-face-health
 
 if [[ ! -x \$health ]]; then
   rm -f -- "\$0"
@@ -164,6 +164,13 @@ install_hooks() {
       failed=1
       continue
     fi
+    # Something that is not a file where the hook goes -- a directory, most
+    # likely -- would swallow the rename below (`mv` moves INTO a directory)
+    # and report success, once per shell start. Not ours to remove.
+    if [[ -e $file && ! -f $file ]] || [[ -L $file && -d $file ]]; then
+      failed=1
+      continue
+    fi
     if [[ -f $file && ! -L $file ]] && cmp -s <(hook_text "$verb") "$file"; then
       # Right content, and possibly the wrong mode: chmod alone moves no mtime.
       [[ $(stat -c '%a' "$file" 2>/dev/null) == 755 ]] || chmod 0755 "$file" 2>/dev/null || failed=1
@@ -171,7 +178,7 @@ install_hooks() {
     fi
     tmp=$(mktemp "$dir/.$HOOK_NAME.XXXXXX" 2>/dev/null) || { failed=1; continue; }
     if hook_text "$verb" >"$tmp" 2>/dev/null && chmod 0755 "$tmp" 2>/dev/null &&
-       mv -f -- "$tmp" "$file" 2>/dev/null; then
+       mv -fT -- "$tmp" "$file" 2>/dev/null; then
       written=$((written + 1))
     else
       rm -f -- "$tmp"
@@ -359,12 +366,20 @@ run_checks() { # run_checks post-update|post-boot
     printf '  Open Face ID → Setup to repair it.\n\n'
   fi
 
-  # The desktop gets it once per set of problems. Without this a machine with
-  # one lasting problem says it at every login, and that is the notification
-  # people learn to ignore.
-  local key
-  key=$(printf '%s\n' "${problems[@]}" | sha256sum | cut -d' ' -f1)
-  [[ -r $NOTIFIED_FILE && $(cat "$NOTIFIED_FILE" 2>/dev/null) == "$key" ]] && return 0
+  # The desktop hears about each problem once. Without this a machine with one
+  # lasting problem says it at every login, and that is the notification people
+  # learn to ignore. Remembered per problem rather than per set: post-update
+  # adds lines post-boot never has (the lock preview, the AUR warning), and a
+  # set-wide key would announce the same lasting row again at the next login
+  # only because those lines had gone. A new problem notifies with all of them.
+  local said="" line hash fresh=false hashes=()
+  [[ -r $NOTIFIED_FILE ]] && said=$(cat "$NOTIFIED_FILE" 2>/dev/null)
+  for line in "${problems[@]}"; do
+    hash=$(printf '%s' "$line" | sha256sum | cut -d' ' -f1)
+    hashes+=("$hash")
+    grep -qxF -- "$hash" <<<"$said" || fresh=true
+  done
+  [[ $fresh == true ]] || return 0
 
   local body
   body=$(printf '%s\n' "${problems[@]}")
@@ -373,7 +388,7 @@ run_checks() { # run_checks post-update|post-boot
   mkdir -p "$STATE_DIR" 2>/dev/null || return 0
   local tmp
   tmp=$(mktemp "$STATE_DIR/.health-notified.XXXXXX" 2>/dev/null) || return 0
-  if printf '%s\n' "$key" >"$tmp" 2>/dev/null; then
+  if { [[ -n $said ]] && printf '%s\n' "$said"; printf '%s\n' "${hashes[@]}"; } | sort -u >"$tmp" 2>/dev/null; then
     mv -f -- "$tmp" "$NOTIFIED_FILE" 2>/dev/null || rm -f -- "$tmp"
   else
     rm -f -- "$tmp"

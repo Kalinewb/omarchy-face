@@ -354,6 +354,21 @@ ShellRoot {
         ])
         break
 
+      // A resume belongs to its own lock: resume, unlock by password, lock
+      // again by hand, and a no there is an ordinary no.
+      case "enter-no-resume-last-lock":
+        rootObj.verifyCode = 1
+        rootObj.play([
+          { after: 300,  run: function () { rootObj.stock().beginLock() } },
+          { after: 1500, run: function () { wrapper.lastTickAt = Date.now() - 20000 } },
+          { after: 1500, run: function () { rootObj.stock().passwordUnlock() } },
+          { after: 300,  run: function () { rootObj.stock().beginLock() } },
+          { after: 800,  run: function () { rootObj.pressEnter() } },
+          { after: 2000, run: function () {} },
+          done
+        ])
+        break
+
       // The binding exists only while a lock does.
       case "enter-arming":
         rootObj.play([

@@ -371,6 +371,9 @@ out=$(run_lock enter-no-resumed "$root/fake")
 check "a no just after a resume says the camera may be waking" \
   "$(field lineNoResumed "$out")" "$(field line "$out")"
 check "…because the frozen poll was read as a resume" "true" "$(field resumed "$out")"
+out=$(run_lock enter-no-resume-last-lock "$root/fake")
+check "a resume in the LAST lock does not follow into the next one" \
+  "$(field lineNo "$out")" "$(field line "$out")"
 
 step "GATE: every line fits the password field (LockView elides it)"
 lines=$(sed -n 's/^ *readonly property string line[A-Za-z]*: "\(.*\)"$/\1/p' "$REPO/lock/Service.qml")

@@ -18,7 +18,9 @@
 
 set -uo pipefail
 unset IFS BASH_ENV ENV CDPATH
-PATH=/usr/local/bin:/usr/bin
+# /usr/bin first, as in omarchy-face-gate: the sudo gate runs this as root, and
+# the distribution's own sed and v4l2-ctl win every name.
+PATH=/usr/bin:/usr/local/bin
 umask 077
 
 # The sysfs path is overridable for testing, and NEVER when running as root.
