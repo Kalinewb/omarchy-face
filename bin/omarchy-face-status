@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 2.0.0-dev
+# omarchy-face-version: 2.0.0
 #
 # The read half of the contract (plan-merged.md §2.2, plan-engine.md §10.1,
 # §11.1): one JSON document describing everything the GUI renders.
@@ -137,6 +137,25 @@ config_get() {
 file_version() {
   head -40 "$1" 2>/dev/null |
     sed -n 's/^[^[:alnum:]]*omarchy-face-version:[[:space:]]*\([0-9A-Za-z.+-]*\).*/\1/p' | head -1
+}
+
+# Is $1 strictly newer than $2, in semver order?
+#
+# `sort -V` alone is NOT that order, whatever the comment that used to sit
+# here said: it puts `2.0.0-dev` AFTER `2.0.0`, where semver puts a
+# pre-release before the release it leads to. Mapping the first `-` to `~`
+# gives semver's rule exactly, because sort -V does treat `~` as sorting
+# before everything -- the Debian convention it borrows. It changes the
+# ordering of a pre-release against its own release and of nothing else.
+#
+# It was wrong on the one day it mattered: the release that ends a
+# development cycle read as OLDER than the -dev build it replaced, so
+# `install-system` refused the upgrade as a downgrade and the Setup row
+# offered no Fix for a machine one button press from correct.
+version_newer() { # version_newer <a> <b>
+  local a=${1/-/\~} b=${2/-/\~}
+  [[ $a != "$b" ]] || return 1
+  [[ $(printf '%s\n%s\n' "$a" "$b" | sort -V | tail -1) == "$a" ]]
 }
 
 has_v2_marker() {
@@ -316,7 +335,7 @@ elif ((present < ${#SYSTEM_FILES[@]})) || [[ $mixed_versions == true ]]; then
   add_row system "Face's system files" broken \
     "a half-installed system half: $(join_comma "${system_problems[@]}")" true install-system
 elif [[ -n $plugin_version && -n $installed_version && $installed_version != "$plugin_version" ]]; then
-  if [[ $(printf '%s\n%s\n' "$plugin_version" "$installed_version" | sort -V | tail -1) == "$plugin_version" ]]; then
+  if version_newer "$plugin_version" "$installed_version"; then
     add_row system "Face's system files" needs_action \
       "the plugin ($plugin_version) is newer than the installed system files ($installed_version)" \
       true install-system

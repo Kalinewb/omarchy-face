@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 2.0.0-dev
+# omarchy-face-version: 2.0.0
 #
 # The first install, and the only call Face ever makes through polkit's generic
 # exec action (plan-engine.md §5.1).
