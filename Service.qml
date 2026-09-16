@@ -542,6 +542,16 @@ Item {
         return
       }
       root.noteLockStatus(parsed)
+
+      // A clone enabled mid-session never got a lockCheck(). That function is
+      // called from exactly one place -- lockSync(), at shell start -- and at
+      // that moment the clone was still disabled, so the phase settled on `off`
+      // and stayed there: no stranded-lock health check for the rest of the
+      // session. The wrapper writes this file only while it is loaded and
+      // running, so a fresh document arriving while the phase still says `off`
+      // is the evidence that the phase is wrong (post-ship revision). Bounded:
+      // onLoaded returns early unless the document actually changed.
+      if (root.lockPhase === "off") root.lockCheck()
     }
     onLoadFailed: root.lockStatusRaw = ""
   }

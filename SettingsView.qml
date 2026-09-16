@@ -202,32 +202,6 @@ Column {
   readonly property var lockMissing: view.lockState && Array.isArray(view.lockState.missing)
                                      ? view.lockState.missing : []
 
-  // The on-screen line at the lock screen. A user-level preference, so unlike
-  // the two switches above it asks for no password -- see the `indicator` verb
-  // in bin/omarchy-face-lock for why asking would protect nothing.
-  property var pendingLine: null
-  readonly property bool lineOn: view.pendingLine !== null ? view.pendingLine
-                                 : (view.lockState && view.lockState.indicator === true)
-
-  function setLine(value) {
-    if (!panel || view.busy !== "") return
-    view.pendingLine = value
-    view.busy = "line"
-    view.note = ""
-    panel.ask.ask(panel.ask.lockArgv(["indicator", value ? "on" : "off"]), "",
-                  function (result) {
-      view.busy = ""
-      view.pendingLine = null
-      view.note = result.ok ? "" : "That setting could not be saved."
-      panel.reloadWatched()
-      panel.refresh()
-    })
-  }
-
-  // What the engine's five compat words mean to somebody reading this page
-  // (plan-merged.md §1 row 12). `otherLock` is not one of them: it is a reason
-  // `n/a` happened, and it replaces the `n/a` line rather than appearing beside
-  // it.
   readonly property string lockStatusText: {
     if (view.lockOther !== "")
       return "Another lock screen plugin (" + view.lockOther + ") is in use."
@@ -324,7 +298,8 @@ Column {
     width: parent.width
     label: "Lock screen"
     description: "Unlock by looking, for people with Lock screen. Face is tried when you wake "
-                 + "the screen — lock, walk away, come back, touch a key and look at the camera."
+                 + "the screen — lock, walk away, come back, touch a key and look at the camera. "
+                 + "The lock screen says when it is looking, and when it did not recognise you."
     checked: view.lockOn
     enabled: view.busy === ""
     foreground: view.foreground
@@ -346,44 +321,6 @@ Column {
                               : view.lockFaces + " people can unlock the lock screen")
         + " · " + view.lockStatusText
     color: view.lockFaces === 0 ? Color.accent : view.dim
-    font.family: view.fontFamily
-    font.pixelSize: Style.font.caption
-    wrapMode: Text.WordWrap
-  }
-
-  // Under the lock switch, because it is only about the lock screen. Disabled
-  // while the feature is off: there is nothing for it to say then.
-  Toggle {
-    width: parent.width
-    label: "Say so on the lock screen"
-    description: "Omarchy's lock screen shows nothing while a face is being checked, so a check "
-                 + "that is running, one that declined, and one that never started all look the "
-                 + "same. With this on, Face writes one line into the password field: "
-                 + "\u201cLooking for your face\u2026\u201d, then \u201cnot recognised\u201d if it was not you."
-    checked: view.lineOn
-    enabled: view.busy === "" && view.lockOn
-    foreground: view.foreground
-    fontFamily: view.fontFamily
-    onClicked: view.setLine(!view.lineOn)
-  }
-
-  // The warning. It is not about danger -- this writes one string into a
-  // property Omarchy already renders, opens nothing and grants nothing -- it is
-  // about the two ways it can look wrong, because both are better read here
-  // than discovered at a locked screen.
-  Text {
-    textFormat: Text.PlainText
-    width: parent.width
-    visible: view.lockOn
-    leftPadding: Style.space(6)
-    text: view.lineOn
-      ? "It borrows Omarchy's own failure line, so it is styled like one — the “looking” "
-        + "line is italic and in the error colour too. It is cleared the moment you start "
-        + "typing, and it can be replaced by a real password failure. If an Omarchy update "
-        + "renames that field the line stops and face unlock carries on regardless."
-      : "Off: nothing appears on the lock screen, and a face check is invisible whether it "
-        + "works, declines, or never runs."
-    color: view.dim
     font.family: view.fontFamily
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap

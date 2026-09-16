@@ -83,34 +83,20 @@ Item {
   // running as this account paint over the locked screen, and that is a
   // grotesque price for a status line.
   //
+  // It is not a setting. It was one for about an hour, and a switch for "tell
+  // me what the feature you switched on is doing" is a switch nobody should
+  // have to find: face unlock on the lock screen IS this, and the silent
+  // version was the bug. One switch, and it says what it does.
+  //
   // `failureMessage` is deliberately NOT in contractProperties. If Omarchy
   // renames it, the line stops and the face check carries on -- the reverse
   // would switch face unlock off over a cosmetic property.
   readonly property bool messageSupported:
     stock.item !== null && ("failureMessage" in stock.item)
 
-  readonly property string stateDir:
-    (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state"))
-    + "/omarchy-face"
-
-  // Off unless somebody switched it on in Settings (`omarchy-face-lock
-  // indicator on`). Watched, so the switch takes effect on the next lock
-  // without a shell restart.
-  property bool lineOn: false
-
-  FileView {
-    id: linePref
-    path: root.stateDir + "/lock-indicator"
-    watchChanges: true
-    printErrors: false
-    onFileChanged: reload()
-    onLoaded: root.lineOn = String(text()).trim() === "on"
-    onLoadFailed: root.lineOn = false
-  }
-
   // Never over a password being checked, and never when the switch is off.
   function showLine(text) {
-    if (!root.lineOn || !root.messageSupported || !root.lockedNow) return
+    if (!root.messageSupported || !root.lockedNow) return
     if (stock.item.authenticatingPassword === true) return
     stock.item.failureMessage = text
   }
@@ -250,6 +236,18 @@ Item {
       if (stock.item.lockRequested) {
         root.lockGeneration = root.lockGeneration + 1
         root.log("lock " + root.lockGeneration + " begins; face waits for the screen to wake")
+      } else if (root.attemptBusy && verifyProcess.running) {
+        // The lock ended while a check was still in flight, which is almost
+        // always the password winning the race. Its ANSWER is already void --
+        // the generation check in attemptFinished sees to that -- but the
+        // process is not, and it holds the infrared camera for the rest of
+        // howdy's five seconds, now inside an unlocked session where something
+        // else may want the sensor. Signalled rather than abandoned, for the
+        // reason attemptSafety gives: the death is what makes the daemon let
+        // go (post-ship revision).
+        root.attemptCancelled = true
+        root.log("the lock ended while a check was running: stopping it")
+        verifyProcess.signal(15)
       }
     }
   }
@@ -358,6 +356,10 @@ Item {
 
   property bool attemptBusy: false
   property string attemptName: ""
+  // Set when THIS file stopped the check, so its exit can be told apart from an
+  // answer. Without it a cancelled check exits 143 and reads as "the face said
+  // no", which is a different thing entirely and would be the only record left.
+  property bool attemptCancelled: false
 
   // Longer than anything downstream: the client's own receive timeout is 20 s
   // and the daemon's engine runs under `timeout -k 2 8`. This only ever fires
@@ -380,6 +382,7 @@ Item {
     root.attemptGeneration = root.lockGeneration
     root.attemptCount = root.attemptCount + 1
     root.attemptName = ""
+    root.attemptCancelled = false
     root.lastOutcome = "checking"
     root.log("the screen woke: one face check, in lock generation " + root.lockGeneration)
     root.showLine(root.lineChecking)
@@ -431,6 +434,28 @@ Item {
     root.attemptBusy = false
     var who = root.attemptName
     root.attemptName = ""
+
+    // Stopped by the lock ending, not answered. Counted and said with the stale
+    // results, because that is exactly what it is: a check for a lock that is
+    // over. It must NOT fall through to the branch below -- a cancelled check
+    // exits 143, which would be recorded as the face saying no, and "Face did
+    // not recognise you" is a lie about a check that never finished.
+    //
+    // The generation guard further down still stands and is still exercised:
+    // signalling a process is a request, and one already on its way to exiting
+    // 0 can beat it.
+    if (root.attemptCancelled) {
+      root.attemptCancelled = false
+      root.lastOutcome = "stale"
+      root.staleCount = root.staleCount + 1
+      // The same sentence the generation guard below says, because from a
+      // reader's side it is the same event: a result for a lock that is over,
+      // dropped. WHY this one was dropped is already in the journal, logged at
+      // the moment it was stopped.
+      root.say("stale face result ignored")
+      root.clearLine(root.lineChecking)
+      return
+    }
 
     if (code !== 0) {
       // Every no is silent. The password field is already on screen and works;
