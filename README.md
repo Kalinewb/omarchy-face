@@ -24,7 +24,7 @@ you come back, touch a key and look at the screen. There is no face icon on the 
 screen — it simply opens. It follows Omarchy's own lock screen as it updates, and if an
 update changes too much it steps aside, tells you, and your password works as always.
 
-![Face ID's Setup view on a finished machine](preview.png)
+![Face ID's People view on a finished machine](preview.png)
 
 ## What it is, and what it is not
 
