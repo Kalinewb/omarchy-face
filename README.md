@@ -48,9 +48,17 @@ open.
 When Anna's face approves `sudo`, Anna runs commands as the machine's owner. The switch
 says so.
 
-**Sudo keeps a better record than the lock screen.** Every `sudo` approved by a face is
-written to the system journal with whose face it was. The lock screen's record is kept by
-your own session, so a program running as you could fake or remove it.
+**Sudo keeps a better record than the lock screen.** Every `sudo` answered by a face is
+written to the system journal *by root* — whose face it was, which appearance matched, the
+command that asked and what it was started from — and so is every attempt that failed. The
+lock screen is written by root too, but it is a smaller claim: the daemon records
+`lock verify matched: <name>` when it recognises somebody, and since it also records the
+reason when it does not, a run of refusals can be read back afterwards.
+
+What root cannot say is that the screen opened. The daemon only ever learns that a face
+matched; what was done with that answer is not its business and it never finds out. The
+line saying the lock was opened is written by your own session — so that part, and only
+that part, a program running as you could still fake or remove.
 
 **Names are visible on this computer.** The list of people and their display names can be
 read by every account on the machine. Faces cannot. So is the record of what was last
