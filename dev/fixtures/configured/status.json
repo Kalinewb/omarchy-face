@@ -2,7 +2,7 @@
   "rows": [
     {"id": "legacy", "label": "Old install", "state": "ok", "detail": "nothing left from the old version", "fixable": false, "fix": ""},
     {"id": "camera", "label": "Infrared camera", "state": "ok", "detail": "Chicony USB2.0 Camera, 400x400 infrared", "fixable": false, "fix": ""},
-    {"id": "system", "label": "Face's system files", "state": "ok", "detail": "installed, version 2.0.0", "fixable": false, "fix": ""},
+    {"id": "system", "label": "Face's system files", "state": "ok", "detail": "installed, version 2.0.1", "fixable": false, "fix": ""},
     {"id": "engine", "label": "Face engine", "state": "ok", "detail": "howdy 2.6.1-3", "fixable": false, "fix": ""},
     {"id": "install-job", "label": "Engine build", "state": "ok", "detail": "", "fixable": false, "fix": ""},
     {"id": "people", "label": "People", "state": "ok", "detail": "3 on this machine", "fixable": false, "fix": ""},

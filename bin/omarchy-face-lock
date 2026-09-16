@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 2.0.0
+# omarchy-face-version: 2.0.1
 #
 # The lock-screen clone's verbs (plan-merged.md §2.5, plan-engine.md §9.4).
 # Unprivileged, run as the owner, and the only thing in this plugin that is
@@ -60,6 +60,9 @@ RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/omarchy-face
 STATUS_FILE=$RUNTIME_DIR/lock-status.json
 STATE_DIR=${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-face
 NOTIFIED_FILE=$STATE_DIR/lock-notified
+# The lock-screen card, on or off. A user-level preference and not part of
+# /etc/omarchy-face/config on purpose: see the `indicator` verb.
+INDICATOR_FILE=$STATE_DIR/lock-indicator
 
 # The shell this account is actually running, the way every other script in
 # Omarchy finds it: the session's value first, because a terminal opened after a
@@ -97,6 +100,11 @@ die() { # die <code> [key value]…
   printf '%s}\n' "$out"
   exit 1
 }
+
+# Is the lock-screen card switched on? Off unless the file says otherwise, so
+# a machine that has never heard of this setting has it off.
+indicator_on() { [[ $(cat "$INDICATOR_FILE" 2>/dev/null) == on ]]; }
+indicator_json() { indicator_on && printf true || printf false; }
 
 json_string() { # json_string <text> -> a quoted JSON string
   local text=${1-} out="" i char
@@ -523,8 +531,38 @@ case $verb in
         fi
       fi
     fi
-    printf '{"enabled":%s,"compat":%s,"missing":%s,"otherLock":%s}\n' \
-      "$enabled" "$(json_string "$compat")" "$missing" "$(json_string "$other")"
+    printf '{"enabled":%s,"compat":%s,"missing":%s,"otherLock":%s,"indicator":%s}\n' \
+      "$enabled" "$(json_string "$compat")" "$missing" "$(json_string "$other")" \
+      "$(indicator_json)"
+    exit 0
+    ;;
+
+  indicator)
+    # The lock-screen card, on or off.
+    #
+    # A user-level preference, deliberately not in /etc/omarchy-face/config and
+    # deliberately not behind a password. What it switches on is a Hyprland
+    # layer rule, and any process running as this account can already apply
+    # that rule itself with one `hyprctl` call. A password prompt in front of a
+    # capability the caller already holds protects nothing, and teaching
+    # somebody to type their password at a dialog that protects nothing is
+    # worse than not asking.
+    #
+    # It is still worth a warning, and the switch in Settings carries one: the
+    # rule matches on layer-shell NAMESPACE, so granting it lets anything
+    # running as this account draw over the lock screen -- including something
+    # shaped like a password prompt. That is why it is off by default, why it
+    # uses a namespace of its own rather than the one the sudo card uses, and
+    # why nothing turns it on except a person.
+    case ${1:-} in
+      on | off)
+        mkdir -p "$STATE_DIR" 2>/dev/null || die state_unwritable
+        printf '%s\n' "$1" >"$INDICATOR_FILE" 2>/dev/null || die state_unwritable
+        ;;
+      "") ;;
+      *) echo "usage: omarchy-face-lock indicator [on|off]" >&2; exit 2 ;;
+    esac
+    ok indicator "$(indicator_json)"
     exit 0
     ;;
 

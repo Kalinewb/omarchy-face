@@ -124,10 +124,10 @@ rows() { # rows <name> -- prints the fixture's rows array
         row system "Face's system files" needs_action "not installed" true install-first
         row engine "Face engine" needs_action "not built" true install-engine ;;
       building)
-        row system "Face's system files" ok "installed, version 2.0.0" false ""
+        row system "Face's system files" ok "installed, version 2.0.1" false ""
         row engine "Face engine" needs_action "not built" true install-engine ;;
       *)
-        row system "Face's system files" ok "installed, version 2.0.0" false ""
+        row system "Face's system files" ok "installed, version 2.0.1" false ""
         row engine "Face engine" ok "howdy 2.6.1-3" false "" ;;
     esac
     row install-job "Engine build" ok "" false ""
