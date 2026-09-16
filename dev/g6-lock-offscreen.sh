@@ -144,7 +144,7 @@ echo "${DIM}shell: $SHELL_PATH/shell   plugin: $REPO${RESET}"
 
 step "the wrapper is a composition, not a copy"
 
-check "the template is two files and nothing else" "Service.qml manifest.json" \
+check "the template is two files and nothing else" "Service.qml manifest.json.in" \
   "$(cd "$REPO/lock" && ls | sort -r | tr '\n' ' ' | sed 's/ $//')"
 
 # The comments in that file say the words `PamContext`, `IpcHandler` and
@@ -167,8 +167,17 @@ check "it loads Omarchy's own lock service by absolute URL" "1" \
 check "no symlink inside the template (omarchy-plugin-validate:111-116)" "" \
   "$(find "$REPO/lock" -type l -print -quit)"
 if command -v omarchy >/dev/null; then
-  omarchy plugin validate "$REPO/lock" >/dev/null 2>&1
-  check "Omarchy's own plugin validation passes" "0" "$?"
+  # Validated as `stage` would leave it, not as it sits in the repo: the
+  # template's manifest is `manifest.json.in` there and becomes `manifest.json`
+  # on the way in (TEMPLATE_MANIFEST in bin/omarchy-face-lock), because a
+  # marketplace repository may hold exactly one plugin and a second
+  # manifest.json under lock/ made this one look like two.
+  staged_probe=$(mktemp -d /tmp/omarchy-face-g6-stage.XXXXXX)
+  cp -a "$REPO/lock/." "$staged_probe/"
+  mv -T "$staged_probe/manifest.json.in" "$staged_probe/manifest.json"
+  omarchy plugin validate "$staged_probe" >/dev/null 2>&1
+  check "Omarchy's own plugin validation passes on the staged copy" "0" "$?"
+  rm -rf "$staged_probe"
 fi
 
 # =============================================================================

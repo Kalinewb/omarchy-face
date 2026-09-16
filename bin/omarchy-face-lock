@@ -48,6 +48,12 @@ export LC_ALL=C
 
 PLUGIN_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 TEMPLATE=$PLUGIN_DIR/lock
+# The template carries its manifest as `manifest.json.in`, and `stage` renames
+# it on the way in. Not a whim: the plugin marketplace requires a repository to
+# hold exactly ONE plugin, with one manifest.json at its root, and a second one
+# under lock/ made this repo look like two. The staged copy is a real plugin
+# with a real manifest.json; the thing in the repo is a template for it.
+TEMPLATE_MANIFEST=manifest.json.in
 CLONE_ID=graveklar.face-lock
 SOURCE_ID=omarchy.lock
 
@@ -326,10 +332,18 @@ recover_disable() { # recover_disable <reason>  -> 0 when the status was written
 # clone enabled, restart the shell, for ever. The manifest's version is a
 # literal in the template, bumped by hand when the wrapper changes; that is
 # exactly how a Face update reaches the staged copy.
+# Is the staged copy what this template would produce? One file has two names
+# across the two (see TEMPLATE_MANIFEST), so the recursive compare skips both
+# and that pair is checked on its own.
+template_matches_staged() { # template_matches_staged <template> <staged>
+  diff -rq --exclude=manifest.json --exclude="$TEMPLATE_MANIFEST" "$1" "$2" >/dev/null 2>&1 &&
+    cmp -s "$1/$TEMPLATE_MANIFEST" "$2/manifest.json"
+}
+
 do_stage() {
   local temp previous
   refuse_if_locked
-  [[ -d $TEMPLATE && -f $TEMPLATE/manifest.json ]] || die no_template
+  [[ -d $TEMPLATE && -f $TEMPLATE/$TEMPLATE_MANIFEST ]] || die no_template
   mkdir -p "$PLUGINS_DIR" 2>/dev/null || die plugins_dir_unwritable
 
   # A dot-prefixed name, because the plugin watcher maps dot entries to no
@@ -342,6 +356,12 @@ do_stage() {
   # attributes onto the target, and mktemp's 0700 is not a mode a plugin folder
   # should keep.
   chmod 0755 "$temp" 2>/dev/null
+
+  # What makes the copy a plugin rather than a template. Before the validator
+  # below, which would otherwise be handed a folder with no manifest at all.
+  mv -T "$temp/$TEMPLATE_MANIFEST" "$temp/manifest.json" 2>/dev/null || {
+    rm -rf "$temp"; die stage_failed
+  }
 
   # Validated before it lands, never after: validating the installed copy is
   # validating the damage, and by then the reload has already run.
@@ -388,12 +408,12 @@ case $verb in
     # feature is on, and it is the only routine call that can write the plugins
     # folder -- which is why it runs then and not while a popup is open.
     refuse_if_locked
-    [[ -d $TEMPLATE && -f $TEMPLATE/manifest.json ]] || die no_template
+    [[ -d $TEMPLATE && -f $TEMPLATE/$TEMPLATE_MANIFEST ]] || die no_template
 
     # `diff -rq`, not `cmp -r`: cmp has no recursive mode, and diff's exit codes
     # are exactly the three answers this needs -- 0 identical, 1 different,
     # 2 could not tell (a missing tree).
-    if [[ -d $STAGED ]] && diff -rq "$TEMPLATE" "$STAGED" >/dev/null 2>&1; then
+    if [[ -d $STAGED ]] && template_matches_staged "$TEMPLATE" "$STAGED"; then
       ok
     fi
 

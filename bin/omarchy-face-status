@@ -577,7 +577,13 @@ lock_staged=false
 # (§9.4: 0 identical, 1 different, 2 could not tell).
 lock_stale=false
 if [[ $lock_staged == true && -d $PLUGIN_DIR/lock ]]; then
-  diff -rq "$PLUGIN_DIR/lock" "$PLUGINS_DIR/graveklar.face-lock" >/dev/null 2>&1 || lock_stale=true
+  # The same comparison `sync` makes, and the same allowance: the template holds
+  # its manifest as `manifest.json.in` and the staged copy as `manifest.json`,
+  # so that one pair is compared by name rather than by the recursive walk.
+  { diff -rq --exclude=manifest.json --exclude=manifest.json.in \
+      "$PLUGIN_DIR/lock" "$PLUGINS_DIR/graveklar.face-lock" >/dev/null 2>&1 &&
+    cmp -s "$PLUGIN_DIR/lock/manifest.json.in" \
+      "$PLUGINS_DIR/graveklar.face-lock/manifest.json"; } || lock_stale=true
 fi
 
 lock_visible=false

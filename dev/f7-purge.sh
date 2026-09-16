@@ -316,7 +316,9 @@ seed_plugins() {
   rm -rf "$PLUGINS"
   mkdir -p "$PLUGINS/graveklar.face" "$PLUGINS/graveklar.face-lock"
   cp "$REPO/manifest.json" "$PLUGINS/graveklar.face/"
-  cp "$REPO/lock/manifest.json" "$PLUGINS/graveklar.face-lock/"
+  # Staged, so it is a manifest.json here even though the template calls it
+  # manifest.json.in (see TEMPLATE_MANIFEST in bin/omarchy-face-lock).
+  cp "$REPO/lock/manifest.json.in" "$PLUGINS/graveklar.face-lock/manifest.json"
   # The dot-directories a `stage` interrupted half way leaves behind. §10.3
   # asserts the whole `.graveklar.face*` glob is empty afterwards, which is
   # wider than the `.bak` §10.2 names -- so the view's last `rm -rf` is wider too.
