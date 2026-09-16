@@ -115,6 +115,9 @@ cannot reach. While the screen is locked, and only then, Face registers a Hyprla
 on Enter that passes the key straight on to the password field and also tells Face it was
 pressed. It is removed when the lock ends, and your own `bindings.lua` is never touched.
 An Enter that submits a typed password is recognised as one and starts no face check.
+If Enter ever stopped reaching the password field while locked, switch to a text console
+(Ctrl+Alt+F2), log in, and remove the binding:
+`hyprctl eval 'for _, b in ipairs(_G.omarchy_face_enter_binds or {}) do b:unbind() end'`.
 
 **After an update, and at login,** Face checks itself and tells you if something stopped
 working, rather than leaving you to find out at a lock screen. It puts two small hooks in

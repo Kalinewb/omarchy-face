@@ -326,6 +326,13 @@ check "the shipped Lua binds both Enters, locked and non-consuming" "true" \
 check "…and raises an event, never a command" "0" \
   "$(code | grep -c 'dsp.exec')"
 
+step "GATE: a config reload inside a lock arms Enter again"
+out=$(run_lock enter-reload "$root/fake")
+check "start, reload while unlocked (nothing), lock, reload (again), unlock" \
+  "disarm arm arm disarm" "$(evals)"
+note "monitor daemons reload Hyprland's config on every display wake, so without"
+note "this Enter works only until a lock first blanks"
+
 step "GATE: Enter on a lit lock screen"
 out=$(run_lock enter-lit "$root/fake")
 echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"

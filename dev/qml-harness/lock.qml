@@ -369,6 +369,19 @@ ShellRoot {
         ])
         break
 
+      // A config reload inside a lock drops the binding; it is registered
+      // again. Outside a lock, a reload registers nothing.
+      case "enter-reload":
+        rootObj.play([
+          { after: 800,  run: function () { wrapper.hyprlandEvent("configreloaded", "") } },
+          { after: 500,  run: function () { rootObj.stock().beginLock() } },
+          { after: 800,  run: function () { wrapper.hyprlandEvent("configreloaded", "") } },
+          { after: 800,  run: function () { rootObj.stock().passwordUnlock() } },
+          { after: 800,  run: function () {} },
+          done
+        ])
+        break
+
       // The binding exists only while a lock does.
       case "enter-arming":
         rootObj.play([

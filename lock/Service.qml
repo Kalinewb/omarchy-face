@@ -379,8 +379,8 @@ Item {
   //
   // It is registered when a lock begins and removed when the lock ends, so an
   // unlocked session has no binding on Enter at all. It does not live in the
-  // user's bindings.lua, so nothing of the user's is edited. A config reload
-  // drops it, and it stays dropped until the next lock (see the handler below).
+  // user's bindings.lua, so nothing of the user's is edited, and a config reload
+  // (which drops runtime bindings) is answered by registering it again.
   //
   // WHAT THIS DOES NOT CHANGE. Any process running as this account can raise
   // the same event with `hyprctl dispatch`, exactly as it can already produce a
@@ -487,17 +487,28 @@ Item {
   Connections {
     target: Hyprland
     function onRawEvent(event) {
-      if (!event) return
-      if (event.name === "custom" && event.data === root.enterEvent) root.enterPressed()
-      // A config reload drops the binding, and it is deliberately NOT put back
-      // until the next lock. `non_consuming` is what keeps Enter reaching the
-      // password field; if a Hyprland ever stopped honouring it under a session
-      // lock, `hyprctl reload` from a TTY has to be a way to get Enter back.
-      // Losing Enter-for-face until the next lock is the cheaper failure.
-      else if (event.name === "configreloaded" && root.enterArmed) {
-        root.enterArmed = false
-        root.log("Hyprland reloaded its config: Enter is plain Enter until the next lock")
-      }
+      if (event) root.hyprlandEvent(String(event.name), String(event.data))
+    }
+  }
+
+  // A config reload drops every runtime binding (measured: `hyprctl reload`
+  // takes a registered binding's count from 1 to 0 and emits `configreloaded`),
+  // and on a lock screen reloads are not rare: monitor daemons such as
+  // hyprmoncfgd reload Hyprland's config when the display wakes -- which is
+  // every blank and wake of every lock. So the binding is registered again, or
+  // Enter would work only in the five seconds before a lock first blanks.
+  //
+  // An earlier revision did NOT re-register, so that `hyprctl reload` from a
+  // TTY would get a swallowed Enter back if a Hyprland ever stopped honouring
+  // `non_consuming` under a lock. That trade was wrong for the same reason, and
+  // the way back is now the README's one-line `hyprctl eval` unbind instead.
+  // A function rather than inline, so the offscreen suite can deliver a reload
+  // without reloading the compositor it runs in.
+  function hyprlandEvent(name, data) {
+    if (name === "custom" && data === root.enterEvent) root.enterPressed()
+    else if (name === "configreloaded" && root.enterArmed && root.lockedNow) {
+      root.log("Hyprland reloaded its config: arming Enter again")
+      root.armEnter()
     }
   }
 
