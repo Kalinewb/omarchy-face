@@ -171,6 +171,15 @@ check "…with three appearances, which is the most" "true" "$(field full "$out"
 check "…Sudo on" "true" "$(field sudoOn "$out")"
 check "…Lock on, even though the feature is off" "true" "$(field lockOn "$out")"
 check "…and the feature reported as off" "false" "$(field lockCaption "$out")"
+# The same pair for Sudo, which had the switch but never the caption: a person
+# could be given Sudo, watch sudo keep asking for a password, and find nothing
+# on this screen that said the machine-wide switch was off (post-ship revision).
+check "…with face for sudo on machine-wide, Sudo needs no caption" "true" \
+  "$(field sudoCaption "$out")"
+out=$(run_case person FACE_HARNESS_PERSON=anna FACE_HARNESS_SUDO=0)
+check "…and with it off, the Sudo switch says so" "false" "$(field sudoCaption "$out")"
+check "…while the person's own Sudo is still on, and still settable" "true" \
+  "$(field sudoOn "$out")"
 
 out=$(run_case person FACE_HARNESS_PERSON=nobody)
 check "a person who is not in the store renders a reason" "false" "$(field found "$out")"

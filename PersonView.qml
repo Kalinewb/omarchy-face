@@ -49,6 +49,11 @@ Column {
   readonly property string possessive: view.owner ? "Your" : view.label + "'s"
   readonly property var config: panel ? panel.config : ({})
   readonly property bool lockFeature: !!config.lock
+  // The machine-wide switch, which is a different question from this person's:
+  // this one says who may, that one says whether a face is accepted for sudo on
+  // this machine at all. Read here for the caption under the Sudo switch --
+  // Lock has had one since it shipped and Sudo never did (post-ship revision).
+  readonly property bool sudoFeature: !!config.sudo
   readonly property bool full: view.appearances.length >= view.maxAppearances
   // The owner has no Remove row at all (plan-gui.md §5.2). A property rather
   // than a `visible:` expression buried in the tree, so the gate can ask.
@@ -469,8 +474,26 @@ Column {
     font.pixelSize: Style.font.caption
   }
 
-  // Shown on every person at all times; the second caption only while the
-  // feature is off (plan-gui.md §5.2).
+  // The switch above records who may; it does not put a face in sudo's PAM
+  // stack, and until the machine-wide switch is on nothing here has any
+  // effect. Lock says exactly this under its own switch and always has; Sudo
+  // said nothing, so turning it on looked like a complete act and was not
+  // (post-ship revision, found via live use -- somebody set this, watched
+  // sudo keep asking for a password, and had no way to tell why).
+  Text {
+    textFormat: Text.PlainText
+    width: parent.width
+    visible: view.person !== null && !view.sudoFeature
+    leftPadding: Style.space(6)
+    text: "Face for sudo is off — turn it on in Settings."
+    color: view.dim
+    font.family: view.fontFamily
+    font.pixelSize: Style.font.caption
+    wrapMode: Text.WordWrap
+  }
+
+  // Shown on every person at all times; the caption under it only while the
+  // feature is off (plan-gui.md §5.2) -- the same pair as Sudo above.
   Toggle {
     width: parent.width
     visible: view.person !== null

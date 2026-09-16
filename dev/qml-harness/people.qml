@@ -60,7 +60,11 @@ ShellRoot {
     property var ask: askObj
     property string personName: Quickshell.env("FACE_HARNESS_PERSON") || "anna"
     property var config: ({
-      account: "graveklar", sudo: true,
+      account: "graveklar",
+      // Both machine-wide switches are env-driven, because the caption under
+      // each per-person switch is what says the machine-wide one is off.
+      // sudo defaults ON, which is what every case before this one assumed.
+      sudo: Quickshell.env("FACE_HARNESS_SUDO") !== "0",
       lock: Quickshell.env("FACE_HARNESS_LOCK") === "1"
     })
 
@@ -247,6 +251,7 @@ ShellRoot {
           rootObj.log("sudoOn", person.permissionValue("sudo"))
           rootObj.log("lockOn", person.permissionValue("lock"))
           rootObj.log("lockCaption", person.lockFeature)
+          rootObj.log("sudoCaption", person.sudoFeature)
           rootObj.log("height", person.implicitHeight)
           Qt.exit(0)
           return
