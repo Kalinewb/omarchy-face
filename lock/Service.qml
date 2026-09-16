@@ -69,6 +69,62 @@ Item {
   readonly property var contractProperties: ["lockRequested", "pendingSessionLock",
                                              "locked", "authenticatingPassword"]
 
+  // --- the on-screen line (post-ship revision) -------------------------------
+  //
+  // Every no used to be silent, and that was the single biggest thing wrong
+  // with this feature: a check that ran and declined, a check still running,
+  // and a check that never started are pixel-identical to somebody standing at
+  // a dark screen. Months were lost to that here.
+  //
+  // What is written is Omarchy's OWN `failureMessage`, which its LockView
+  // already renders in the password field's placeholder. Nothing is drawn by
+  // this file, no surface is created, and no layer rule is asked for: the
+  // alternative was Hyprland's `above_lock`, which would let ANY process
+  // running as this account paint over the locked screen, and that is a
+  // grotesque price for a status line.
+  //
+  // `failureMessage` is deliberately NOT in contractProperties. If Omarchy
+  // renames it, the line stops and the face check carries on -- the reverse
+  // would switch face unlock off over a cosmetic property.
+  readonly property bool messageSupported:
+    stock.item !== null && ("failureMessage" in stock.item)
+
+  readonly property string stateDir:
+    (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state"))
+    + "/omarchy-face"
+
+  // Off unless somebody switched it on in Settings (`omarchy-face-lock
+  // indicator on`). Watched, so the switch takes effect on the next lock
+  // without a shell restart.
+  property bool lineOn: false
+
+  FileView {
+    id: linePref
+    path: root.stateDir + "/lock-indicator"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.lineOn = String(text()).trim() === "on"
+    onLoadFailed: root.lineOn = false
+  }
+
+  // Never over a password being checked, and never when the switch is off.
+  function showLine(text) {
+    if (!root.lineOn || !root.messageSupported || !root.lockedNow) return
+    if (stock.item.authenticatingPassword === true) return
+    stock.item.failureMessage = text
+  }
+
+  // Only ever clears this file's own line. A real "Authentication failed" from
+  // the password stack is not ours to wipe.
+  function clearLine(mine) {
+    if (!root.messageSupported || !stock.item) return
+    if (String(stock.item.failureMessage) === mine) stock.item.failureMessage = ""
+  }
+
+  readonly property string lineChecking: "Looking for your face…"
+  readonly property string lineNo: "Face not recognised — use your password."
+
   // The loaded stock instance, for a test harness to reach. Nothing outside
   // this process can: there is no IPC handler and the service has no visual
   // parent (shell.qml:921-924, authentication services are kept out of the
@@ -326,6 +382,7 @@ Item {
     root.attemptName = ""
     root.lastOutcome = "checking"
     root.log("the screen woke: one face check, in lock generation " + root.lockGeneration)
+    root.showLine(root.lineChecking)
     // Armed BEFORE the process starts, because a command that cannot be executed
     // at all fails synchronously inside the next line -- and the handler for that
     // stops this timer, which it cannot do if the timer has not been armed yet.
@@ -381,6 +438,11 @@ Item {
       // closed lid are all the same thing from here -- this lock stays locked.
       root.lastOutcome = "no"
       root.log("the face check said no (exit " + code + ")")
+      // Replaces this file's own "looking" line, so the two never stack. Left
+      // on screen: Omarchy clears it the moment a key is typed into the
+      // password field, which is exactly when it stops being true.
+      root.clearLine(root.lineChecking)
+      root.showLine(root.lineNo)
       return
     }
 
@@ -390,10 +452,12 @@ Item {
       root.lastOutcome = "stale"
       root.staleCount = root.staleCount + 1
       root.say("stale face result ignored")
+      root.clearLine(root.lineChecking)
       return
     }
 
     root.lastOutcome = "unlocked"
+    root.clearLine(root.lineChecking)
     root.say("unlocked by face: " + (who !== "" ? who : "unattributed"))
     stock.item.finishUnlock()
   }
