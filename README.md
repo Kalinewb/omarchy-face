@@ -20,9 +20,11 @@ everyday glasses, reading glasses — because an infrared camera sees those as d
 faces.
 
 **The lock screen, if you want it.** Off by default. Turn it on, lock, walk away; when
-you come back, touch a key and look at the screen. There is no face icon on the lock
-screen — it simply opens. It follows Omarchy's own lock screen as it updates, and if an
-update changes too much it steps aside, tells you, and your password works as always.
+you come back, touch a key and look at the screen. The password field says
+*Looking for your face…* while it checks, and tells you if it did not recognise you — so
+you can see it working and decide whether to wait or just type. It follows Omarchy's own
+lock screen as it updates, and if an update changes too much it steps aside, tells you,
+and your password works as always.
 
 ![Face ID's People view on a finished machine](preview.png)
 
@@ -84,9 +86,14 @@ separate calls.
 
 **The lock screen** is a second plugin, `graveklar.face-lock`, that holds no copy of
 Omarchy's lock screen: it loads *Omarchy's own* lock code and adds a face check alongside
-the password field and the fingerprint reader. Alongside, not beside: it draws nothing at
-all, because nothing can draw over a session-lock surface. There is no face icon, and no
-sign on screen that a check is running. When Omarchy updates its lock screen, the new
+the password field and the fingerprint reader. It draws nothing of its own — nothing may
+draw over a session-lock surface, and a plugin that tried would be defeating the one
+guarantee a lock screen makes. What it does instead is write a line into Omarchy's own
+password field, the same place Omarchy puts *Authentication failed*: *Looking for your
+face…* while the camera is open, and *Face not recognised — use your password.* when it
+was not you. Omarchy clears it the moment you start typing. If an Omarchy update renames
+that field the line stops and face unlock carries on without it, never the other way
+round. When Omarchy updates its lock screen, the new
 one simply runs. If an update changes the names that loader depends on, face turns itself
 off there and says why, and the lock screen keeps working exactly as Omarchy ships it.
 Face is tried when the screen **wakes**, never when you lock it — otherwise locking the
@@ -117,8 +124,17 @@ A face icon appears in the bar. Click it and work down Setup:
 2. **Build the face engine** — the howdy and dlib build above.
 3. **Record your face** — People → Add person. The first person recorded on the machine is
    its owner.
-4. **Settings → Face for sudo**, once somebody has Sudo. The lock screen is a separate
-   switch, off until you turn it on.
+4. **Give that person Sudo, or Lock screen, or both** — Person → the switches. This says
+   *who may*; on its own it changes nothing.
+5. **Settings → Face for sudo**, and **Lock screen** if you want it. This is the other
+   half, and it is the one that wires the machine: until it is on, no face is tried
+   anywhere, however many people have the permission.
+
+Both halves are needed, and that is deliberate rather than a nuisance: the per-person
+switch is a list of names, and the Settings switch is the one that edits
+`/etc/pam.d/sudo`. Each screen says when the other is missing — Settings will not turn on
+before somebody has the permission, and the Person page says when the machine-wide switch
+is off.
 
 You need an infrared camera (Face refuses to work without one), and an account that can
 already administer this machine — Face never grants more than the owner's password already
@@ -145,14 +161,26 @@ starts when the screen **wakes**, so the screen has to go dark before there is a
 wake: leave it alone for five seconds and let it black out. A key pressed while it is
 still lit does not start a check — it puts those five seconds back to the beginning, so
 tapping away at a lit lock screen is the one reliable way to never see a face check at
-all. Once it is dark, tap a key and look at the camera: the infrared light comes on within
-a second or so, and the screen opens about three seconds later.
+all. Once it is dark, tap a key and look at the camera: the password field says
+*Looking for your face…*, the infrared light comes on, and the screen opens about three
+seconds later. If that line never appears, no check was started, and the reason is the
+paragraph above rather than your face.
 
-Your password works the whole time, and it is quicker than the check. Type it straight
-away and it wins the race, the face result arrives too late and is thrown away, and a
-working face check looks exactly like one that never ran — because nothing is drawn on the
-lock screen either way. If the lid was closed, the camera was closed with it: open it and
-press a key.
+Your password works the whole time, and it is quicker than the check — so if you type it
+straight away it wins, and the face result arrives too late and is thrown away. That is
+not a fault, and with the line on screen you can now see it happen and wait a moment
+instead. If the lid was closed, the camera was closed with it: open it and press a key.
+
+**You want to know what it actually did.** Every face check for the lock screen is
+recorded by Face's root daemon, match or no, with the reason when it says no:
+
+```sh
+journalctl -t omarchy-face --since -10min
+```
+
+`lock verify matched: <name>` is a face it recognised. A line saying no gives the engine's
+own reason — gave up, too dark, timed out. Nothing at all means no check was ever started,
+which sends you back to the blanking rule above.
 
 **The lock screen came back looking like Omarchy's own.** That is on purpose. If Face's
 copy of the lock screen cannot run — after an Omarchy update, or a bad Face update — Face
