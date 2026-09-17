@@ -235,16 +235,30 @@ check "removal counts seven helpers, the daemon and the policy" \
               \$(jq -r '.removal.daemon' '$status_file') == true &&
               \$(jq -r '.removal.policy' '$status_file') == true ]]"
 
-step "a second install-system is a no-op, not a version_mismatch"
-if ((bound_plugin == 0)); then
-  note "skipped: the account's plugin folder is not this checkout (run ./install.sh first)"
+# The installer text with pins for DIR's files, as update-pins would generate
+# it. A release of other bytes is authorised with other text; this is how the
+# tests below get a correctly pinned installer for a folder that is not $REPO.
+installer_for() { # installer_for <plugin dir>
+  local dir=$1 name block
+  block="declare -A PINS=("$'\n'
+  while read -r name; do
+    block+="  [$name]=$(sha256sum -- "$dir/system/$name" | cut -d' ' -f1)"$'\n'
+  done < <(sed -n 's/^[[:space:]]*\[\([^]]*\)\]=.*/\1/p' "$REPO/system/install.sh")
+  block+=")"
+  python3 -c 'import re,sys; s=open(sys.argv[1]).read(); print(re.sub(r"(# pins:begin\n).*?(\n# pins:end)", lambda m: m.group(1)+sys.argv[2]+m.group(2), s, flags=re.S), end="")' \
+    "$REPO/system/install.sh" "$block"
+}
+
+step "a second install is a no-op, not a version_mismatch"
+if false; then
+  :
 else
 update_err=$(mktemp)
-update_out=$(/usr/local/bin/omarchy-face-admin install-system 2>"$update_err")
+update_out=$(/bin/bash -c "$(cat "$REPO/system/install.sh")" omarchy-face-install "$REPO" "$ACCOUNT" 2>"$update_err")
 update_rc=$?
 echo "  ${DIM}exit $update_rc${RESET}  $update_out"
 [[ -s $update_err ]] && echo "  ${DIM}stderr:${RESET} $(cat "$update_err")"
-check "install-system exits 0 on an up-to-date machine" test "$update_rc" -eq 0
+check "the installer exits 0 on an up-to-date machine" test "$update_rc" -eq 0
 check "it changed nothing" bash -c "[[ \$(jq -r '.changed | length' <<<'$update_out') == 0 ]]"
 fi
 
@@ -255,12 +269,17 @@ echo "  ${DIM}PKEXEC_UID=65534 … purge${RESET}  $refuse_out"
 check "another user's pkexec is not_owner, whatever polkit authenticated" \
   bash -c "[[ \$(jq -r '.error' <<<'$refuse_out') == not_owner ]]"
 
-refuse_out=$(PKEXEC_UID=$owner_uid /usr/local/bin/omarchy-face-admin install-system --first-install /tmp x 2>/dev/null)
-echo "  ${DIM}PKEXEC_UID=$owner_uid … install-system --first-install /tmp x${RESET}  $refuse_out"
-check "--first-install is unreachable through Face's own polkit action" \
+refuse_out=$(PKEXEC_UID=$owner_uid /usr/local/bin/omarchy-face-admin install-system --verified-snapshot /run/omarchy-face-install.x "$ACCOUNT" 2>/dev/null)
+echo "  ${DIM}PKEXEC_UID=$owner_uid … install-system --verified-snapshot …${RESET}  $refuse_out"
+check "--verified-snapshot is unreachable through Face's own polkit action" \
   bash -c "[[ \$(jq -r '.error' <<<'$refuse_out') == not_owner ]]"
 
-if ((bound_plugin == 1)); then
+refuse_out=$(PKEXEC_UID=$owner_uid /usr/local/bin/omarchy-face-admin install-system 2>/dev/null)
+echo "  ${DIM}PKEXEC_UID=$owner_uid … install-system${RESET}  $refuse_out"
+check "the helper never installs from the plugin folder on its own" \
+  bash -c "[[ \$(jq -r '.error' <<<'$refuse_out') == use_installer ]]"
+
+if true; then
   # A plugin folder whose system/ holds a symlink. The snapshot is taken before
   # anything is read, and it is the snapshot that is rejected -- so this is the
   # TOCTOU hardening of §5.1 being exercised, not a check on the plugin folder.
@@ -269,18 +288,28 @@ if ((bound_plugin == 1)); then
   cp "$REPO/system/." "$evil/system/" -a
   rm -f "$evil/system/omarchy-face-camera"
   ln -s /etc/shadow "$evil/system/omarchy-face-camera"
-  mount --bind "$evil" "$PLUGINS/graveklar.face"
-  refuse_out=$(/usr/local/bin/omarchy-face-admin install-system 2>/dev/null)
-  echo "  ${DIM}install-system with a symlink in system/${RESET}  $refuse_out"
+  refuse_out=$(/bin/bash -c "$(cat "$REPO/system/install.sh")" omarchy-face-install "$evil" "$ACCOUNT" 2>/dev/null)
+  echo "  ${DIM}installer with a symlink in system/${RESET}  $refuse_out"
   check "a symlink in the snapshot is refused" \
     bash -c "[[ \$(jq -r '.error' <<<'$refuse_out') == snapshot_unsafe ]]"
-  umount "$PLUGINS/graveklar.face"
+
+  # A helper whose bytes are not the pinned release: what a program running as
+  # the account could have swapped in before root copied the folder.
+  swapped=$(mktemp -d)
+  mkdir -p "$swapped/system"
+  cp "$REPO/system/." "$swapped/system/" -a
+  printf '\n# not the reviewed release\n' >>"$swapped/system/omarchy-face-gate"
+  refuse_out=$(/bin/bash -c "$(cat "$REPO/system/install.sh")" omarchy-face-install "$swapped" "$ACCOUNT" 2>/dev/null)
+  echo "  ${DIM}installer with a modified omarchy-face-gate${RESET}  $refuse_out"
+  check "a file that does not match its pin is refused" \
+    bash -c "[[ \$(jq -r '.error' <<<'$refuse_out') == snapshot_modified ]]"
+  check "no snapshot is left in /run" bash -c "no_glob() { ! compgen -G \"\$1\" >/dev/null; }; no_glob '/run/omarchy-face-install.*'"
 
   # A group-writable /usr/local/bin is a way to replace a file PAM runs as root.
   chmod g+w /usr/local/bin
-  refuse_out=$(/usr/local/bin/omarchy-face-admin install-system 2>/dev/null)
+  refuse_out=$(/bin/bash -c "$(cat "$REPO/system/install.sh")" omarchy-face-install "$REPO" "$ACCOUNT" 2>/dev/null)
   chmod g-w /usr/local/bin
-  echo "  ${DIM}install-system into a group-writable /usr/local/bin${RESET}  $refuse_out"
+  echo "  ${DIM}installer into a group-writable /usr/local/bin${RESET}  $refuse_out"
   check "an unsafe destination directory is refused" \
     bash -c "[[ \$(jq -r '.error' <<<'$refuse_out') == install_dir_unsafe ]]"
 
@@ -291,16 +320,14 @@ if ((bound_plugin == 1)); then
   mkdir -p "$older/system"
   cp "$REPO/system/." "$older/system/" -a
   sed -i 's/omarchy-face-version: .*/omarchy-face-version: 1.0.0/' "$older"/system/*
-  mount --bind "$older" "$PLUGINS/graveklar.face"
-  refuse_out=$(/usr/local/bin/omarchy-face-admin install-system 2>/dev/null)
-  echo "  ${DIM}install-system from an older release version${RESET}  $refuse_out"
+  refuse_out=$(/bin/bash -c "$(installer_for "$older")" omarchy-face-install "$older" "$ACCOUNT" 2>/dev/null)
+  echo "  ${DIM}correctly pinned installer for an older release version${RESET}  $refuse_out"
   check "an older release version is version_mismatch, not a downgrade" \
     bash -c "[[ \$(jq -r '.error' <<<'$refuse_out') == version_mismatch ]]"
-  umount "$PLUGINS/graveklar.face"
   check "the refused installs changed nothing" \
     bash -c "diff -q '$REPO/system/omarchy-face-camera' /usr/local/bin/omarchy-face-camera >/dev/null &&
-             [[ \$(head -40 /usr/local/bin/omarchy-face-admin | sed -n 's/.*omarchy-face-version: //p') == '2.0.2' ]]"
-  rm -rf "$evil" "$older"
+             [[ \$(head -40 /usr/local/bin/omarchy-face-admin | sed -n 's/.*omarchy-face-version: //p') == '2.0.3' ]]"
+  rm -rf "$evil" "$older" "$swapped"
 else
   note "refusal tests on the plugin folder skipped: it is not this checkout"
 fi

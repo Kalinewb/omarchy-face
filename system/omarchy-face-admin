@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 2.0.2
+# omarchy-face-version: 2.0.3
 #
 # Every privileged thing Face does, behind one polkit action
 # (plan-engine.md §8.2, plan-merged.md §2.3).
@@ -25,9 +25,11 @@
 # WHO MAY RUN THIS. The polkit action is auth_self, so on a machine with more
 # than one login *any* active user can authenticate as themselves and get this
 # file running as root. That is only safe because of the caller check below:
-# the uid pkexec reports must be the account Face was set up for. Without it,
-# a second user could point install-system at a plugin folder of their own and
-# have root install their scripts into /usr/local/bin.
+# the uid pkexec reports must be the account Face was set up for.
+#
+# install-system is not reachable through that action at all: it only accepts a
+# snapshot from a caller that is already root, which is system/install.sh after
+# it has checked every file against the pins in its authorised text.
 
 set -uo pipefail
 unset IFS BASH_ENV ENV CDPATH
@@ -251,32 +253,11 @@ cleanup_snapshot() {
 }
 trap cleanup_snapshot EXIT
 
-# The plugin folder is user-writable, so reading a header out of it and copying
-# the same path afterwards is a check/copy race: a process running as the owner
-# can swap the file between the two reads (plan-engine.md §5.1, round-3
-# hardening). So: copy first, into a directory only root can have made, and from
-# that point never look at the plugin folder again. What was checked is what
-# gets installed.
-# Sets $snapshot_dir. Every function below that can `die` sets a global instead
-# of printing its answer, because a $(…) around one of them runs it in a
-# subshell: `die` would exit that subshell, its JSON would land in the variable
-# being assigned, and the caller would carry on with an error document where it
-# expected a path.
-take_snapshot() { # take_snapshot <plugin dir>
-  local plugin_dir=$1 entry name
-  [[ -d $plugin_dir/system ]] || die "plugin_missing"
-  snapshot_dir=$(mktemp -d /run/omarchy-face-install.XXXXXX) || die "snapshot_failed"
-  chmod 0700 "$snapshot_dir" || die "snapshot_failed"
-  # The ten files by name, not the whole directory: the install is defined by
-  # the table, so anything else in system/ -- a README, a stray subdirectory,
-  # the installer itself -- has no business being copied, let alone failing the
-  # whole install for being the wrong kind of file.
-  for entry in "${SYSTEM_FILES[@]}"; do
-    name=${entry%%:*}
-    cp -a --no-dereference "$plugin_dir/system/$name" "$snapshot_dir/$name" 2>/dev/null ||
-      die "snapshot_incomplete"
-  done
-}
+# Set by install-system from the snapshot install.sh verified. Every function
+# below that can `die` sets a global instead of printing its answer, because a
+# $(…) around one of them runs it in a subshell: `die` would exit that
+# subshell, its JSON would land in the variable being assigned, and the caller
+# would carry on with an error document where it expected a path.
 
 # Everything in the snapshot must be a plain file. `cp -a --no-dereference`
 # copies a symlink AS a symlink, so a link in the plugin folder arrives here as
@@ -417,35 +398,6 @@ install_from_snapshot() { # install_from_snapshot <snapshot dir>
     install -o root -g root -m "$mode" "$source" "$dest.tmp" || die "install_failed"
     mv -f "$dest.tmp" "$dest" || { rm -f "$dest.tmp"; die "install_failed"; }
   done
-}
-
-# The plugin directory of the account, never a path the caller chose. Both
-# callers land here: install-system derives it from the config, and the first
-# install passes the one the GUI was loaded from -- checked the same way, so a
-# folder belonging to somebody else is refused in both directions.
-check_plugin_dir() { # check_plugin_dir <dir> <account>
-  local dir=$1 who=$2 owner_uid account_uid
-  [[ $dir == /* ]] || die "plugin_missing"
-  # A symlink here would make the ownership check below a check on the link's
-  # target -- which is a different directory, possibly one the account does not
-  # own. Only the account can plant such a link in its own home, so this is not
-  # a boundary being crossed; it is the check meaning what it says.
-  [[ ! -L $dir && ! -L $dir/system ]] || die "plugin_unsafe"
-  [[ -d $dir/system ]] || die "plugin_missing"
-  account_uid=$(id -u -- "$who" 2>/dev/null) || die "unknown_account"
-  owner_uid=$(stat -Lc %u "$dir/system" 2>/dev/null) || die "plugin_missing"
-  # root-owned is fine (a system-wide install); the account's own is the normal
-  # case. Anything else is another user's directory, and root must not install
-  # scripts out of it.
-  [[ $owner_uid == 0 || $owner_uid == "$account_uid" ]] || die "plugin_not_owned"
-}
-
-# Sets $plugin_dir.
-plugin_dir_for_account() { # plugin_dir_for_account <account>
-  local who=$1 home
-  home=$(getent passwd "$who" | cut -d: -f6)
-  [[ -n $home ]] || die "unknown_account"
-  plugin_dir=$home/.config/omarchy/plugins/graveklar.face
 }
 
 # Appends to the global $warnings. systemd is not always reachable -- an install
@@ -2292,43 +2244,54 @@ store_verb() { # store_verb <verb> [args…]  (stdin is passed through)
 case $verb in
 
   install-system)
-    # Two entry points, one procedure.
+    # One entry point, called only by system/install.sh:
     #
-    #   install-system                      the update path (plan-engine.md §5.1)
-    #   install-system --first-install DIR ACCOUNT
-    #                                       the bootstrap, called by system/install.sh
+    #   install-system --verified-snapshot DIR ACCOUNT
     #
-    # --first-install is refused when PKEXEC_UID is set, so it cannot be reached
-    # through Face's own auth_self action. Otherwise a second user on this
-    # machine could name their own directory as the plugin folder and have root
-    # install its contents. The only way in is from something that is already
-    # root -- which is install.sh, running under polkit's generic (auth_admin)
-    # exec action.
+    # install.sh has already copied the ten files into a root-only directory
+    # under /run and checked every byte against the SHA-256 pins in its own
+    # authorised text, and it runs THIS helper out of that snapshot. So nothing
+    # here reads the plugin folder: that folder is writable by the account and by
+    # anything running as it, and a file swapped before a copy is taken would
+    # otherwise be installed as root.
+    #
+    # There used to be a second form with no arguments, reached through Face's
+    # own auth_self action, that took its own snapshot of the plugin folder for
+    # updates. The installed helper cannot know a newer release's pins, so that
+    # snapshot could not be checked; updates now go through install.sh and the
+    # administrator prompt like the first install.
+    #
+    # Refused when PKEXEC_UID is set, so it cannot be reached through Face's own
+    # action: only something that is already root -- install.sh, under polkit's
+    # generic auth_admin exec action -- can hand over a snapshot.
+    [[ ${1:-} == --verified-snapshot ]] || die "use_installer"
+    [[ -z $caller_uid ]] || die "not_owner"
+    given_snapshot=${2:-}
+    account=${3:-}
+    [[ -n $given_snapshot && -n $account ]] || die "bad_arguments"
+    [[ $account != root ]] || die "unknown_account"
+    id -u -- "$account" >/dev/null 2>&1 || die "unknown_account"
     first_install=0
-    plugin_dir=""
-    if [[ ${1:-} == --first-install ]]; then
-      [[ -z $caller_uid ]] || die "not_owner"
-      [[ ! -e $CONFIG_FILE ]] || die "already_installed"
-      first_install=1
-      plugin_dir=${2:-}
-      account=${3:-}
-      [[ -n $plugin_dir && -n $account ]] || die "bad_arguments"
-      [[ $account != root ]] || die "unknown_account"
-      id -u -- "$account" >/dev/null 2>&1 || die "unknown_account"
-    else
-      assert_owner
-      [[ -n $account ]] || die "not_installed"
-      plugin_dir_for_account "$account"
+    [[ -e $CONFIG_FILE ]] || first_install=1
+    if ((!first_install)); then
+      [[ $(config_get account) == "$account" ]] || die "not_owner"
     fi
 
-    check_plugin_dir "$plugin_dir" "$account"
+    # The snapshot has to be what install.sh made: a directory directly under
+    # /run, root's, 0700, and not a link to anywhere else.
+    [[ $given_snapshot =~ ^/run/omarchy-face-install\.[A-Za-z0-9]+$ ]] || die "snapshot_unsafe"
+    [[ -d $given_snapshot && ! -L $given_snapshot ]] || die "snapshot_unsafe"
+    [[ $(stat -c '%u %a' -- "$given_snapshot" 2>/dev/null) == "0 700" ]] || die "snapshot_unsafe"
+
     # Both paths, and whoever the caller is. A machine whose Face account is not
-    # an administrator would make this verb -- which installs scripts that phase
-    # 5 runs as root from sudo's PAM stack -- a way to become root with an
-    # ordinary user's own password, because the action is auth_self.
+    # an administrator would make these helpers -- which phase 5 runs as root
+    # from sudo's PAM stack -- a way to become root with an ordinary user's
+    # own password, because Face's action is auth_self.
     assert_account_is_admin "$account"
 
-    take_snapshot "$plugin_dir"
+    # Adopted, so the EXIT trap removes it on every path. This helper is running
+    # out of it; bash keeps reading a script whose file has been unlinked.
+    snapshot_dir=$given_snapshot
     tmp=$snapshot_dir
     verify_snapshot_shape "$tmp"
     snapshot_version "$tmp"

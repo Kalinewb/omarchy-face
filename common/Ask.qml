@@ -84,9 +84,10 @@ Item {
     return (dev && !devPkexec ? [helper] : ["pkexec", helper]).concat(args || [])
   }
 
-  // The first install, and the only call that does not go through our own
-  // polkit action -- the helper it would be annotated on does not exist yet
-  // (plan-engine.md §5.1).
+  // Every install of the system half -- first install, update and repair -- and
+  // the only call that does not go through our own polkit action. The first
+  // time, the helper it would be annotated on does not exist yet; after that,
+  // only this authorised text can carry the pins for a newer release's files.
   //
   // The script's TEXT is passed inline rather than its path, so what polkit
   // authorised is exactly what runs: a `pkexec /bin/bash <path>` would have

@@ -1,5 +1,5 @@
 # omarchy-face v2
-# omarchy-face-version: 2.0.2
+# omarchy-face-version: 2.0.3
 #
 # Socket-activated, idle-exiting, and allowed to do exactly two things: open the
 # infrared camera and read the face models (plan-engine.md §6).

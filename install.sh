@@ -27,6 +27,10 @@ SRC="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 MODE=${1:-}
 
+# Stale pins would make every install of the system half refuse for everyone on
+# this commit, so they are caught before anything is synced.
+"$SRC/dev/check-pins.sh" || exit 1
+
 # Validate a staging copy BEFORE anything lands in the watched folder. Validating
 # $DEST afterwards is validating the damage: by then the broken plugin is
 # installed and the reload has already run, and the exit code only tells you so.

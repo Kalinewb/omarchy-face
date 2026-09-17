@@ -150,9 +150,10 @@ omarchy plugin add https://github.com/Kalinewb/omarchy-face.git --enable
 
 A face icon appears in the bar. Click it and work down Setup:
 
-1. **Install Face's system files** — one password dialog. It is the only one that says it
-   wants to run `/bin/bash` as the super user, because Face's own helpers do not exist yet
-   to ask with their own message; the panel warns you before the dialog appears.
+1. **Install Face's system files** — one password dialog. It says it wants to run
+   `/bin/bash` as the super user, because Face's own helpers do not exist yet to ask with
+   their own message; the panel warns you before the dialog appears. **Updating** those
+   files later asks the same way, for the reason below.
 2. **Build the face engine** — the howdy and dlib build above.
 3. **Record your face** — People → Add person. The first person recorded on the machine is
    its owner.
@@ -171,6 +172,15 @@ is off.
 You need an infrared camera (Face refuses to work without one), and an account that can
 already administer this machine — Face never grants more than the owner's password already
 grants.
+
+**What root installs, and why updates ask as administrator.** The plugin folder is yours
+to write, and so is it for any program running as you — including while that dialog is on
+screen. So root does not install from it. It copies the ten system files into a directory
+only root can write, checks every byte against a SHA-256 written into the installer text
+you authorised, and installs only that checked copy; a file changed at any point before
+the copy is refused and nothing is installed. The helpers already on the machine cannot
+know a newer release's checksums, so an update has to come with its own authorised
+installer, which is why it uses the administrator dialog rather than Face's own.
 
 ## The views
 

@@ -179,7 +179,9 @@ Column {
   spacing: Style.space(8)
 
   // The installer is read from disk rather than embedded here, and it is passed
-  // to pkexec as text (plan-engine.md §5.1). preload, because the read has to
+  // to pkexec as text (plan-engine.md §5.1). What root trusts is not this read
+  // but the SHA-256 pins inside that text, checked against root's own copy of
+  // every file it installs. preload, because the read has to
   // have happened by the time somebody clicks.
   FileView {
     id: installScript
@@ -322,6 +324,8 @@ Column {
     var code = result.parsed && result.parsed.error ? String(result.parsed.error) : "it did not say why"
     if (code === "version_mismatch")
       return "The installed system files do not match this plugin version — reinstall the plugin."
+    if (code === "snapshot_modified" || code === "snapshot_incomplete" || code === "snapshot_unsafe")
+      return "This plugin's system files are not the released ones, so nothing was installed — reinstall the plugin."
     if (code === "not_owner") return "Face is set up for another account on this machine."
     // Face's own prompt authenticates whoever is asking, not an administrator,
     // so an account that cannot already become root must not be able to install
@@ -397,8 +401,6 @@ Column {
     var argv = null
     if (row.fix === "purge-legacy") {
       argv = panel.ask.adminArgv(["purge-legacy"])
-    } else if (row.fix === "install-system") {
-      argv = panel.ask.adminArgv(["install-system"])
     } else if (row.fix === "install-engine") {
       argv = panel.ask.adminArgv(["install-engine"])
     } else if (row.fix === "sudo-on" || row.fix === "sudo-off") {
@@ -409,7 +411,10 @@ Column {
       argv = panel.ask.lockArgv(["enable"])
     } else if (row.fix === "lock-sync") {
       argv = panel.ask.lockArgv(["sync"])
-    } else if (row.fix === "install-first") {
+    } else if (row.fix === "install-first" || row.fix === "install-system") {
+      // An update installs through the same checked installer as the first
+      // install: only its authorised text can carry the new release's pins, so
+      // the helper already installed cannot vouch for newer files by itself.
       var script = String(installScript.text() || "")
       if (script.trim() === "") {
         view.noteRow = row.id
