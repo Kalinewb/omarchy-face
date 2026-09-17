@@ -36,4 +36,18 @@ if n != 1:
 open(p, "w").write(new)
 PY
 
-echo "pins updated for ${#names[@]} files"
+# And the installer's own checksum, published in the README's install command.
+# After the pins, because the pins are part of the installer.
+installer=$(sha256sum -- system/install.sh | cut -d' ' -f1)
+python3 - "$installer" <<'PY'
+import sys, re
+sha = sys.argv[1]
+p = "README.md"
+s = open(p).read()
+new, n = re.subn(r'echo "(?:[0-9a-f]{64}|INSTALL_SHA256)  \$t/install\.sh"', 'echo "%s  $t/install.sh"' % sha, s)
+if n != 1:
+    sys.exit("update-pins: the install command's checksum was not found exactly once in README.md")
+open(p, "w").write(new)
+PY
+
+echo "pins updated for ${#names[@]} files; installer checksum $installer written to README.md"

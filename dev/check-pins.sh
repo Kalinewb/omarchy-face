@@ -29,8 +29,16 @@ for extra in "${!pin[@]}"; do
   echo "check-pins: $extra is pinned but not in SYSTEM_FILES" >&2; bad=1
 done
 
+installer=$(sha256sum -- system/install.sh | cut -d' ' -f1)
+published=$(grep -oE 'echo "[0-9a-f]{64}  \$t/install\.sh"' README.md | grep -oE '[0-9a-f]{64}')
+if [[ $(grep -cE 'echo "[0-9a-f]{64}  \$t/install\.sh"' README.md) != 1 ]]; then
+  echo "check-pins: README.md must carry the install command's checksum exactly once" >&2; bad=1
+elif [[ $published != "$installer" ]]; then
+  echo "check-pins: the checksum in README.md's install command is not system/install.sh's" >&2; bad=1
+fi
+
 if ((bad)); then
   echo "check-pins: run dev/update-pins.sh" >&2
   exit 1
 fi
-echo "check-pins: ok — ${#names[@]} files match"
+echo "check-pins: ok — ${#names[@]} files and the published installer checksum match"

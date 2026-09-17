@@ -136,8 +136,10 @@ step "no terminal anywhere in the GUI (plan-merged.md §4 phase 2)"
 check "no terminal launcher in any .qml" \
   bash -c "! sed 's#^[[:space:]]*//.*##' '$REPO'/*.qml '$REPO'/common/*.qml |
            grep -nE '\\b(foot|alacritty|kitty|ghostty|wezterm|xterm)\\b|launch-floating-terminal|launch-editor|x-terminal-emulator'"
-check "the first install is the pkexec /bin/bash form, not a terminal" \
-  bash -c "grep -q 'firstInstallArgv' '$REPO/common/Ask.qml'"
+check "the panel never hands root a script: no pkexec /bin/bash anywhere in the GUI" \
+  bash -c "! grep -n '/bin/bash' '$REPO'/*.qml '$REPO'/common/*.qml | grep -v '^[^:]*:[0-9]*:[[:space:]]*//' | grep -q pkexec"
+check "the README's install command carries the installer's checksum" \
+  bash -c "'$REPO/dev/check-pins.sh' >/dev/null"
 
 step "who Face may be set up for (plan-engine.md §8.2, the auth_self boundary)"
 # Face's own action is auth_self, so the owner can later run install-system with

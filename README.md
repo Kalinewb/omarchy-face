@@ -152,10 +152,9 @@ omarchy plugin add https://github.com/Kalinewb/omarchy-face.git --enable
 
 A face icon appears in the bar. Click it and work down Setup:
 
-1. **Install Face's system files** — one password dialog. It says it wants to run
-   `/bin/bash` as the super user, because Face's own helpers do not exist yet to ask with
-   their own message; the panel warns you before the dialog appears. **Updating** those
-   files later asks the same way, for the reason below.
+1. **Install Face's system files** — from a terminal, with the command below. Setup's
+   **Install Face ID** and **Update Face system files** buttons open these instructions;
+   the panel never installs anything as root itself.
 2. **Build the face engine** — the howdy and dlib build above.
 3. **Record your face** — People → Add person. The first person recorded on the machine is
    its owner.
@@ -171,24 +170,32 @@ switch is a list of names, and the Settings switch is the one that edits
 before somebody has the permission, and the Person page says when the machine-wide switch
 is off.
 
+### Installing or updating the system files
+
+Run this as yourself (it asks for your password through `sudo`). It is the same command for
+the first install and for every update:
+
+```bash
+sudo bash -c 'set -o pipefail; t=$(mktemp -d) &&
+  install -m 0600 -- "$1/system/install.sh" "$t/install.sh" &&
+  echo "90ab714418e185361562c2e89b80dcf666e5ce286746dca09251e919507d34fb  $t/install.sh" | sha256sum --quiet -c - &&
+  bash "$t/install.sh" "$1" "$2"; s=$?; rm -rf -- "$t"; exit $s' \
+  _ "$HOME/.config/omarchy/plugins/graveklar.face" "$USER"
+```
+
+What it does: root copies the installer out of the plugin folder into a directory only
+root can write, checks that copy against the checksum above — which is published here, for
+this release, not read from your plugin folder — and only then runs it. The installer does
+the same for the ten files it installs: each is copied into a root-only directory and
+checked against its own checksum before anything is put in place. If the plugin folder has
+been changed by anything, the check fails and nothing is installed. Copy the command from
+this README on GitHub, not from a copy on your machine.
+
+The first install ends by starting the face engine build, and the Setup view shows it.
+
 You need an infrared camera (Face refuses to work without one), and an account that can
 already administer this machine — Face never grants more than the owner's password already
 grants.
-
-**What root installs, and why updates ask as administrator.** The plugin folder is yours
-to write, and so is it for any program running as you — including while that dialog is on
-screen. So root does not install the helpers from it. It copies the ten system files into
-a directory only root can write, checks every byte against a SHA-256 written into the
-installer text you authorised, and installs only that checked copy; a helper changed
-before the copy is refused and nothing is installed. The helpers already on the machine
-cannot know a newer release's checksums, so an update has to come with its own authorised
-installer, which is why it uses the administrator dialog rather than Face's own.
-
-That check covers the helpers, not the installer. The installer text is read from the same
-folder, so a program able to rewrite `system/install.sh` — checksums and all — decides what
-the next administrator dialog runs. The dialog only ever says it wants to run `/bin/bash`
-as the super user; authorise it when you have just clicked Install or Update in Face's
-Setup, and not otherwise.
 
 **Updating from 2.0.2 or earlier.** Those versions let the installed helper update itself
 from the plugin folder with your own password, behind Face's own dialog. Update promptly,

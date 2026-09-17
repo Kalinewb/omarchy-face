@@ -79,29 +79,24 @@ Item {
   // Every store change, permission change, install, wiring and purge
   // (plan-merged.md §2 rule 2). pkexec draws the owner prompt before exec, so
   // the prompt is always the first thing that happens.
+  //
+  // pkexec by absolute path, never whatever PATH finds first: the one exception
+  // is development with OMARCHY_FACE_DEV_PKEXEC, whose test puts a stand-in
+  // earlier in PATH on purpose.
   function adminArgv(args) {
     var helper = systemBin + "/omarchy-face-admin"
-    return (dev && !devPkexec ? [helper] : ["pkexec", helper]).concat(args || [])
+    if (dev && !devPkexec) return [helper].concat(args || [])
+    return [dev ? "pkexec" : "/usr/bin/pkexec", helper].concat(args || [])
   }
 
-  // Every install of the system half -- first install, update and repair -- and
-  // the only call that does not go through our own polkit action. The first
-  // time, the helper it would be annotated on does not exist yet; after that,
-  // only this authorised text can carry the pins for a newer release's files.
-  //
-  // The script's TEXT is passed inline rather than its path, so what polkit
-  // authorised is exactly what runs: a `pkexec /bin/bash <path>` would have
-  // authorised a path whose contents can change between the dialog and the
-  // exec. The dialog says "run /bin/bash as the super user", with no message of
-  // Face's own; Setup warns about that wording before the click
-  // (plan-gui.md §4 row 3).
-  //
-  // In development there is nothing to install and nothing that may run as
-  // root, so this becomes the stub's install-system.
-  function firstInstallArgv(scriptText, targetDir, account) {
-    if (dev) return [devBin + "/omarchy-face-admin", "install-system"]
-    return ["pkexec", "/bin/bash", "-c", String(scriptText),
-            "omarchy-face-install", String(targetDir), String(account)]
+  // Installing the system half is not a call this file can make. It runs from a
+  // terminal with the README's command, which checks the installer against a
+  // checksum published for the release before running it as root: nothing read
+  // out of the plugin folder is ever handed to root from here.
+  readonly property string installGuideUrl: "https://github.com/Kalinewb/omarchy-face#installing-or-updating-the-system-files"
+
+  function installGuideArgv() {
+    return ["xdg-open", root.installGuideUrl]
   }
 
   // --- launching ----------------------------------------------------------
@@ -118,7 +113,7 @@ Item {
   // 126/127 mean (below), and whether the call can be cancelled with a signal
   // at all (cancel(), §2 rule 7).
   function isPrompting(argv) {
-    return !!argv && argv.length > 0 && String(argv[0]) === "pkexec"
+    return !!argv && argv.length > 0 && /(^|\/)pkexec$/.test(String(argv[0]))
   }
 
   // What an exit code means (plan-merged.md §2 rule 3):

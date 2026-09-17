@@ -122,7 +122,7 @@ Column {
     if (!view.primaryRow) return ""
     if (view.busyRow === String(view.primaryRow.id)) return "Working…"
     if (view.buildRunning) return ""
-    if (String(view.primaryRow.fix || "") === "install-first") return "Install Face ID"
+    if (String(view.primaryRow.fix || "") === "install-first") return "How to install Face ID"
     return view.fixLabel(view.primaryRow)
   }
 
@@ -178,23 +178,6 @@ Column {
   width: parent ? parent.width : implicitWidth
   spacing: Style.space(8)
 
-  // The installer is read from disk rather than embedded here, and it is passed
-  // to pkexec as text (plan-engine.md §5.1). What root trusts is not this read
-  // but the SHA-256 pins inside that text, checked against root's own copy of
-  // every file it installs. preload, because the read has to
-  // have happened by the time somebody clicks.
-  FileView {
-    id: installScript
-    path: panel ? panel.pluginDir + "/system/install.sh" : ""
-    preload: true
-    // Blocking, because the one caller reads it inside a click handler: an
-    // installer that is "not there yet" for the first few hundred milliseconds
-    // after the view opens would fail in exactly the way that reads as a
-    // missing file.
-    blockLoading: true
-    printErrors: false
-  }
-
   function fixLabel(row) {
     if (!row || !row.fixable) return ""
     if (row.fix === "purge-legacy") return "Remove the old install"
@@ -202,8 +185,8 @@ Column {
     // the person is asking for, and it read as the first of two optional steps
     // when it is in fact the whole install -- it starts the engine build itself
     // (post-ship revision).
-    if (row.fix === "install-first") return "Install Face ID"
-    if (row.fix === "install-system") return "Update Face system files"
+    if (row.fix === "install-first") return "How to install Face ID"
+    if (row.fix === "install-system") return "How to update Face system files"
     if (row.fix === "install-engine") {
       // While a build runs there is no button at all. `install-engine` would
       // exit 3, and the row is already showing the build that is happening.
@@ -412,17 +395,13 @@ Column {
     } else if (row.fix === "lock-sync") {
       argv = panel.ask.lockArgv(["sync"])
     } else if (row.fix === "install-first" || row.fix === "install-system") {
-      // An update installs through the same checked installer as the first
-      // install: only its authorised text can carry the new release's pins, so
-      // the helper already installed cannot vouch for newer files by itself.
-      var script = String(installScript.text() || "")
-      if (script.trim() === "") {
-        view.noteRow = row.id
-        view.noteText = "The installer is missing from this plugin (system/install.sh)."
-        return
-      }
-      argv = panel.ask.firstInstallArgv(script, panel.pluginDir,
-                                        Quickshell.env("USER") || "")
+      // Not an install: the system half is installed from a terminal with the
+      // README's command, whose checksum is published there rather than read
+      // from this plugin folder. This only opens those instructions.
+      view.noteRow = row.id
+      view.noteText = "Opened the instructions in your browser. Run the command there in a terminal, then come back here."
+      panel.ask.ask(panel.ask.installGuideArgv(), "", function () {})
+      return
     }
     if (!argv) return
 
@@ -553,11 +532,11 @@ Column {
       textFormat: Text.PlainText
       width: parent.width
       visible: view.primaryFix === "install-first"
-      text: "One action does all of it: it installs Face's helpers, its service and its polkit "
+      text: "One command, run in a terminal, installs Face's helpers, its service and its polkit "
             + "policy, and then starts building the face engine — howdy and dlib from the Arch "
             + "User Repository, at the two revisions this version of Face was tested against, "
             + "installed with pacman. The build takes several minutes, needs nothing from you "
-            + "once it starts, and you can close this window while it runs."
+            + "once it starts, and this view shows how it is going."
       color: view.dim
       font.family: view.fontFamily
       font.pixelSize: Style.font.caption
@@ -585,9 +564,10 @@ Column {
       textFormat: Text.StyledText
       width: parent.width
       visible: view.primaryFix === "install-first"
-      text: "Your password dialog will say it wants to run <b>/bin/bash</b> as the super user. "
-            + "That is this installer: Face's own helpers cannot ask with their own message until "
-            + "they exist. It is the only time you will see that dialog."
+      text: "This panel does not install anything as root. The button opens the instructions: "
+            + "a command that checks the installer against the checksum <b>published for this "
+            + "release</b> before running it, so nothing a program could have changed in your "
+            + "plugin folder is ever run as root."
       color: view.dim
       font.family: view.fontFamily
       font.pixelSize: Style.font.caption
@@ -750,11 +730,9 @@ Column {
                  && rowItem.modelData.fix === "install-first"
         wrapMode: Text.WordWrap
         leftPadding: Style.space(22)
-        text: "This installs Face's system files and then starts the engine build by itself — " +
-              "one action, not two. Your password dialog will say it wants to run " +
-              "<b>/bin/bash</b> as the super user. That is this installer: Face's own helpers " +
-              "cannot ask with their own message until they exist. It is the only time you will " +
-              "see that dialog."
+        text: "Installed from a terminal with the command in Face's instructions, which checks " +
+              "the installer against the checksum <b>published for this release</b> before " +
+              "running it as root. The install then starts the engine build by itself."
         color: view.dim
         font.family: view.fontFamily
         font.pixelSize: Style.font.caption
