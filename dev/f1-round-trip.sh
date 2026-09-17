@@ -326,7 +326,7 @@ if true; then
     bash -c "[[ \$(jq -r '.error' <<<'$refuse_out') == version_mismatch ]]"
   check "the refused installs changed nothing" \
     bash -c "diff -q '$REPO/system/omarchy-face-camera' /usr/local/bin/omarchy-face-camera >/dev/null &&
-             [[ \$(head -40 /usr/local/bin/omarchy-face-admin | sed -n 's/.*omarchy-face-version: //p') == '2.0.3' ]]"
+             [[ \$(head -40 /usr/local/bin/omarchy-face-admin | sed -n 's/.*omarchy-face-version: //p') == '2.0.4' ]]"
   rm -rf "$evil" "$older" "$swapped"
 else
   note "refusal tests on the plugin folder skipped: it is not this checkout"

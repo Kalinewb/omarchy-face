@@ -1,7 +1,7 @@
 #!/usr/bin/python3 -I
 #
 # omarchy-face v2
-# omarchy-face-version: 2.0.3
+# omarchy-face-version: 2.0.4
 #
 # The verification daemon (plan-engine.md §6): socket-activated, root with only
 # CAP_DAC_READ_SEARCH, answering VERIFY-PERSON and VERIFY-LOCK for callers that

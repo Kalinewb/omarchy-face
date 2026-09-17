@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 2.0.3
+# omarchy-face-version: 2.0.4
 #
 # Every install of Face's system half -- the first one, an upgrade, and a
 # repair -- and the only way root ever receives files from the plugin folder.
@@ -27,7 +27,10 @@
 
 set -uo pipefail
 unset IFS BASH_ENV ENV CDPATH
-PATH=/usr/local/bin:/usr/bin
+# /usr/bin only. /usr/local/bin is where the helpers go, and this script checks
+# that directory's ownership further down; every command before that check
+# would otherwise already have resolved through it. Nothing here lives there.
+PATH=/usr/bin
 umask 022
 
 CONFIG_FILE=/etc/omarchy-face/config
@@ -82,8 +85,14 @@ owner_uid=$(stat -Lc %u "$PLUGIN_DIR/system" 2>/dev/null) || die "plugin_missing
 
 # An installed machine belongs to the account in its config. Installing for
 # somebody else over it is Remove and then install, not an update.
+#
+# Parsed exactly as the admin helper's config_get parses it -- last assignment
+# wins, comments and trailing space dropped -- so the two cannot come to
+# different answers about who the machine belongs to.
 if [[ -e $CONFIG_FILE ]]; then
-  configured=$(sed -n 's/^account=//p' "$CONFIG_FILE" 2>/dev/null | head -1)
+  configured=$(sed -n "s/^[[:space:]]*account[[:space:]]*=[[:space:]]*//p" "$CONFIG_FILE" 2>/dev/null | tail -1)
+  configured=${configured%%#*}
+  configured=${configured%"${configured##*[![:space:]]}"}
   [[ $configured == "$ACCOUNT" ]] || die "not_owner"
 fi
 
@@ -94,16 +103,16 @@ logger -t omarchy-face -p auth.notice -- \
 # exactly this; there is no other list, so a name missing here is never copied.
 # pins:begin
 declare -A PINS=(
-  [omarchy-face-admin]=b2c27e531eb18773c66cc7bfecec6f5dd3425d7645f28fef9e14aaf500a5f762
-  [omarchy-face-gate]=0edbaaab868eed4e6a0b6d7a2eacb592ea3bb5eae446b5005b53f3bf2a4097b7
-  [omarchy-face-verify]=b6696d84d564c9259402e8f1d21c3fd2080df774a73a7a04a65241c77858282d
-  [omarchy-faced]=eb1cd011199e4a1b1820e284f013f6c00cd17c93bc3ad485f450090e71b0ed75
-  [omarchy-face-identity]=bc35682fc27b803105b8a89f2963b8b5cc9e11b641c1406b7175cc57890ae8d9
-  [omarchy-face-lock-verify]=54fe58517f1570e8dc5d42dcf5ba71ad5c420318dc99d716b4229585b7334feb
-  [omarchy-face-camera]=63d44830e3bcabdd2755176e39e0d9d0f1d643173d01d2fc6a573f5d18b89964
-  [omarchy-faced.socket]=5d6b152436afc9167478e3634b786e0c8746d5bb6f988a1edfa7c1af04338b52
-  [omarchy-faced.service]=d016bfd6916c4a72de681d2f7004df9da3c7fd12458d8bb7c0a8e8d58b97db01
-  [no.graveklar.face.policy]=1af199c221e573e69508a6d940697398b530022f41846c84dc81768e7c234ddb
+  [omarchy-face-admin]=9409cc71d0e3f8a5fed106dc9912931ae3d46e7f35bb1ce75ecf504afdd13dd4
+  [omarchy-face-gate]=0dc22474b2a9a5eaf58e6f86acb2aff9601e7d7f21c9ebf10aa5ce79c4dc6c49
+  [omarchy-face-verify]=d61c77ba66fb6904ead96e96d7232d96609f62b385003760eee83b62dc30a367
+  [omarchy-faced]=2cea3eddfc20fb5ce11728922b47bab0f8f4d9494c04a8eeb77fe2308a81a8f6
+  [omarchy-face-identity]=c10dbfb4cee16c66f0c2edfb647d08660e8964f61e85bc3d4903d72b6d148cb6
+  [omarchy-face-lock-verify]=2b6b34355e3b0fc47ba66aa1b486cd2423b46831d940caa4c4e83340f680f16c
+  [omarchy-face-camera]=fe37e57e1c1c179254d20d26d90a1b4423337d9ee8a6ee2a98d9e4940350d65c
+  [omarchy-faced.socket]=bef5ea6e4c7dd7c89c4df14c86617658c9892d29f29f559b9d9071397bdb0e4b
+  [omarchy-faced.service]=77818242941a893b4bb7f5c071856fc30998c0304f918d7dea4fcf35513b3f94
+  [no.graveklar.face.policy]=54ca9ab79473b68e8df25a7833c1d6b5a6526235dc329046331bf24c10338b58
 )
 # pins:end
 
@@ -113,15 +122,40 @@ tmp=$(mktemp -d /run/omarchy-face-install.XXXXXX) || die "snapshot_failed"
 trap 'rm -rf -- "$tmp"' EXIT
 chmod 0700 "$tmp" || die "snapshot_failed"
 
+# Before copying, refuse what could never match a pin: anything but a plain
+# file, and anything larger than a helper could be. This is only a cheap early
+# refusal -- the source can still change after it -- so that root is not made to
+# copy a directory tree or a multi-gigabyte file into /run. The checks on the
+# snapshot below are the ones that decide.
+MAX_BYTES=1048576
 for name in "${!PINS[@]}"; do
-  cp -a --no-dereference "$PLUGIN_DIR/system/$name" "$tmp/$name" 2>/dev/null || die "snapshot_incomplete"
+  src=$PLUGIN_DIR/system/$name
+  [[ -f $src && ! -L $src ]] || die "snapshot_unsafe"
+  size=$(stat -c %s -- "$src" 2>/dev/null) || die "snapshot_incomplete"
+  (( size <= MAX_BYTES )) || die "snapshot_unsafe"
 done
 
-# Plain files only. A symlink would have been followed back out of the snapshot
-# when it was installed, and a hard link leaves the same inode writable from
-# outside it.
-[[ -z $(find "$tmp" -mindepth 1 \( -type l -o -links +1 -o ! -type f \) -print -quit 2>/dev/null) ]] ||
-  die "snapshot_unsafe"
+# No -a: without -R a directory is refused rather than copied, and the copies
+# are root's own files with root's umask rather than carrying the account's
+# ownership and mode into the snapshot. --no-dereference still copies a link
+# that appeared since the check above AS a link, for the check below to refuse.
+for name in "${!PINS[@]}"; do
+  cp --no-dereference --preserve=timestamps -- "$PLUGIN_DIR/system/$name" "$tmp/$name" 2>/dev/null ||
+    die "snapshot_incomplete"
+done
+
+# Plain, single-link, bounded files only, checked one name at a time so that no
+# failure of the check itself can read as a pass. A symlink would be followed by
+# sha256sum and install; a second link would leave the inode reachable from
+# outside the snapshot.
+for name in "${!PINS[@]}"; do
+  f=$tmp/$name
+  [[ -f $f && ! -L $f ]] || die "snapshot_unsafe"
+  shape=$(stat -c '%h %s %u' -- "$f" 2>/dev/null) || die "snapshot_unsafe"
+  read -r links size uid <<<"$shape"
+  [[ $links == 1 && $uid == 0 ]] || die "snapshot_unsafe"
+  (( size <= MAX_BYTES )) || die "snapshot_unsafe"
+done
 
 # The bytes, not the path and not a header: a swapped file can carry any header
 # it likes. From here on the snapshot is exactly the reviewed release.
