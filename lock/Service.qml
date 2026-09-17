@@ -124,6 +124,9 @@ Item {
   // client has two exit codes on purpose, omarchy-face-lock-verify:11-17).
   // So this does not claim to know it was the camera -- it says it may be.
   readonly property string lineNoResumed: "Camera waking? Enter to retry"
+  // Escape during a check: the check is stopped, the camera is let go, and the
+  // field is the password's again.
+  readonly property string lineStopped: "Stopped — Enter to try again"
 
   // The loaded stock instance, for a test harness to reach. Nothing outside
   // this process can: there is no IPC handler and the service has no visual
@@ -389,6 +392,10 @@ Item {
   // the daemon's rate limit, and neither can make a face match. The README says
   // so. There is still no IpcHandler: nothing here opens a lock on anyone's say.
   //
+  // ESCAPE is bound the same way, locked and non-consuming, and only ever STOPS
+  // a check that is running: it cannot start one, and the key still reaches the
+  // password field, which does with it whatever it did before.
+  //
   // WHICH ENTER. The binding fires for every Enter, including the one that
   // submits a typed password, and the event and the key arrive by different
   // paths in no promised order. So nothing is decided on the event itself:
@@ -406,7 +413,7 @@ Item {
     'local old = _G.omarchy_face_enter_binds ' +
     'if old then for _, b in ipairs(old) do pcall(function() b:unbind() end) end end ' +
     'local t = {} ' +
-    'for key, name in pairs({ Return = "' + root.enterEvent + '", KP_Enter = "' + root.enterEvent + '-keypad" }) do ' +
+    'for key, name in pairs({ Return = "' + root.enterEvent + '", KP_Enter = "' + root.enterEvent + '-keypad", Escape = "' + root.enterEvent + '-escape" }) do ' +
     'table.insert(t, hl.bind(key, hl.dsp.event(name), ' +
     '{ locked = true, non_consuming = true })) end ' +
     '_G.omarchy_face_enter_binds = t'
@@ -512,6 +519,7 @@ Item {
     // into one check.
     if (name === "custom" && data === root.enterEvent) root.enterPressed("Return")
     else if (name === "custom" && data === root.enterEvent + "-keypad") root.enterPressed("KP_Enter")
+    else if (name === "custom" && data === root.enterEvent + "-escape") root.escapePressed()
     else if (name === "configreloaded" && root.enterArmed && root.lockedNow) {
       root.log("Hyprland reloaded its config: arming Enter again")
       root.armEnter()
@@ -541,6 +549,21 @@ Item {
     root.log((key || "Enter") + " pressed, " + Math.round(Date.now() - root.lockBeganAt) +
              " ms into lock " + root.lockGeneration)
     enterSettle.restart()
+  }
+
+  // Escape stops a running check and nothing else. An Enter still settling is
+  // stopped too: the person pressed Escape after it, and a check starting a
+  // moment later would be exactly what they just said no to.
+  function escapePressed() {
+    if (!root.lockedNow) return
+    enterSettle.stop()
+    if (!root.attemptBusy) return
+    root.log("Escape: stopping the face check")
+    root.attemptStoppedByKey = true
+    // Signalled, like the safety timer does it: the check runs as this account,
+    // and its death is what makes the daemon let go of the camera.
+    if (verifyProcess.running) verifyProcess.signal(15)
+    else root.attemptFinished(-1)
   }
 
   Timer {
@@ -625,6 +648,9 @@ Item {
   // answer. Without it a cancelled check exits 143 and reads as "the face said
   // no", which is a different thing entirely and would be the only record left.
   property bool attemptCancelled: false
+  // Set when Escape stopped the check. Its exit is not an answer either, and it
+  // is not stale: it is the person saying they would rather type.
+  property bool attemptStoppedByKey: false
 
   // Longer than anything downstream: the client's own receive timeout is 20 s
   // and the daemon's engine runs under `timeout -k 2 8`. This only ever fires
@@ -651,6 +677,7 @@ Item {
     root.attemptCount = root.attemptCount + 1
     root.attemptName = ""
     root.attemptCancelled = false
+    root.attemptStoppedByKey = false
     root.lastOutcome = "checking"
     root.log(why + ": one face check, in lock generation " + root.lockGeneration)
     root.showLine(root.lineChecking)
@@ -742,6 +769,16 @@ Item {
     // The generation guard further down still stands and is still exercised:
     // signalling a process is a request, and one already on its way to exiting
     // 0 can beat it.
+    if (root.attemptStoppedByKey) {
+      root.attemptStoppedByKey = false
+      root.attemptCancelled = false
+      root.lastOutcome = "stopped"
+      root.log("the face check was stopped with Escape")
+      root.clearLine(root.lineChecking)
+      root.showLine(root.lineStopped)
+      return
+    }
+
     if (root.attemptCancelled) {
       root.attemptCancelled = false
       root.lastOutcome = "stale"

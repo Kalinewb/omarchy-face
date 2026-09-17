@@ -319,8 +319,8 @@ check "cleared at start, then armed and disarmed once per lock" \
   "disarm arm disarm arm disarm" "$(evals)"
 check "…every registration names this wrapper's own event, and a plain word" \
   "0" "$(grep -c 'wrong-event' "$status/eval.log" 2>/dev/null)"
-check "the shipped Lua binds both Enters, locked and non-consuming" "true" \
-  "$(grep -q 'pairs({ Return = .*, KP_Enter = .*-keypad" })' "$REPO/lock/Service.qml" &&
+check "the shipped Lua binds both Enters and Escape, locked and non-consuming" "true" \
+  "$(grep -q 'pairs({ Return = .*, KP_Enter = .*-keypad", Escape = .*-escape" })' "$REPO/lock/Service.qml" &&
      grep -q 'locked = true, non_consuming = true' "$REPO/lock/Service.qml" &&
      echo true || echo false)"
 check "…and raises an event, never a command" "0" \
@@ -367,6 +367,18 @@ check "…one check" "1" "$(field attempts "$out")"
 check "…and the stock blank countdown was restarted while it ran (start, every 2 s, answer)" "true" \
   "$( (( $(field blankArms "$out") >= 3 )) && echo true || echo false)"
 
+step "GATE: Escape stops a running check"
+out=$(run_lock escape-stop "$root/fake")
+echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
+check "one check started" "1" "$(field attempts "$out")"
+check "…it was stopped, not answered" "stopped" "$(field outcome "$out")"
+check "…the lock is still locked" "true" "$(field locked "$out")"
+check "…and the line says so" "$(field lineStopped "$out")" "$(field line "$out")"
+
+step "Escape with no check running"
+out=$(run_lock escape-idle "$root/fake")
+check "starts nothing" "0" "$(field attempts "$out")"
+
 step "a keypad Enter fires both bindings"
 out=$(run_lock enter-keypad "$root/fake")
 check "both events were heard" "2" "$(field enters "$out")"
@@ -407,7 +419,7 @@ while IFS= read -r text; do
     "$([[ -n $width && -n $room ]] && ((width <= room)) && echo true || echo false)"
   i=$((i + 1))
 done <<<"$lines"
-check "…and all three lines were measured" "3" "$i"
+check "…and all four lines were measured" "4" "$i"
 
 # =============================================================================
 # The Settings switch and the Setup row (plan-gui.md §6.1, §4 row 8)

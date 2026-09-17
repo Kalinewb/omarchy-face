@@ -23,11 +23,12 @@ faces.
 you come back, touch a key and look at the screen. Or press **Enter** on the empty
 password field, any time, to ask for a face check there and then. The password field says
 *Looking for your face…* while it checks, and tells you if it did not recognise you — so
-you can see it working and decide whether to press Enter again or just type. It follows Omarchy's own
+you can see it working and decide whether to press Enter again or just type. Press **Esc**
+while it is looking to stop the check and type your password instead. It follows Omarchy's own
 lock screen as it updates, and if an update changes too much it steps aside, tells you,
 and your password works as always.
 
-![Face ID's People view on a finished machine](preview.png)
+![Face ID: the card that names what asked for sudo, the People view and the lock screen](preview.png)
 
 ## What it is, and what it is not
 
@@ -112,10 +113,11 @@ in front of it would otherwise undo itself.
 
 Enter works through Hyprland rather than through Omarchy's password field, which a plugin
 cannot reach. While the screen is locked, and only then, Face registers a Hyprland binding
-on Enter that passes the key straight on to the password field and also tells Face it was
-pressed. It is removed when the lock ends, and your own `bindings.lua` is never touched.
-An Enter that submits a typed password is recognised as one and starts no face check.
-If Enter ever stopped reaching the password field while locked, switch to a text console
+on Enter, and one on Esc, that pass the key straight on to the password field and also
+tell Face it was pressed. They are removed when the lock ends, and your own `bindings.lua`
+is never touched. An Enter that submits a typed password is recognised as one and starts
+no face check. Esc only ever stops a check that is running; it never starts one.
+If Enter or Esc ever stopped reaching the password field while locked, switch to a text console
 (Ctrl+Alt+F2), log in, and remove the binding:
 `hyprctl eval 'for _, b in ipairs(_G.omarchy_face_enter_binds or {}) do b:unbind() end'`.
 

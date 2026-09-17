@@ -55,7 +55,7 @@ ShellRoot {
   // take the binding out from under a wrapper this session is running.
   readonly property var evalStandIn: ["bash", "-c",
     'case $1 in *hl.bind*) w=arm ;; *) w=disarm ;; esac; ' +
-    '[[ $w == disarm ]] || grep -qF "Return = \\"$FACE_HARNESS_EVENT\\", KP_Enter = \\"$FACE_HARNESS_EVENT-keypad\\"" <<<"$1" || w="$w-wrong-event"; ' +
+    '[[ $w == disarm ]] || grep -qF "Return = \\"$FACE_HARNESS_EVENT\\", KP_Enter = \\"$FACE_HARNESS_EVENT-keypad\\", Escape = \\"$FACE_HARNESS_EVENT-escape\\"" <<<"$1" || w="$w-wrong-event"; ' +
     'printf "%s\\n" "$w" >>"$FACE_HARNESS_STATUS/eval.log"', "--"]
 
   // Unique per run, so a real event raised below reaches this wrapper and no
@@ -97,6 +97,15 @@ ShellRoot {
       wrapper.hyprlandEvent("custom", rootObj.enterEvent)
       wrapper.hyprlandEvent("custom", rootObj.enterEvent + "-keypad")
     }
+  }
+
+  Process {
+    id: escapeDispatcher
+    command: ["hyprctl", "eval", 'hl.dispatch(hl.dsp.event("' + rootObj.enterEvent + '-escape"))']
+  }
+  function pressEscape() {
+    if (rootObj.realEvents) escapeDispatcher.running = true
+    else wrapper.hyprlandEvent("custom", rootObj.enterEvent + "-escape")
   }
 
   function pressEnter() {
@@ -163,6 +172,7 @@ ShellRoot {
     console.log("HARNESS line", item && "failureMessage" in item ? item.failureMessage : "")
     console.log("HARNESS lineNo", wrapper.lineNo)
     console.log("HARNESS lineNoResumed", wrapper.lineNoResumed)
+    console.log("HARNESS lineStopped", wrapper.lineStopped)
     console.log("HARNESS resumed", wrapper.resumedAt > 0)
     Qt.exit(0)
   }
@@ -285,6 +295,29 @@ ShellRoot {
           { after: 300,  run: function () { rootObj.stock().beginLock() } },
           { after: 800,  run: function () { rootObj.pressEnter() } },
           { after: 2500, run: function () {} },
+          done
+        ])
+        break
+
+      // Escape during a check stops it: no unlock, the stopped line, and the
+      // next Enter checks again.
+      case "escape-stop":
+        rootObj.verifySeconds = 3
+        rootObj.play([
+          { after: 300,  run: function () { rootObj.stock().beginLock() } },
+          { after: 800,  run: function () { rootObj.pressEnter() } },
+          { after: 1000, run: function () { rootObj.pressEscape() } },
+          { after: 1500, run: function () {} },
+          done
+        ])
+        break
+
+      // Escape with no check running starts nothing.
+      case "escape-idle":
+        rootObj.play([
+          { after: 300,  run: function () { rootObj.stock().beginLock() } },
+          { after: 800,  run: function () { rootObj.pressEscape() } },
+          { after: 1500, run: function () {} },
           done
         ])
         break
