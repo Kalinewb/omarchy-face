@@ -192,7 +192,7 @@ run_case() { # run_case <case> [extra env assignments...]
       OMARCHY_FACE_DEV_BIN="$bin" OMARCHY_FACE_DEV_STATE="$state" \
       OMARCHY_FACE_DEV_FIXTURES="$fixtures" "$@" \
       timeout 60 quickshell -p "$root" -n 2>&1 |
-    sed -n 's/^.*HARNESS \([a-zA-Z]*\) \(.*\)$/\1=\2/p'
+    sed -n 's/^.*HARNESS \([a-zA-Z0-9]*\) \(.*\)$/\1=\2/p'
 }
 
 field() { sed -n "s/^$1=//p" <<<"$2" | head -1; }
@@ -332,7 +332,15 @@ rm -f "$state/people.json"
 out=$(run_case setup FACE_STATUS_DELAY=0.1)
 echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
 check "it is not calm" false "$(field calm "$out")"
-check "it offers one action" "How to install Face ID" "$(field primaryLabel "$out")"
+check "it offers one action" "Copy the install command" "$(field primaryLabel "$out")"
+# dev/check-pins.sh proves README.md against dev/install-command.py, which is a
+# script's model of how QML unescapes a string literal. This is the only place
+# the real engine's answer is available, so it is where the model gets checked.
+readme_command=$(sed -n '/^### Installing or updating the system files$/,/^```$/p' "$REPO/README.md" |
+                 sed -n '/^```bash$/,/^```$/p' | sed '1d;$d')
+check "…that copies exactly the command README.md publishes" \
+  "$readme_command" \
+  "$(field installCommandB64 "$out" | base64 -d)"
 check "…and not a checklist" 0 "$(field rowsVisible "$out")"
 check "the rows are still there to read" 4 "$(field rowsVisibleWithDetails "$out")"
 check "the bar button says set up" setup "$(field barState "$out")"

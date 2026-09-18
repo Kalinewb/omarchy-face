@@ -36,18 +36,28 @@ if n != 1:
 open(p, "w").write(new)
 PY
 
-# And the installer's own checksum, published in the README's install command.
-# After the pins, because the pins are part of the installer.
+# And the installer's own checksum. It is no longer published inside the
+# README's command: the command fetches it from this release's tag, so it has to
+# exist as a file in the repository. After the pins, because the pins are part
+# of the installer.
 installer=$(sha256sum -- system/install.sh | cut -d' ' -f1)
-python3 - "$installer" <<'PY'
+printf '%s\n' "$installer" >system/install.sh.sha256
+
+# The README's command is generated from the panel's, never typed: the README
+# copy is what a suspicious reader compares the clipboard against, and a copy
+# that has drifted is worse than no copy at all.
+command=$(dev/install-command.py) || exit 1
+python3 - "$command" <<'RDME'
 import sys, re
-sha = sys.argv[1]
+command = sys.argv[1]
 p = "README.md"
 s = open(p).read()
-new, n = re.subn(r'echo "(?:[0-9a-f]{64}|INSTALL_SHA256)  \$t/install\.sh"', 'echo "%s  $t/install.sh"' % sha, s)
+new, n = re.subn(r"(### Installing or updating the system files\n.*?```bash\n).*?(\n```)",
+                 lambda m: m.group(1) + command + m.group(2), s, flags=re.S)
 if n != 1:
-    sys.exit("update-pins: the install command's checksum was not found exactly once in README.md")
+    sys.exit("update-pins: the install command block was not found exactly once in README.md")
 open(p, "w").write(new)
-PY
+RDME
 
-echo "pins updated for ${#names[@]} files; installer checksum $installer written to README.md"
+echo "pins updated for ${#names[@]} files; installer checksum $installer -> system/install.sh.sha256"
+echo "install command regenerated into README.md from common/Ask.qml"

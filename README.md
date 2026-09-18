@@ -172,24 +172,41 @@ is off.
 
 ### Installing or updating the system files
 
-Run this as yourself (it asks for your password through `sudo`). It is the same command for
-the first install and for every update:
+Setup's **Copy the install command** button puts this on your clipboard; it is reproduced
+here so you can compare the two. It is the same command for the first install and for every
+update, and it asks for your password through `sudo`:
 
 ```bash
-sudo bash -c 'set -o pipefail; t=$(mktemp -d) &&
+sudo /usr/bin/bash -c 'PATH=/usr/bin; set -o pipefail; t=$(mktemp -d) &&
+  [[ -f $1/system/install.sh && ! -L $1/system/install.sh ]] &&
   install -m 0600 -- "$1/system/install.sh" "$t/install.sh" &&
-  echo "33637cfcde8058796be7b1dfb5669131e2e733831b7d0241ccfaf2b746b2abdb  $t/install.sh" | sha256sum --quiet -c - &&
+  p=$(curl -fsS --max-time 30 -- "https://raw.githubusercontent.com/Kalinewb/omarchy-face/refs/tags/v$3/system/install.sh.sha256") &&
+  [[ $p =~ ^[0-9a-f]{64}$ ]] &&
+  echo "$p  $t/install.sh" | sha256sum --quiet -c - &&
   bash "$t/install.sh" "$1" "$2"; s=$?; rm -rf -- "$t"; exit $s' \
-  _ "$HOME/.config/omarchy/plugins/graveklar.face" "$USER"
+  _ "$HOME/.config/omarchy/plugins/graveklar.face" "$USER" 2.0.4
 ```
 
-What it does: root copies the installer out of the plugin folder into a directory only
-root can write, checks that copy against the checksum above — which is published here, for
-this release, not read from your plugin folder — and only then runs it. The installer does
-the same for the ten files it installs: each is copied into a root-only directory and
-checked against its own checksum before anything is put in place. If the plugin folder has
-been changed by anything, the check fails and nothing is installed. Copy the command from
-this README on GitHub, not from a copy on your machine.
+What it does: root copies the installer out of the plugin folder into a directory only root
+can write, fetches the checksum for this release from this repository over TLS, checks the
+copy against it, and only then runs it. The installer does the same for the ten files it
+installs: each is copied into a root-only directory and checked against its own checksum
+before anything is put in place. If the plugin folder has been changed by anything, the
+check fails and nothing is installed.
+
+**What this does and does not protect.** The bytes root executes never come from your plugin
+folder — the checksum they are checked against is fetched from this release's tag over TLS,
+which no program running as your account can write. `PATH=/usr/bin` at the front is part of
+that: `sudo` keeps your own `PATH` unless the machine sets `secure_path`, so without it a
+shim dropped anywhere on your path — `sha256sum`, `curl`, `mktemp` — would be the copy root
+runs. Pinning the path means every tool comes from a directory only root can write.
+
+What no checksum inside a command can tell you is whether the command itself is the right
+one. The panel builds it from a file in that same writable folder, so a program that had
+already taken over your account could offer you a different command entirely, and the shell
+you paste into resolves `sudo` through your own environment besides. That is the floor of
+this design, and it is why the command is printed above: if you have reason to doubt the
+machine, compare what the panel copied against this text before you run it.
 
 The first install ends by starting the face engine build, and the Setup view shows it.
 

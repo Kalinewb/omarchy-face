@@ -80,7 +80,7 @@ run_case() { # run_case <case> [env…]
   env FACE_HARNESS_CASE="$name" FACE_HARNESS_PLUGIN="$REPO" \
     OMARCHY_FACE_DEV_BIN="$REPO/dev/bin" OMARCHY_FACE_DEV_STATE="$state" \
     "$@" timeout 60 quickshell -p "$root" -n 2>&1 |
-    sed -n 's/^.*HARNESS \([a-zA-Z]*\) \(.*\)$/\1=\2/p'
+    sed -n 's/^.*HARNESS \([a-zA-Z0-9]*\) \(.*\)$/\1=\2/p'
 }
 
 field() { sed -n "s/^$1=//p" <<<"$2" | head -1; }

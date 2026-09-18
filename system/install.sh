@@ -6,18 +6,23 @@
 # Every install of Face's system half -- the first one, an upgrade, and a
 # repair -- and the only way root ever receives files from the plugin folder.
 #
-# The panel never runs this. The owner runs it from a terminal, with the command
-# in the README ("Installing it"), which copies this file into a directory only
-# root can write and checks it against the SHA-256 published in that README
-# before running the copy:
+# The panel never runs this. It copies a command for the owner to run in a
+# terminal, which copies this file into a directory only root can write and
+# checks it against system/install.sh.sha256 -- fetched from this release's tag,
+# not read from the plugin folder -- before running the copy:
 #
 #   bash <root-owned copy of this file> "$PLUGIN_DIR" "$USER"
 #
-# That published checksum is the trust anchor, and it is the one thing here that
+# That fetched checksum is the trust anchor, and it is the one thing here that
 # does not come from the plugin folder: the folder is writable by the account,
 # and by any program running as it, so a script read out of it and run as root
-# would be whatever that program last wrote. dev/update-pins.sh writes the
-# checksum into the README, and dev/check-pins.sh refuses a stale one.
+# would be whatever that program last wrote. dev/update-pins.sh writes
+# system/install.sh.sha256, and dev/check-pins.sh refuses a stale one or a tag
+# whose pin and installer disagree.
+#
+# What the anchor does NOT cover is the command itself, which the panel builds
+# from that same writable folder. README.md says so where it prints the command,
+# and that printed copy is what a suspicious owner compares against.
 #
 # The same goes for the files this installs. Nothing about a path is trusted. Root copies the ten system files
 # into a directory only root could have created, checks every copied byte

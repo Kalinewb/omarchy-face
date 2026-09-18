@@ -125,7 +125,7 @@ run_lock() { # run_lock <case> <omarchy path> [env…]
   env FACE_HARNESS_CASE="$name" FACE_HARNESS_OMARCHY="$omarchy" \
     FACE_HARNESS_STATUS="$status" FACE_HARNESS_EVENT="$ENTER_EVENT" "$@" \
     timeout 90 quickshell -p "$root" -n 2>&1 |
-    sed -n 's/^.*HARNESS \([a-zA-Z]*\) \(.*\)$/\1=\2/p'
+    sed -n 's/^.*HARNESS \([a-zA-Z0-9]*\) \(.*\)$/\1=\2/p'
 }
 
 run_view() { # run_view <case> [env…]
@@ -136,7 +136,7 @@ run_view() { # run_view <case> [env…]
     OMARCHY_FACE_DEV_BIN="$REPO/dev/bin" OMARCHY_FACE_DEV_STATE="$state" \
     OMARCHY_FACE_DEV_FIXTURE=three-people PATH="$root/bin:$PATH" "$@" \
     timeout 60 quickshell -p "$root" -n 2>&1 |
-    sed -n 's/^.*HARNESS \([a-zA-Z]*\) \(.*\)$/\1=\2/p'
+    sed -n 's/^.*HARNESS \([a-zA-Z0-9]*\) \(.*\)$/\1=\2/p'
 }
 
 field() { sed -n "s/^$1=//p" <<<"$2" | head -1; }

@@ -333,6 +333,11 @@ ShellRoot {
         rootObj.log("calmDetail", setup.calmDetail)
         rootObj.log("calmWhere", setup.calmWhere)
         rootObj.log("buildShown", setup.buildShown)
+        // The command as the QML engine itself builds it. dev/check-pins.sh can
+        // only compare README.md against a script's model of QML string
+        // escapes; this is the string the clipboard would actually receive.
+        // Base64 so a multi-line value stays one field.
+        rootObj.log("installCommandB64", Qt.btoa(facePanel.ask.installCommand))
         // The delegates, not the model: `rendered` is the expression the
         // delegate's own `visible` is bound to. An Item in a harness with no
         // window is never `visible`, whatever it decided.

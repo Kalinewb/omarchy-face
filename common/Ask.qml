@@ -89,14 +89,55 @@ Item {
     return [dev ? "pkexec" : "/usr/bin/pkexec", helper].concat(args || [])
   }
 
-  // Installing the system half is not a call this file can make. It runs from a
-  // terminal with the README's command, which checks the installer against a
-  // checksum published for the release before running it as root: nothing read
-  // out of the plugin folder is ever handed to root from here.
-  readonly property string installGuideUrl: "https://github.com/Kalinewb/omarchy-face#installing-or-updating-the-system-files"
+  // Installing the system half is not a call this file can make: it needs root
+  // before Face has a root-owned helper of its own, and pkexec has no action to
+  // authorise until that install has run. So the panel hands over the command
+  // instead of running it, and the command is written so that none of the bytes
+  // root executes come out of the plugin folder: the checksum it checks the
+  // installer against is fetched from this release's tag, which nothing running
+  // as this account can write.
+  //
+  // What that does NOT survive is this file itself being rewritten. A command
+  // produced by a compromised panel is a compromised command whatever it says,
+  // and no checksum inside it can report that. README.md says so in the same
+  // words, and dev/check-pins.sh keeps the two texts byte-identical so the
+  // published one is worth comparing this against.
+  //
+  // The version is here rather than read from the folder for the same reason
+  // the URL is pinned: check-pins.sh fails the build if it drifts from
+  // system/install.sh's own header.
+  readonly property string systemVersion: "2.0.4"
 
-  function installGuideArgv() {
-    return ["xdg-open", root.installGuideUrl]
+  // pins:command:begin -- dev/check-pins.sh compares this against README.md
+  //
+  // `/usr/bin/bash` and `PATH=/usr/bin` are load-bearing, not tidiness: sudo's
+  // env_reset KEEPS PATH, and only `Defaults secure_path` replaces it. Without
+  // both of these, every tool root runs here -- mktemp, install, curl,
+  // sha256sum, rm, bash -- is looked up through the invoking account's PATH,
+  // and a shim dropped anywhere on it is executed as root. The absolute path
+  // stops sudo's own search; the assignment stops every search after it.
+  //
+  // `refs/tags/` rather than a bare `v$3`: the bare form resolves against
+  // branches as well as tags, so a branch of that name would serve the pin.
+  // No `-L`: raw.githubusercontent.com answers 200 directly, and a followed
+  // redirect is one more thing that can point somewhere else.
+  readonly property string installCommand:
+    "sudo /usr/bin/bash -c 'PATH=/usr/bin; set -o pipefail; t=$(mktemp -d) &&\n" +
+    "  [[ -f $1/system/install.sh && ! -L $1/system/install.sh ]] &&\n" +
+    "  install -m 0600 -- \"$1/system/install.sh\" \"$t/install.sh\" &&\n" +
+    "  p=$(curl -fsS --max-time 30 -- \"https://raw.githubusercontent.com/Kalinewb/omarchy-face/refs/tags/v$3/system/install.sh.sha256\") &&\n" +
+    "  [[ $p =~ ^[0-9a-f]{64}$ ]] &&\n" +
+    "  echo \"$p  $t/install.sh\" | sha256sum --quiet -c - &&\n" +
+    "  bash \"$t/install.sh\" \"$1\" \"$2\"; s=$?; rm -rf -- \"$t\"; exit $s' \\\n" +
+    "  _ \"$HOME/.config/omarchy/plugins/graveklar.face\" \"$USER\" " + root.systemVersion
+  // pins:command:end
+
+  // The command goes to the clipboard, not to a browser. Through stdin rather
+  // than argv: wl-copy takes its text either way, and stdin cannot be misread
+  // as an option however the command starts. wl-copy forks to serve the
+  // selection, so it exits at once and ask()'s callback runs.
+  function installCopyArgv() {
+    return ["wl-copy", "-n"]
   }
 
   // --- launching ----------------------------------------------------------

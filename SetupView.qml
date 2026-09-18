@@ -122,7 +122,7 @@ Column {
     if (!view.primaryRow) return ""
     if (view.busyRow === String(view.primaryRow.id)) return "Working…"
     if (view.buildRunning) return ""
-    if (String(view.primaryRow.fix || "") === "install-first") return "How to install Face ID"
+    if (String(view.primaryRow.fix || "") === "install-first") return "Copy the install command"
     return view.fixLabel(view.primaryRow)
   }
 
@@ -185,8 +185,8 @@ Column {
     // the person is asking for, and it read as the first of two optional steps
     // when it is in fact the whole install -- it starts the engine build itself
     // (post-ship revision).
-    if (row.fix === "install-first") return "How to install Face ID"
-    if (row.fix === "install-system") return "How to update Face system files"
+    if (row.fix === "install-first") return "Copy the install command"
+    if (row.fix === "install-system") return "Copy the update command"
     if (row.fix === "install-engine") {
       // While a build runs there is no button at all. `install-engine` would
       // exit 3, and the row is already showing the build that is happening.
@@ -395,12 +395,21 @@ Column {
     } else if (row.fix === "lock-sync") {
       argv = panel.ask.lockArgv(["sync"])
     } else if (row.fix === "install-first" || row.fix === "install-system") {
-      // Not an install: the system half is installed from a terminal with the
-      // README's command, whose checksum is published there rather than read
-      // from this plugin folder. This only opens those instructions.
+      // Not an install: the system half is installed from a terminal, with the
+      // command this copies. The panel never runs it -- it has no root of its
+      // own to run it with until that command has run once (Ask.qml).
       view.noteRow = row.id
-      view.noteText = "Opened the instructions in your browser. Run the command there in a terminal, then come back here."
-      panel.ask.ask(panel.ask.installGuideArgv(), "", function () {})
+      view.noteText = "Copying the command…"
+      // Only say it is on the clipboard once wl-copy says so. Claiming it
+      // before the call returns means a missing wl-copy still reads "copied",
+      // and the next thing the owner does is paste whatever was there before
+      // into a root shell.
+      panel.ask.ask(panel.ask.installCopyArgv(), panel.ask.installCommand, function (result) {
+        if (view.noteRow !== row.id) return
+        view.noteText = result && result.ok
+          ? "Command copied. Paste it into a terminal, then come back here."
+          : "The command could not be copied — wl-copy did not run. It is in Face's README, under \"Installing or updating the system files\"."
+      })
       return
     }
     if (!argv) return
@@ -532,7 +541,8 @@ Column {
       textFormat: Text.PlainText
       width: parent.width
       visible: view.primaryFix === "install-first"
-      text: "One command, run in a terminal, installs Face's helpers, its service and its polkit "
+      text: "One command, copied by the button below and run in a terminal, installs Face's "
+            + "helpers, its service and its polkit "
             + "policy, and then starts building the face engine — howdy and dlib from the Arch "
             + "User Repository, at the two revisions this version of Face was tested against, "
             + "installed with pacman. The build takes several minutes, needs nothing from you "
@@ -564,10 +574,11 @@ Column {
       textFormat: Text.StyledText
       width: parent.width
       visible: view.primaryFix === "install-first"
-      text: "This panel does not install anything as root. The button opens the instructions: "
-            + "a command that checks the installer against the checksum <b>published for this "
-            + "release</b> before running it, so nothing a program could have changed in your "
-            + "plugin folder is ever run as root."
+      text: "This panel does not install anything as root. The button copies a command for you "
+            + "to run: it checks the installer against a checksum <b>fetched from this release</b> "
+            + "before running it, so nothing a program could have changed in your plugin folder "
+            + "is ever run as root. The command itself comes from this panel — if you have reason "
+            + "to doubt this machine, compare it with the one in Face's README on GitHub."
       color: view.dim
       font.family: view.fontFamily
       font.pixelSize: Style.font.caption
@@ -730,9 +741,9 @@ Column {
                  && rowItem.modelData.fix === "install-first"
         wrapMode: Text.WordWrap
         leftPadding: Style.space(22)
-        text: "Installed from a terminal with the command in Face's instructions, which checks " +
-              "the installer against the checksum <b>published for this release</b> before " +
-              "running it as root. The install then starts the engine build by itself."
+        text: "Installed from a terminal with the command this row copies, which checks the " +
+              "installer against a checksum <b>fetched from this release</b> before running it " +
+              "as root. The install then starts the engine build by itself."
         color: view.dim
         font.family: view.fontFamily
         font.pixelSize: Style.font.caption
