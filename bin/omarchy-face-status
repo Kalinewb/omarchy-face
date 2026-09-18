@@ -254,9 +254,22 @@ fi
 camera_name=$(jq -r '.name // ""' <<<"$camera_json")
 camera_size=$(jq -r '.irSize // ""' <<<"$camera_json")
 
+# `// true` would be wrong here: jq's alternative operator treats `false` as
+# absent, so a document that honestly says "the probe could not run" would read
+# as "it ran".
+camera_probe=$(jq -r 'if has("formatProbe") then .formatProbe else true end' <<<"$camera_json")
+
 if [[ $camera_ok == true ]]; then
   add_row camera "Infrared camera" ok \
     "${camera_name:-infrared camera}${camera_size:+, $camera_size} infrared" false ""
+elif [[ $camera_probe == false ]]; then
+  # No sensor named itself IR, and without v4l2-ctl the format probe -- the half
+  # that finds the ones honestly called "Integrated Camera" -- could not run. So
+  # this machine has not been told it cannot do this; it has been told what to
+  # install before anyone can say.
+  add_row camera "Infrared camera" needs_action \
+    "v4l-utils is not installed, so the cameras on this machine cannot be identified — install it and look again" \
+    false ""
 else
   add_row camera "Infrared camera" needs_action \
     "no infrared camera — Face cannot work on this machine" false ""

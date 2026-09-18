@@ -178,7 +178,7 @@ the first install and for every update:
 ```bash
 sudo bash -c 'set -o pipefail; t=$(mktemp -d) &&
   install -m 0600 -- "$1/system/install.sh" "$t/install.sh" &&
-  echo "90ab714418e185361562c2e89b80dcf666e5ce286746dca09251e919507d34fb  $t/install.sh" | sha256sum --quiet -c - &&
+  echo "33637cfcde8058796be7b1dfb5669131e2e733831b7d0241ccfaf2b746b2abdb  $t/install.sh" | sha256sum --quiet -c - &&
   bash "$t/install.sh" "$1" "$2"; s=$?; rm -rf -- "$t"; exit $s' \
   _ "$HOME/.config/omarchy/plugins/graveklar.face" "$USER"
 ```
@@ -196,6 +196,17 @@ The first install ends by starting the face engine build, and the Setup view sho
 You need an infrared camera (Face refuses to work without one), and an account that can
 already administer this machine — Face never grants more than the owner's password already
 grants.
+
+The engine build also needs **an internet connection**: it installs about a dozen build
+packages with pacman (`base-devel`, `cmake`, `boost`, `python-opencv`, `v4l-utils` and
+others) and builds howdy and python-dlib from the AUR. Removing Face takes those two back
+off with `pacman -Rns`, unless you tick "keep howdy and dlib installed".
+
+**A second plugin appears, and that is Face.** The lock-screen wrapper
+(`graveklar.face-lock`) is staged into your plugins folder the first time the shell starts
+with Face enabled, whether or not you use face on the lock screen. It is what lets Face
+answer the lock screen without replacing Omarchy's own; Remove takes it away with
+everything else.
 
 **Updating from 2.0.2 or earlier.** Those versions let the installed helper update itself
 from the plugin folder with your own password, behind Face's own dialog. Update promptly,
@@ -300,9 +311,26 @@ engine — and then, as its last step, deletes the two health hooks and both plu
 panel and takes the button off the bar. There is a tick for keeping howdy and dlib
 installed if you expect to come back.
 
-Removing the plugin any other way leaves the system half working: face still answers
-`sudo`, nothing dangles, and nothing is lost — but to take that half off as well, install
-the plugin again and use Remove.
+Removing the plugin any other way leaves the system half working — face still answers
+`sudo`, and nothing is lost — but it is not tidy. Left behind are the lock-screen wrapper
+plugin (`graveklar.face-lock`, below), its entries in `shell.json`, Face's own state
+directory, and the whole system half. To take all of it off, install the plugin again and
+use Remove.
+
+**If the panel will not open**, because an Omarchy update broke it or the shell will not
+start, the same removal runs from a terminal:
+
+```sh
+pkexec omarchy-face-admin purge
+```
+
+It handles a machine whose plugin folder is already gone. Add `--keep-packages` to leave
+howdy and dlib installed. What it cannot do from there is remove the two plugin folders, so
+delete those by hand afterwards if they are still present:
+
+```sh
+rm -rf ~/.config/omarchy/plugins/graveklar.face ~/.config/omarchy/plugins/graveklar.face-lock
+```
 
 ## Licence
 

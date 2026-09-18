@@ -274,7 +274,7 @@ lock_preview() {
     grep -Eq "^[[:space:]]*((readonly|required|default)[[:space:]]+)*property[[:space:]]+[A-Za-z_][A-Za-z0-9_.<>]*[[:space:]]+$name([[:space:]]*[:;]|[[:space:]]*$)" \
       "$STOCK_LOCK" 2>/dev/null || missing+=("$name")
   done
-  grep -Eq "^[[:space:]]*function[[:space:]]+$LOCK_CONTRACT_FUNCTION[[:space:]]*\(" "$STOCK_LOCK" 2>/dev/null ||
+  grep -Eq "^[[:space:]]*function[[:space:]]+${LOCK_CONTRACT_FUNCTION}[[:space:]]*\(" "$STOCK_LOCK" 2>/dev/null ||
     missing+=("$LOCK_CONTRACT_FUNCTION()")
   ((${#missing[@]} == 0)) && return
   local list="" item

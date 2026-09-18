@@ -68,6 +68,9 @@ PLUGINS=$root/plugins
 # folder (`hooksDir`) -- so the final step deletes these, and never this
 # account's own.
 HOOKS=$root/hooks
+# A state home of the harness's own, so the removal's last argument can be
+# exercised without ever naming this account's ~/.local/state.
+STATE_HOME=$root/statehome
 HOOK_UPDATE=$HOOKS/post-update.d/graveklar-face.hook
 HOOK_BOOT=$HOOKS/post-boot.d/graveklar-face.hook
 CALLS=$root/calls.log
@@ -140,6 +143,7 @@ run_case() { # run_case <case> [env…]
   shift
   env FACE_HARNESS_CASE="$name" FACE_HARNESS_PLUGIN="$PLUGINS/graveklar.face" \
     OMARCHY_FACE_DEV_BIN="$REPO/dev/bin" OMARCHY_FACE_DEV_STATE="$state" \
+    OMARCHY_FACE_DEV_STATE_HOME="$STATE_HOME" \
     OMARCHY_FACE_DEV_FIXTURES="$root" OMARCHY_FACE_DEV_FIXTURE="state" \
     PATH="$root/bin:$PATH" "$@" \
     timeout 90 quickshell -p "$harness" -n 2>&1 |
@@ -178,7 +182,9 @@ check "the final step is one detached command, with --yes in it" "true" \
        $(field finalArgv "$out") == *'plugin remove --yes graveklar.face'* ]] && echo true || echo false)"
 check "…and it is handed both hook paths, beside the plugins folder, as arguments" \
   "$(jq -c --arg u "$HOOK_UPDATE" --arg b "$HOOK_BOOT" -n '[$u, $b]')" \
-  "$(field finalArgv "$out" | jq -c '.[-2:]')"
+  "$(field finalArgv "$out" | jq -c '.[-3:-1]')"
+check "…and Face's state directory last, inside the harness's sandbox, never this account's" \
+  "$STATE_HOME/omarchy-face" "$(field finalArgv "$out" | jq -r '.[-1]')"
 
 echo
 echo "${DIM}== GATE: the result is on screen BEFORE anything writes the plugins folder${RESET}"

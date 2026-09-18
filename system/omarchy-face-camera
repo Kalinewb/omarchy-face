@@ -231,6 +231,7 @@ case ${1:-} in
     find_rgb_node
     ;;
   --describe)
+    probe=true
     ir_node=$(find_ir_node) || ir_node=""
     rgb_node=$(find_rgb_node) || rgb_node=""
     ir_path=""
@@ -241,10 +242,16 @@ case ${1:-} in
       ir_size=$(frame_size_for "$ir_node") || ir_size=""
       ir_name=$(name_for "$ir_node") || ir_name=""
     fi
-    printf '{"ir":%s,"irNode":%s,"irSize":%s,"name":%s,"rgb":%s}\n' \
+    # Whether pass 2 could run at all. Without v4l2-ctl a sensor that does not
+    # name itself IR -- the case pass 2 exists for -- is indistinguishable from
+    # no sensor, and the camera row would tell the user their laptop cannot do
+    # this when the truth is a missing 3 MB package.
+    probe=true
+    command -v v4l2-ctl >/dev/null 2>&1 || probe=false
+    printf '{"ir":%s,"irNode":%s,"irSize":%s,"name":%s,"rgb":%s,"formatProbe":%s}\n' \
       "$(json_or_null "$ir_path")" "$(json_or_null "$ir_node")" \
       "$(json_or_null "$ir_size")" "$(json_or_null "$ir_name")" \
-      "$(json_or_null "$rgb_node")"
+      "$(json_or_null "$rgb_node")" "$probe"
     # The document is printed either way -- the status row needs to know what
     # the machine does have -- but the exit code still says "no infrared here",
     # because that is what the gate and the camera row switch on.

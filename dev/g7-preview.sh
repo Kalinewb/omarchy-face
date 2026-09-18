@@ -117,7 +117,9 @@ hypr_pid=$!
 signature=""
 for _ in $(seq 1 40); do
   sleep 0.5
-  for candidate in $(ls "${XDG_RUNTIME_DIR:-/run/user/$UID}/hypr" 2>/dev/null); do
+  for path in "${XDG_RUNTIME_DIR:-/run/user/$UID}"/hypr/*; do
+    [[ -e $path ]] || continue
+    candidate=${path##*/}
     grep -qxF "$candidate" <<<"$before" && continue
     signature=$candidate
   done

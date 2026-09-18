@@ -31,6 +31,10 @@ MODE=${1:-}
 # this commit, so they are caught before anything is synced.
 "$SRC/dev/check-pins.sh" || exit 1
 
+# A QML error in a third-party plugin reaches no journal: the plugin just fails
+# to appear in the bar. Catch it here rather than from a user's screenshot.
+"$SRC/dev/lint.sh" || exit 1
+
 # Validate a staging copy BEFORE anything lands in the watched folder. Validating
 # $DEST afterwards is validating the damage: by then the broken plugin is
 # installed and the reload has already run, and the exit code only tells you so.

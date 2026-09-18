@@ -214,7 +214,8 @@ Column {
     'rm -f -- "$3" "$4"\n' +
     'rm -rf "$1"\n' +
     'omarchy plugin remove --yes graveklar.face\n' +
-    'rm -rf "$2"/.graveklar.face*\n'
+    'rm -rf "$2"/.graveklar.face*\n' +
+    '[ -n "$5" ] && rm -rf -- "$5"\n'
 
   // <config>/omarchy/hooks, beside <config>/omarchy/plugins.
   readonly property string hooksDir: {
@@ -222,11 +223,36 @@ Column {
     return cut > 0 ? view.pluginsDir.substring(0, cut) + "/hooks" : ""
   }
 
+  // <state>/omarchy-face, where bin/omarchy-face-lock and
+  // bin/omarchy-face-health keep their "already said this once" markers. It is
+  // the last thing of Face's left on the machine after everything else has
+  // gone, so it goes here with the rest -- derived the same way both scripts
+  // derive it, and empty rather than guessed when the environment says nothing.
+  readonly property string stateDir: {
+    // Under a harness (OMARCHY_FACE_DEV_BIN), this is empty unless that harness
+    // has named a state home of its own -- and then it is a directory inside
+    // it, never the harness's own scratch. A test must not be one argument away
+    // from deleting this account's real state, and forgetting to set something
+    // must fail towards doing nothing rather than towards doing it.
+    if ((Quickshell.env("OMARCHY_FACE_DEV_BIN") || "") !== "") {
+      var sandbox = Quickshell.env("OMARCHY_FACE_DEV_STATE_HOME") || ""
+      return sandbox === "" ? "" : sandbox + "/omarchy-face"
+    }
+    var base = Quickshell.env("XDG_STATE_HOME") || ""
+    if (base === "") {
+      var home = Quickshell.env("HOME") || ""
+      if (home === "") return ""
+      base = home + "/.local/state"
+    }
+    return base + "/omarchy-face"
+  }
+
   function finalArgv() {
     return ["setsid", "-f", "bash", "-c", view.finalScript, "_",
             view.pluginsDir + "/graveklar.face-lock", view.pluginsDir,
             view.hooksDir + "/post-update.d/graveklar-face.hook",
-            view.hooksDir + "/post-boot.d/graveklar-face.hook"]
+            view.hooksDir + "/post-boot.d/graveklar-face.hook",
+            view.stateDir]
   }
 
   function runFinal() {

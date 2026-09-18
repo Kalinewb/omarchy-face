@@ -252,8 +252,10 @@ final_script=$(sed -n "/readonly property string finalScript:/,/^$/p" "$REPO/Rem
   sed -n "s/^[[:space:]]*'\(.*\)'[[:space:]]*+*[[:space:]]*$/\1/p" |
   sed 's/\\n$//')
 echo "${DIM}$(sed 's/^/    /' <<<"$final_script")${RESET}"
-check "four commands, and it came out of the view" \
-  bash -c "[[ \$(grep -c . <<<'$final_script') == 4 ]]"
+check "five commands, and it came out of the view" \
+  bash -c "[[ \$(grep -c . <<<'$final_script') == 5 ]]"
+check "the state directory goes too, by argument, and only when it was given one" \
+  bash -c "tail -1 <<<'$final_script' | grep -qxF '[ -n \"\$5\" ] && rm -rf -- \"\$5\"'"
 check "Face's two Omarchy hooks go first, by argument rather than by text in the script" \
   bash -c "head -1 <<<'$final_script' | grep -qxF 'rm -f -- \"\$3\" \"\$4\"'"
 check "the plugin is removed with --yes (no tty here, omarchy-plugin-remove:18-30)" \
@@ -265,6 +267,9 @@ PLUGINS=$root/plugins
 HOOKS=$root/hooks
 HOOK_ARGS=("$HOOKS/post-update.d/graveklar-face.hook" "$HOOKS/post-boot.d/graveklar-face.hook")
 CALLS=$root/calls.log
+# <state>/omarchy-face, as RemoveView.qml hands it over. Seeded so its removal
+# is something the checks can see rather than assume.
+FACE_STATE=$root/state/omarchy-face
 SHELL_JSON=$root/config/omarchy/shell.json
 mkdir -p "$PLUGINS" "$root/bin" "$root/config/omarchy"
 
@@ -396,10 +401,13 @@ check "…and omarchy.lock is not in disabledPlugins" \
 
 step "the same command on a git checkout, which leaves no backup"
 seed_plugins
+mkdir -p "$FACE_STATE" && : >"$FACE_STATE/lock-notified"
 rm -rf "$PLUGINS/.graveklar.face.bak.20260101000000"
 mkdir -p "$PLUGINS/graveklar.face/.git"
-PATH="$root/bin:$PATH" bash -c "$final_script" _ "$PLUGINS/graveklar.face-lock" "$PLUGINS" "${HOOK_ARGS[@]}"
+PATH="$root/bin:$PATH" bash -c "$final_script" _ "$PLUGINS/graveklar.face-lock" "$PLUGINS" "${HOOK_ARGS[@]}" "$FACE_STATE"
 check "a git checkout is deleted rather than backed up" test ! -e "$PLUGINS/graveklar.face"
+check "the state directory goes with it, so nothing of Face's is left behind" \
+  test ! -e "$FACE_STATE"
 check "…and the wider glob still cleared the staging directories" \
   bash -c "! compgen -G '$PLUGINS/.graveklar.face*' >/dev/null"
 
@@ -410,6 +418,10 @@ mkdir -p "$PLUGINS"
 out=$(PATH="$root/bin:$PATH" bash -c "$final_script" _ "$PLUGINS/graveklar.face-lock" "$PLUGINS" "${HOOK_ARGS[@]}" 2>&1)
 same "an already-removed plugin leaves the command with nothing to say on stdout" "" \
   "$(grep -v 'is not installed' <<<"$out")"
+# Four arguments, as an older RemoveView would pass: $5 is empty and the last
+# line has to be a no-op rather than an `rm -rf` of nothing in particular.
+check "with no state directory given, the last line does nothing at all" \
+  env PATH="$root/bin:$PATH" bash "$root/final.sh" _ "$PLUGINS/x" "$PLUGINS" "${HOOK_ARGS[@]}"
 
 rm -rf "$root"
 
