@@ -168,8 +168,10 @@ Panel {
     }
     if (barState === "setup") return "Face ID — set up"
     if (barState === "off") return "Face ID — off"
+    // Both halves for the lock screen: the setting, and the wrapper actually
+    // being the lock screen. Either alone is a face tried nowhere.
     return "Face ID — sudo · " + sudoFaces + (sudoFaces === 1 ? " face" : " faces")
-           + (config.lock ? " · lock screen" : "")
+           + (config.lock && lockState.enabled === true ? " · lock screen" : "")
   }
 
   // --- view stack (plan-gui.md §2.2) --------------------------------------
@@ -239,6 +241,31 @@ Panel {
     root.refresh()
     pendingOpenGuard.restart()
     return "ok"
+  }
+
+  // --- the handoff back from the Face service (Service.qml, switchLock) ------
+  //
+  // A view that needs the lock screen wrapper switched hands that one write to
+  // the service, because the write may rebuild the bar this popup lives in.
+  // The service answers here when it is done: `resume(view, word)` opens the
+  // popup on that view, and the word is left on `resumeWord` for the view to
+  // take. It is a word and not a sentence, so the view that asked is the one
+  // that says what it means -- whether it is the same instance that has been
+  // waiting all along (a bar that survived the write) or a brand new one (a bar
+  // that did not).
+  property string resumeWord: ""
+
+  function resumeAt(viewName, word) {
+    root.resumeWord = String(word || "")
+    return root.openAt(viewName, "")
+  }
+
+  // The view that takes the word clears it, so it is acted on once.
+  function takeResumeWord(prefix) {
+    var word = root.resumeWord
+    if (word === "" || word.indexOf(prefix) !== 0) return ""
+    root.resumeWord = ""
+    return word
   }
 
   function finishPendingOpen() {
@@ -425,6 +452,10 @@ Panel {
     Qt.callLater(function () { keyCatcher.forceActiveFocus() })
   } else {
     console.log("graveklar.face", "popup closed")
+    // A word is for the view the popup reopens on. One nobody took by the time
+    // the popup closes is about a switch that has already been read back
+    // through the status document, and must not surface on some later visit.
+    root.resumeWord = ""
   }
 
   IpcHandler {
@@ -449,6 +480,13 @@ Panel {
       // and because a gate cannot call an IpcHandler method from inside the
       // same process.
       return root.openAt(view, name)
+    }
+
+    // resume(view, word): how the Face service comes back to the popup after a
+    // lock screen switch it ran on the popup's behalf (resumeAt, above). Both
+    // arguments, for the same arity reason as open().
+    function resume(view: string, word: string): string {
+      return root.resumeAt(view, word)
     }
 
     // What the popup is doing, as JSON. This is how the phase-1 gate observes
@@ -476,7 +514,9 @@ Panel {
         reads: {
           statusBusy: root.statusBusy,
           refreshQueued: root.refreshQueued,
-          pendingOpen: root.pendingOpen ? String(root.pendingOpen.view) : ""
+          pendingOpen: root.pendingOpen ? String(root.pendingOpen.view) : "",
+          // A word from the Face service no view has taken yet (resumeAt).
+          resumeWord: root.resumeWord
         },
         install: {
           state: String(build.state || "idle"),

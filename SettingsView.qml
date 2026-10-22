@@ -175,25 +175,36 @@ Column {
 
   // --- lock screen ------------------------------------------------------------
   //
-  // Two calls, in this order, and neither direction needs a second password to
-  // roll back (plan-engine.md §9.4):
+  // Two halves, and the switch is on only when both are: `lock` in Face's own
+  // config, which the daemon reads before it will look at a camera at all, and
+  // the wrapper plugin being the lock screen. Either one alone is a face tried
+  // nowhere, and a switch that showed one of them as "on" would be saying so.
   //
-  //   on   omarchy-face-lock enable   (no prompt; it waits up to 10 s for the
-  //                                    new lock service to answer)
-  //        then admin lock-on         (prompt). Declined -> `disable`, and the
-  //                                    switch snaps back with nothing changed.
-  //   off  admin lock-off             (prompt), then `disable`.
+  //   on   admin lock-on (prompt), unless the setting is on already;
+  //        then the Face service enables the clone and reopens Settings
+  //   off  admin lock-off (prompt), unless the setting is off already;
+  //        then the Face service disables the clone and reopens Settings
   //
-  // **Neither call writes ~/.config/omarchy/plugins.** `enable` and `disable`
-  // edit `shell.json`, which is outside that folder, and the shell swaps the
-  // live lock service with no restart and no reload (E12, E13) -- which is why
-  // this switch can be moved with the popup still open. The wrapper folder was
-  // put in place once, by the Face service at a shell start, and stays there
-  // whether the feature is on or off.
+  // The prompt comes FIRST, while this popup is certainly still here to say it
+  // is waiting, so a declined prompt changes nothing at all. The clone comes
+  // LAST, and from the service rather than from here, because it is a
+  // shell.json write: the stock bar patches its widgets in place on one, but a
+  // bar that rebuilds them destroys this popup and every Process it owns. Found
+  // live on a notch bar -- the old order, clone first and prompt second,
+  // enabled the clone, lost the popup, and the prompt never came, so the
+  // wrapper sat on the lock screen with face still off behind it.
+  //
+  // A clone that will not come up after the setting went on leaves the setting
+  // on and the clone off. That is the state Setup's "Put face back on the lock
+  // screen" exists for; this switch reads as off in it, and turning it on again
+  // skips the prompt and only retries the clone.
 
   property var pendingLock: null
 
-  readonly property bool lockOn: view.pendingLock !== null ? view.pendingLock : view.config.lock === true
+  readonly property bool lockConfigOn: view.config.lock === true
+  readonly property bool lockCloneOn: !!view.lockState && view.lockState.enabled === true
+  readonly property bool lockOn: view.pendingLock !== null ? view.pendingLock
+                                                           : view.lockConfigOn && view.lockCloneOn
 
   readonly property string lockCompat: view.lockState && view.lockState.compat
                                        ? String(view.lockState.compat) : ""
@@ -205,16 +216,22 @@ Column {
   readonly property string lockStatusText: {
     if (view.lockOther !== "")
       return "Another lock screen plugin (" + view.lockOther + ") is in use."
+    // Said whichever way the setting is: the recovery that writes `failed` is
+    // also what switched the clone off, and this is the one place that says why.
+    if (view.lockCompat === "failed")
+      return "Omarchy's own lock screen is back"
+             + (view.lockMissing.length > 0 ? ": " + view.lockMissing.join(", ") : "")
+             + (view.lockConfigOn ? ". Turn this on again to retry." : ".")
+    // The wrapper can be the lock screen with the setting off -- the daemon then
+    // answers no to everything -- and that is "off", whatever compat says.
+    if (!view.lockConfigOn) return "Lock screen face unlock is off."
+    if (!view.lockCloneOn) return "Face is not on the lock screen yet — turn this on to finish."
     if (view.lockCompat === "ok") return "Active · follows Omarchy's lock screen."
-    if (view.lockCompat === "loading") return "Starting."
     if (view.lockCompat === "incompatible")
       return "Face is off on the lock screen: Omarchy's lock changed"
              + (view.lockMissing.length > 0 ? " (missing: " + view.lockMissing.join(", ") + ")" : "")
              + ". Password and fingerprint work as normal."
-    if (view.lockCompat === "failed")
-      return "Omarchy's own lock screen is back"
-             + (view.lockMissing.length > 0 ? ": " + view.lockMissing.join(", ") : "") + "."
-    return "Lock screen face unlock is off."
+    return "Starting."
   }
 
   function lockOutcomeText(result) {
@@ -227,11 +244,16 @@ Column {
       return "Another lock screen plugin (" + id + ") is in use."
     }
     if (code === "enable_failed")
-      return "Face's lock screen did not start, so Omarchy's is back — nothing changed."
+      return "Face's lock screen did not start, so Omarchy's own is still the lock screen. "
+             + "Turn this on again to retry."
     if (code === "validate_failed") return "Could not switch the lock screen — nothing changed."
     if (code === "not_staged") return "Lock screen setup is not finished — see Setup."
     if (code === "no_template") return "This plugin is missing its lock screen files — reinstall it."
     if (code === "locked") return "The session is locked — nothing is changed behind a lock screen."
+    if (code === "disable_failed")
+      return "No face will be tried on the lock screen, but Omarchy's own lock screen could not be "
+             + "put back until the next restart."
+    if (code === "missing_omarchy") return "The omarchy command is missing, so the lock screen was not switched."
     if (code === "config_write_failed")
       return "Face could not write its own configuration, so nothing was changed."
     if (code === "store_corrupt") return "Face's people store is damaged and nothing was changed."
@@ -244,11 +266,66 @@ Column {
     view.pendingLock = value
     view.busy = "lock"
     view.note = ""
-    if (value) view.lockTurnOn()
-    else view.lockTurnOff()
+    // The setting is already where it is going -- a retry after the clone did
+    // not come up, or a clone left on by an older version with the setting
+    // off: no prompt, straight to the clone.
+    if (view.lockConfigOn === value) { view.lockHandOver(value); return }
+    panel.ask.ask(panel.ask.adminArgv([value ? "lock-on" : "lock-off"]), "", function (result) {
+      if (!result.ok) { view.lockFinish(view.lockOutcomeText(result)); return }
+      view.lockHandOver(value)
+    })
+  }
+
+  // The clone, by the Face service. Its answer comes back through the panel's
+  // resume word (takeLockWord, below), to this instance if the bar survived the
+  // write and to a new one if it did not.
+  function lockHandOver(value) {
+    panel.ask.ask(panel.ask.cardArgv(["switchLock", value ? "on" : "off", "settings", "ok"]), "",
+                  function (result) {
+      var said = String(result.stdout || "").trim()
+      if (result.ok && said === "ok") { lockWait.restart(); return }
+      view.lockFinish(said === "busy"
+        ? "The lock screen is already being switched — try again in a moment."
+        : "Face's background service did not answer, so the lock screen was not switched. "
+          + "Restart the shell (omarchy restart shell) and try again.")
+    })
+  }
+
+  function takeLockWord() {
+    if (!panel || typeof panel.takeResumeWord !== "function") return
+    var word = panel.takeResumeWord("settings:")
+    if (word === "") return
+    var rest = word.substring("settings:".length)
+    if (rest === "ok") { view.lockFinish(""); return }
+    // failed:<code>[:<id>]
+    var parts = rest.split(":")
+    view.lockFinish(view.lockOutcomeText({ outcome: "error",
+      parsed: { error: parts[1] || "", id: parts.slice(2).join(":") } }))
+  }
+
+  // Both: the popup hands `panel` over after creation (FacePanel's Loader),
+  // and anything that declares it up front never fires a change for it.
+  onPanelChanged: view.takeLockWord()
+  Component.onCompleted: view.takeLockWord()
+
+  Connections {
+    target: view.panel
+    ignoreUnknownSignals: true
+    function onResumeWordChanged() { view.takeLockWord() }
+  }
+
+  // Longer than the slowest `enable` can take -- its own ten-second wait, the
+  // rescans before it, and the recovery after -- so this only ever fires when
+  // the service never answered at all.
+  Timer {
+    id: lockWait
+    interval: 25000
+    onTriggered: view.lockFinish("Face did not hear back about the lock screen. "
+                                 + "Close and reopen Face ID to see where it got to.")
   }
 
   function lockFinish(message) {
+    lockWait.stop()
     view.busy = ""
     view.pendingLock = null
     view.note = message || ""
@@ -256,50 +333,13 @@ Column {
     panel.refresh()
   }
 
-  function lockTurnOn() {
-    // The clone first, because it is the reversible half: if the owner then
-    // declines the prompt, `disable` puts it back with no password of its own.
-    panel.ask.ask(panel.ask.lockArgv(["enable"]), "", function (enabled) {
-      if (!enabled.ok) { view.lockFinish(view.lockOutcomeText(enabled)); return }
-      panel.ask.ask(panel.ask.adminArgv(["lock-on"]), "", function (result) {
-        if (result.ok) { view.lockFinish(""); return }
-        // The rollback. It is run for EVERY failure of `lock-on`, not only for a
-        // declined prompt: the clone being the lock screen while the daemon
-        // still answers `disabled` is a state nobody asked for, and leaving it
-        // behind would be the switch reporting a failure it did not finish
-        // undoing.
-        var message = view.lockOutcomeText(result)
-        panel.ask.ask(panel.ask.lockArgv(["disable"]), "", function (rolled) {
-          view.lockFinish(rolled.ok
-            ? message
-            : message + " Face's lock screen could not be switched back off either — open Setup.")
-        })
-      })
-    })
-  }
-
-  function lockTurnOff() {
-    // The setting first: it is what the daemon reads before it will look at a
-    // camera at all, so this call -- not the one below -- is what turns face
-    // off. A declined prompt therefore changes nothing and the clone stays as
-    // it was.
-    panel.ask.ask(panel.ask.adminArgv(["lock-off"]), "", function (result) {
-      if (!result.ok) { view.lockFinish(view.lockOutcomeText(result)); return }
-      panel.ask.ask(panel.ask.lockArgv(["disable"]), "", function (disabled) {
-        view.lockFinish(disabled.ok
-          ? ""
-          : "No face will be tried on the lock screen, but Omarchy's own lock screen "
-            + "could not be put back until the next restart.")
-      })
-    })
-  }
-
   Toggle {
     width: parent.width
     label: "Lock screen"
     description: "Unlock by looking, for people with Lock screen. Face is tried when you wake "
-                 + "the screen — lock, walk away, come back, touch a key and look at the camera. "
-                 + "The lock screen says when it is looking, and when it did not recognise you."
+                 + "the screen — lock, walk away, come back, touch a key and look at the camera — "
+                 + "and when you press Enter on the empty password field. The lock screen says "
+                 + "when it is looking, and when it did not recognise you."
     checked: view.lockOn
     enabled: view.busy === ""
     foreground: view.foreground

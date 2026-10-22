@@ -20,9 +20,17 @@
 #    every plugin bar widget, which destroys the Face popup and every process it
 #    owns (E13). So `enable` and `disable` edit `shell.json` -- which is OUTSIDE
 #    that folder -- and the live lock service is swapped with no restart and no
-#    reload (E12). That is what lets the Settings switch move with the popup
-#    still open. `sync` writes the folder only by calling `stage`, and only at
+#    reload (E12). `sync` writes the folder only by calling `stage`, and only at
 #    shell start, when no popup exists.
+#
+#    A shell.json write is not free either, though. The stock bar patches its
+#    widgets in place when the layout did not change, but a third-party bar may
+#    rebuild every widget on any write -- found live on a notch bar, where it
+#    destroyed the popup half way through the Settings switch, killed this
+#    script mid-poll, and the owner's prompt never came. So the GUI never runs
+#    `enable` or `disable` from the popup: the Face service does, because it
+#    outlives the bar (Service.qml, switchLock). And neither verb writes when
+#    the clone is already where it was asked to be.
 #
 # 2. **"Locked" is two different questions** (plan-engine.md §9.5).
 #    A LIVE LOCKER -- `omarchy-shell lock status` answering `.secure or
@@ -445,12 +453,20 @@ case $verb in
     [[ -d $STAGED && -f $STAGED/manifest.json ]] || die not_staged
     have omarchy || die missing_omarchy
 
-    # The registry may not have finished noticing a folder that was staged a
-    # moment ago, and `omarchy plugin enable` answers "is not known" for one it
-    # has not scanned. Ask it to rescan and try again -- an old lesson, and
-    # cheap.
+    # Already enabled: no `omarchy plugin enable` at all. The registry rewrites
+    # shell.json on every enable, changed or not, and a bar that rebuilds its
+    # widgets on that write takes the Face popup with it -- for a call that
+    # would have changed nothing. Straight to the question that matters, which
+    # is whether a lock service answers.
+    #
+    # Otherwise: the registry may not have finished noticing a folder that was
+    # staged a moment ago, and `omarchy plugin enable` answers "is not known"
+    # for one it has not scanned. Ask it to rescan and try again -- an old
+    # lesson, and cheap.
     enabled=false
+    plugin_enabled "$CLONE_ID" && enabled=true
     for _ in 1 2 3; do
+      [[ $enabled == true ]] && break
       if omarchy plugin enable "$CLONE_ID" >/dev/null 2>&1; then
         enabled=true
         break
@@ -493,6 +509,12 @@ case $verb in
       ok disabled true recovered true statusWritten false
     fi
     refuse_if_locked
+    # Nothing to give back: no write. For the same reason `enable` skips an
+    # enable that is already true -- the registry rewrites shell.json either
+    # way, and that write can rebuild the bar the Face popup lives in.
+    # Only when that is KNOWN: without jq, plugin_enabled cannot read the file
+    # and says no, which here would skip a disable that was needed.
+    if have jq && ! plugin_enabled "$CLONE_ID"; then ok disabled true; fi
     have omarchy || die missing_omarchy
     omarchy plugin disable "$CLONE_ID" >/dev/null 2>&1 || die disable_failed
     ok disabled true

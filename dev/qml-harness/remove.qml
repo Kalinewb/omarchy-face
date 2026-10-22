@@ -77,6 +77,19 @@ ShellRoot {
     function rowState(id) { var found = row(id); return found ? String(found.state) : "" }
     function reloadWatched() {}
     function pushView(name) { rootObj.log("pushed", name) }
+
+    // FacePanel's resume word, as it keeps it: the Face service's answer to a
+    // lock screen switch it ran for this view (Service.qml, switchLock). A
+    // rebuilt popup has it set before the view exists, so that case sets it
+    // here, at start-up, and never calls start() at all.
+    property string resumeWord: rootObj.caseName === "remove-rebuilt"
+                                ? (Quickshell.env("FACE_HARNESS_RESUME") || "") : ""
+    function takeResumeWord(prefix) {
+      var word = resumeWord
+      if (word === "" || word.indexOf(prefix) !== 0) return ""
+      resumeWord = ""
+      return word
+    }
     function close() { fakePanel.opened = false }
 
     // The read half, for real. Every `refresh()` the view asks for is a run of
@@ -163,8 +176,20 @@ ShellRoot {
       Qt.exit(0)
       return
     }
+    // The view a rebuilt bar hands back: it took the word when it loaded, and
+    // is already on its way.
+    if (caseName === "remove-rebuilt") return
     if (caseName === "remove-keep") removeView.keepPackages = true
     removeView.start()
+    // The service's answer to a step 1 handed over to it, delivered the way
+    // `omarchy-shell graveklar.face resume` would deliver it.
+    if ((Quickshell.env("FACE_HARNESS_RESUME") || "") !== "") resumeTimer.start()
+  }
+
+  Timer {
+    id: resumeTimer
+    interval: 900
+    onTriggered: fakePanel.resumeWord = Quickshell.env("FACE_HARNESS_RESUME") || ""
   }
 
   function phaseSeen(phase) {

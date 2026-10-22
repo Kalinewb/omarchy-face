@@ -190,10 +190,20 @@ check "nothing staged, nothing enabled, nothing to report" \
 
 # =============================================================================
 step "GATE: stage puts the wrapper in place, byte for byte"
+# Byte for byte, with the one rename `stage` makes: the template carries its
+# manifest as manifest.json.in, so the repository holds exactly one plugin, and
+# the staged copy has it as manifest.json. A plain `diff -r` of the two trees
+# has failed since that rename, at a clean HEAD; this is the same rule
+# bin/omarchy-face-lock applies (template_matches_staged).
+template_matches_staged() {
+  diff -rq --exclude=manifest.json --exclude=manifest.json.in "$REPO/lock" "$STAGED" >/dev/null 2>&1 &&
+    cmp -s "$REPO/lock/manifest.json.in" "$STAGED/manifest.json"
+}
+
 out=$(run stage)
 check "it says it staged" "true" "$(jq -r '.ok' <<<"$out")"
 check "…the folder is there" "true" "$([[ -d $STAGED ]] && echo true || echo false)"
-diff -rq "$REPO/lock" "$STAGED" >/dev/null 2>&1
+template_matches_staged
 check "…and it is the template, byte for byte (no substitution, §9.2)" "0" "$?"
 check "…with the manifest's version left a literal" "1.0.0" \
   "$(jq -r '.version' "$STAGED/manifest.json")"
@@ -227,7 +237,7 @@ step "sync re-stages when a Face update changed the template"
 printf '\n' >>"$STAGED/Service.qml"
 out=$(run sync)
 check "it staged" "true" "$(jq -r '.staged' <<<"$out")"
-diff -rq "$REPO/lock" "$STAGED" >/dev/null 2>&1
+template_matches_staged
 check "…and the staged copy matches the template again" "0" "$?"
 reset_calls
 out=$(run sync)

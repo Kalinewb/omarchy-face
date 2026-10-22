@@ -89,19 +89,32 @@ Item {
     return [dev ? "pkexec" : "/usr/bin/pkexec", helper].concat(args || [])
   }
 
-  // Installing the system half is not a call this file can make: it needs root
-  // before Face has a root-owned helper of its own, and pkexec has no action to
-  // authorise until that install has run. So the panel hands over the command
-  // instead of running it, and the command is written so that none of the bytes
-  // root executes come out of the plugin folder: the checksum it checks the
-  // installer against is fetched from this release's tag, which nothing running
-  // as this account can write.
+  // Installing the system half: the first install and every update, from
+  // Setup's one button. It needs root before Face has a root-owned helper of
+  // its own, and pkexec has no action of Face's to authorise until that install
+  // has run, so this is the one call that goes through polkit's generic exec
+  // action -- whose dialog says "/usr/bin/bash" and nothing else. Setup says
+  // so before the click.
   //
-  // What that does NOT survive is this file itself being rewritten. A command
-  // produced by a compromised panel is a compromised command whatever it says,
-  // and no checksum inside it can report that. README.md says so in the same
-  // words, and dev/check-pins.sh keeps the two texts byte-identical so the
-  // published one is worth comparing this against.
+  // What makes that safe is what the script does, not who runs it: none of the
+  // bytes root executes come out of the plugin folder unchecked. It copies the
+  // installer into a directory only root can write, fetches the checksum this
+  // release publishes -- from the release's tag, over TLS, somewhere nothing
+  // running as this account can write -- checks the copy against it, and only
+  // then runs the copy. The installer does the same for every file it
+  // installs. An earlier version handed pkexec the installer's own text read
+  // from the plugin folder, which a program running as this account could have
+  // rewritten before the click; a marketplace review caught it, and for a while
+  // the panel only handed over a command to paste into a terminal instead.
+  //
+  // What no checksum inside the script can vouch for is the script itself,
+  // which lives in this file, in that same writable folder. That was equally
+  // true of the pasted command -- a rewritten panel hands over a rewritten
+  // command -- and a program that can rewrite this file can just as well start
+  // pkexec itself with a dialog that looks exactly like this one. README.md
+  // says so, and prints the same script as a terminal command for anyone who
+  // would rather read it before running it; dev/check-pins.sh keeps the two
+  // byte-identical.
   //
   // The version is here rather than read from the folder for the same reason
   // the URL is pinned: check-pins.sh fails the build if it drifts from
@@ -110,34 +123,50 @@ Item {
 
   // pins:command:begin -- dev/check-pins.sh compares this against README.md
   //
-  // `/usr/bin/bash` and `PATH=/usr/bin` are load-bearing, not tidiness: sudo's
-  // env_reset KEEPS PATH, and only `Defaults secure_path` replaces it. Without
-  // both of these, every tool root runs here -- mktemp, install, curl,
-  // sha256sum, rm, bash -- is looked up through the invoking account's PATH,
-  // and a shim dropped anywhere on it is executed as root. The absolute path
-  // stops sudo's own search; the assignment stops every search after it.
+  // `$1` the plugin folder, `$2` the account, `$3` the release. One JSON
+  // document on stdout when it refuses, like every other verb the panel runs,
+  // and every check is `test || refuse`, so none of them can fail open.
+  //
+  // `PATH=/usr/bin` is load-bearing, not tidiness: sudo's env_reset KEEPS
+  // PATH, and only `Defaults secure_path` replaces it, so in the terminal form
+  // every tool root runs here -- mktemp, install, curl, sha256sum, rm, bash --
+  // would otherwise be looked up through the invoking account's PATH. (pkexec
+  // resets PATH itself; the assignment costs it nothing.)
   //
   // `refs/tags/` rather than a bare `v$3`: the bare form resolves against
   // branches as well as tags, so a branch of that name would serve the pin.
   // No `-L`: raw.githubusercontent.com answers 200 directly, and a followed
   // redirect is one more thing that can point somewhere else.
-  readonly property string installCommand:
-    "sudo /usr/bin/bash -c 'PATH=/usr/bin; set -o pipefail; t=$(mktemp -d) &&\n" +
-    "  [[ -f $1/system/install.sh && ! -L $1/system/install.sh ]] &&\n" +
-    "  install -m 0600 -- \"$1/system/install.sh\" \"$t/install.sh\" &&\n" +
-    "  p=$(curl -fsS --max-time 30 -- \"https://raw.githubusercontent.com/Kalinewb/omarchy-face/refs/tags/v$3/system/install.sh.sha256\") &&\n" +
-    "  [[ $p =~ ^[0-9a-f]{64}$ ]] &&\n" +
-    "  echo \"$p  $t/install.sh\" | sha256sum --quiet -c - &&\n" +
-    "  bash \"$t/install.sh\" \"$1\" \"$2\"; s=$?; rm -rf -- \"$t\"; exit $s' \\\n" +
-    "  _ \"$HOME/.config/omarchy/plugins/graveklar.face\" \"$USER\" " + root.systemVersion
+  readonly property string installBody:
+    "PATH=/usr/bin; set -o pipefail; t=$(mktemp -d) || exit 1\n" +
+    "  no() { echo \"{\\\"error\\\":\\\"$1\\\"}\"; }\n" +
+    "  run() {\n" +
+    "    [[ -f $1/system/install.sh && ! -L $1/system/install.sh ]] || { no installer_missing; return 1; }\n" +
+    "    install -m 0600 -- \"$1/system/install.sh\" \"$t/install.sh\" || { no installer_missing; return 1; }\n" +
+    "    p=$(curl -fsS --max-time 30 -- \"https://raw.githubusercontent.com/Kalinewb/omarchy-face/refs/tags/v$3/system/install.sh.sha256\") || { no checksum_unavailable; return 1; }\n" +
+    "    [[ $p =~ ^[0-9a-f]{64}$ ]] || { no checksum_unavailable; return 1; }\n" +
+    "    echo \"$p  $t/install.sh\" | sha256sum --quiet -c - >/dev/null 2>&1 || { no installer_modified; return 1; }\n" +
+    "    bash \"$t/install.sh\" \"$1\" \"$2\"\n" +
+    "  }\n" +
+    "  run \"$@\"; s=$?; rm -rf -- \"$t\"; exit $s"
   // pins:command:end
 
-  // The command goes to the clipboard, not to a browser. Through stdin rather
-  // than argv: wl-copy takes its text either way, and stdin cannot be misread
-  // as an option however the command starts. wl-copy forks to serve the
-  // selection, so it exits at once and ask()'s callback runs.
-  function installCopyArgv() {
-    return ["wl-copy", "-n"]
+  // The same script as README.md prints it, for a terminal: sudo instead of
+  // pkexec, and the folder and account spelled the way a shell can expand them.
+  readonly property string installCommand:
+    "sudo /usr/bin/bash -c '" + root.installBody + "' \\\n" +
+    "  _ \"$HOME/.config/omarchy/plugins/graveklar.face\" \"$USER\" " + root.systemVersion
+
+  // What Setup runs. pkexec and bash by absolute path, never whatever PATH
+  // finds first; the folder is this plugin's own, taken from where its QML was
+  // loaded rather than assembled from $HOME.
+  //
+  // In development there is nothing to install and nothing that may run as
+  // root, so this becomes the stub's install-system.
+  function installArgv(account) {
+    if (dev) return [devBin + "/omarchy-face-admin", "install-system"]
+    return ["/usr/bin/pkexec", "/usr/bin/bash", "-c", root.installBody, "omarchy-face-install",
+            root.pluginDir, String(account || ""), root.systemVersion]
   }
 
   // --- launching ----------------------------------------------------------

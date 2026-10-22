@@ -136,9 +136,18 @@ step "no terminal anywhere in the GUI (plan-merged.md §4 phase 2)"
 check "no terminal launcher in any .qml" \
   bash -c "! sed 's#^[[:space:]]*//.*##' '$REPO'/*.qml '$REPO'/common/*.qml |
            grep -nE '\\b(foot|alacritty|kitty|ghostty|wezterm|xterm)\\b|launch-floating-terminal|launch-editor|x-terminal-emulator'"
-check "the panel never hands root a script: no pkexec /bin/bash anywhere in the GUI" \
-  bash -c "! grep -n '/bin/bash' '$REPO'/*.qml '$REPO'/common/*.qml | grep -v '^[^:]*:[0-9]*:[[:space:]]*//' | grep -q pkexec"
-check "the README's install command carries the installer's checksum" \
+# Setup's button runs ONE script through pkexec: installBody, which checks the
+# plugin folder's installer against the checksum the release publishes before
+# root runs any of it. What must never come back is the older shape -- pkexec
+# handed text read out of the plugin folder -- so every pkexec'd bash in the
+# GUI has to be that one script, and there has to be exactly one.
+gui_root_scripts() {
+  grep -n '/bin/bash' "$REPO"/*.qml "$REPO"/common/*.qml |
+    grep -v '^[^:]*:[0-9]*:[[:space:]]*//' | grep pkexec
+}
+check "the only script the panel hands root is the checksum-checked installer" \
+  bash -c "[[ \$(grep -c . <<<\"\$1\") == 1 && \$1 == *root.installBody* ]]" _ "$(gui_root_scripts)"
+check "…and that script is the README's, with the installer's checksum fetched, not read" \
   bash -c "'$REPO/dev/check-pins.sh' >/dev/null"
 
 step "who Face may be set up for (plan-engine.md §8.2, the auth_self boundary)"

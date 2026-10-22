@@ -15,8 +15,9 @@ import "common"
 //   · the recording card, which needs exclusive focus and would close a popup
 //     anyway (G3)
 //   · the lock-screen duties: `omarchy-face-lock sync` at shell start, the
-//     30 s wrapper health check, and the single notification per new reason
-//     (G6, plan-merged.md §1 row 13 and §3)
+//     30 s wrapper health check, the single notification per new reason
+//     (G6, plan-merged.md §1 row 13 and §3), and switching the wrapper on and
+//     off for the popup, whose bar may not survive the write
 //
 // Phase 4 builds the recording card, phase 5 the indicator, phase 6 the Test
 // card and phase 7 the three lock duties at the bottom of this file.
@@ -128,7 +129,7 @@ Item {
       root.closeCard()
       return "the card could not be created"
     }
-    root.card.closed.connect(function () { root.closeCard() })
+    root.card.dismissed.connect(function () { root.closeCard() })
     return "ok"
   }
 
@@ -171,7 +172,7 @@ Item {
     })
     if (!root.testCard) { root.testName = ""; return "the card could not be created" }
     root.testCard.stopped.connect(function () { root.closeTest() })
-    root.testCard.closed.connect(function () { root.closeTest() })
+    root.testCard.dismissed.connect(function () { root.closeTest() })
 
     root.testProcess = engine.stream(engine.identityArgv(["verify", root.testName]),
                                      null, function (result) {
@@ -264,6 +265,15 @@ Item {
       return root.startTest(who)
     }
 
+    // The lock screen wrapper on or off, on the popup's behalf: the write that
+    // a rebuilding bar would otherwise kill half way (switchLock, below).
+    // `view` is where the popup reopens when it is done, and `then` is the word
+    // it is handed if it worked.
+    function switchLock(state: string, view: string, then: string): string {
+      if (state !== "on" && state !== "off") return "switchLock needs on or off"
+      return root.switchLock(state === "on", String(view || ""), String(then || ""))
+    }
+
     // Close whatever card is on screen. For a pkexec'd session that means
     // closing its stdin, never a signal: it runs as root and the user cannot
     // signal it (plan-merged.md §2 rule 7).
@@ -288,7 +298,8 @@ Item {
         lock: {
           phase: root.lockPhase,
           notified: root.lockNotifiedKey,
-          statusPath: root.lockStatusPath
+          statusPath: root.lockStatusPath,
+          switching: root.lockSwitching
         },
         // What the indicator is saying, which is how a test asks a card that has
         // no window it could be questioned about any other way. It is also the
@@ -458,9 +469,69 @@ Item {
         root.lockPhase = "off"
         return
       }
+      // The 30 s are counted from the moment the check begins, not from when
+      // this service loaded. At shell start the two are a second apart. For a
+      // clone enabled mid-session they were days apart -- the shell had been up
+      // since the last boot -- so the very first tick found the deadline long
+      // gone and disabled a lock screen that had answered a second earlier,
+      // without ever asking it (found live: "no lock service answered in 30 s"
+      // fifteen seconds after "composed with Omarchy's lock screen"). A check
+      // already running keeps its own deadline rather than being extended.
+      if (root.lockPhase !== "checking") root.lockStartedAt = Date.now()
       root.lockPhase = "checking"
     })
   }
+
+  // --- the lock screen wrapper, on and off, for the popup -------------------
+  //
+  // `omarchy-face-lock enable` and `disable` write shell.json. The stock bar
+  // patches its widgets in place when the layout did not change, but a bar
+  // that rebuilds every widget on any write destroys the popup half way
+  // through -- and with it the Process running the verb. Found live on a notch
+  // bar: the Settings switch enabled the clone, lost the popup, and the owner's
+  // prompt that was meant to follow never came, leaving the wrapper on the
+  // lock screen with face still off behind it.
+  //
+  // So the popup does its prompting first, while it is certainly still there
+  // to say a prompt is being waited on, and hands the one write to this
+  // service, which outlives the bar. When the verb answers, the popup is opened
+  // again on the view that asked, with a word saying how it went
+  // (FacePanel.qml, resume()): `<view>:<then>` on success and
+  // `<view>:failed:<code>[:<id>]` if not -- addressed, so a word meant for one
+  // view is never taken by another.
+  //
+  // Any process running as this account can call this, exactly as it can run
+  // `omarchy-face-lock enable` itself: the verbs are unprivileged on purpose,
+  // and a clone with `lock = false` in Face's config asks a daemon that says
+  // no to everything.
+  property string lockSwitching: ""
+
+  function switchLock(on, view, then) {
+    if (root.lockSwitching !== "") return "busy"
+    root.lockSwitching = on ? "on" : "off"
+    engine.ask(engine.lockArgv([on ? "enable" : "disable"]), "", function (result) {
+      root.lockSwitching = ""
+      lockStatusFile.reload()
+      var word = String(view) + ":" + String(then || "")
+      if (result.ok) {
+        if (on) root.lockCheck()
+      } else {
+        var parsed = result.parsed || {}
+        var code = parsed.error ? String(parsed.error) : String(result.outcome)
+        word = String(view) + ":failed:" + code + (parsed.id ? ":" + String(parsed.id) : "")
+        console.warn("graveklar.face", "the lock screen could not be switched", on ? "on:" : "off:", code)
+      }
+      root.resumePopup(view, word)
+    })
+    return "ok"
+  }
+
+  function resumePopup(view, word) {
+    resumeProcess.command = ["omarchy-shell", "graveklar.face", "resume", String(view || ""), String(word || "")]
+    resumeProcess.running = true
+  }
+
+  Process { id: resumeProcess }
 
   Timer {
     id: lockHealth

@@ -102,7 +102,10 @@ PanelWindow {
   // person who never hears that a sudo happened (Indicator.qml).
   property string notice: ""
 
-  signal closed()
+  // Not `closed`: every Quickshell window already has a `closed` signal, and
+  // declaring a second one is an invalid override -- Qt warns about it today
+  // and is on its way to refusing it.
+  signal dismissed()
 
   readonly property color onScrim: "white"
   readonly property color onScrimDim: Qt.rgba(1, 1, 1, 0.6)
@@ -111,7 +114,7 @@ PanelWindow {
   readonly property string phase: session ? session.phase : "framing"
 
   function requestClose() {
-    if (!session) { card.closed(); return }
+    if (!session) { card.dismissed(); return }
     // Esc during `capturing` is ignored with "Almost done"; before any capture
     // it discards; after one it is Done (plan-gui.md §5.3).
     session.requestClose()

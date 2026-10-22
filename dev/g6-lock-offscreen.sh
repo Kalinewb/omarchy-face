@@ -425,6 +425,24 @@ check "…and all four lines were measured" "4" "$i"
 # The Settings switch and the Setup row (plan-gui.md §6.1, §4 row 8)
 # =============================================================================
 
+# The views now hand the clone to the Face service with `omarchy-shell
+# graveklar.face.card switchLock …`. On this PATH that must NEVER be the real
+# omarchy-shell: it would reach the live shell's Face service and switch this
+# machine's real lock screen. The stand-in logs the call next to the verbs and
+# answers the way the service does. FACE_HARNESS_NO_SERVICE plays a shell with
+# no Face service loaded.
+cat >"$root/bin/omarchy-shell" <<'CARD'
+#!/bin/bash
+if [[ $1 == graveklar.face.card ]]; then
+  [[ -n ${OMARCHY_FACE_DEV_STATE:-} ]] && printf 'card:%s\n' "${*:2}" >>"$OMARCHY_FACE_DEV_STATE/verbs.log"
+  [[ ${FACE_HARNESS_NO_SERVICE:-} == 1 ]] && { echo "no target graveklar.face.card" >&2; exit 1; }
+  echo ok
+  exit 0
+fi
+exit 1
+CARD
+chmod +x "$root/bin/omarchy-shell"
+
 step "what Settings says for each of the engine's compat words"
 for case_name in settings-off settings-loading settings-ok settings-incompatible \
                  settings-failed settings-otherlock; do
@@ -444,43 +462,71 @@ out=$(run_view settings-otherlock)
 check "another lock plugin replaces the off line rather than joining it" \
   "Another lock screen plugin (io.github.sirjul1337.lock-explorer) is in use." \
   "$(field statusText "$out")"
+out=$(run_view settings-halfway)
+check "the wrapper on the lock screen with the setting off is off, not active" \
+  "false|Lock screen face unlock is off." "$(field lockOn "$out")|$(field statusText "$out")"
+out=$(run_view settings-failed FACE_HARNESS_LOCK=1)
+check "a clone that did not come up after the setting went on reads as off" "false" \
+  "$(field lockOn "$out")"
+check "…and says turning it on again is the retry" \
+  "Omarchy's own lock screen is back: no lock service answered. Turn this on again to retry." \
+  "$(field statusText "$out")"
 
-step "GATE: turning it on is two calls, in this order"
+# The order is the fix for a live failure. Clone first, prompt second, both from
+# the popup: on a bar that rebuilds its widgets on a shell.json write, the
+# enable destroyed the popup, the prompt never came, and the wrapper sat on the
+# lock screen with face still off. So the prompt comes first, from the popup,
+# and the clone last, from the Face service, which outlives the bar.
+step "GATE: turning it on is the owner's prompt first, then the clone by the service"
 rm -f "$state/verbs.log"
-out=$(run_view settings-toggle-on)
+out=$(run_view settings-toggle-on FACE_HARNESS_RESUME=settings:ok)
 echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
-check "the clone is enabled first, then the owner is asked" "lock:enable lock-on" \
+check "lock-on, then the service is asked for the clone and to reopen Settings" \
+  "lock-on card:switchLock on settings ok" \
   "$(tr -s ' \n' ' ' <"$state/verbs.log" | sed 's/ *$//')"
-check "…and the switch lets go of its pending value when it lands" "true" \
-  "$(field pendingAfter "$out")"
+check "…and the popup never writes shell.json itself" "0" "$(grep -c '^lock:' "$state/verbs.log")"
+check "…and the switch lets go of its pending value when the service answers" "true|" \
+  "$(field pendingAfter "$out")|$(field busyAfter "$out")"
+check "…having taken the word, so it is not acted on twice" "" "$(field wordLeft "$out")"
 
-step "GATE: declining the prompt leaves the clone disabled"
+step "GATE: declining the prompt changes nothing at all"
 rm -f "$state/verbs.log"
 out=$(run_view settings-toggle-on OMARCHY_FACE_DEV_PKEXEC=1 FACE_HARNESS_DECLINE=1)
 echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
-# The admin verb is absent from the log on purpose: polkit refused before exec,
-# so `lock-on` never ran at all. What follows it is the rollback, and it needs no
-# password of its own -- that is the whole point of enabling the clone first.
-check "the declined verb never ran, and the enable is rolled back" "lock:enable lock:disable" \
-  "$(tr -s ' \n' ' ' <"$state/verbs.log" | sed 's/ *$//')"
+# Empty on purpose: polkit refused before exec, so `lock-on` never ran, and
+# with the clone after the prompt there is nothing to roll back.
+check "the declined verb never ran, and the clone was never touched" "" \
+  "$(tr -s ' \n' ' ' <"$state/verbs.log" 2>/dev/null | sed 's/ *$//')"
 check "…and the page says nothing changed" "Not authorised — nothing changed." \
   "$(field note "$out")"
 
 step "an enable that never brought a lock screen up"
 rm -f "$state/verbs.log"
-out=$(run_view settings-toggle-on OMARCHY_FACE_DEV_LOCK_ERROR=enable_failed)
-check "the owner is never asked for a password after it failed" "lock:enable" \
-  "$(tr -s ' \n' ' ' <"$state/verbs.log" | sed 's/ *$//')"
-check "…and the page says Omarchy's lock screen is back" \
-  "Face's lock screen did not start, so Omarchy's is back — nothing changed." \
+out=$(run_view settings-toggle-on FACE_HARNESS_RESUME=settings:failed:enable_failed)
+check "the page says Omarchy's lock screen is still the lock screen, and how to retry" \
+  "Face's lock screen did not start, so Omarchy's own is still the lock screen. Turn this on again to retry." \
   "$(field note "$out")"
+
+step "a retry with the setting already on asks for no password"
+rm -f "$state/verbs.log"
+out=$(run_view settings-toggle-on FACE_HARNESS_LOCK=1 FACE_HARNESS_RESUME=settings:ok)
+check "straight to the clone" "card:switchLock on settings ok" \
+  "$(tr -s ' \n' ' ' <"$state/verbs.log" | sed 's/ *$//')"
+
+step "a shell with no Face service to hand the clone to"
+rm -f "$state/verbs.log"
+out=$(run_view settings-toggle-on FACE_HARNESS_NO_SERVICE=1)
+check "the switch lets go and says why, rather than waiting for ever" \
+  "true|Face's background service did not answer, so the lock screen was not switched. Restart the shell (omarchy restart shell) and try again." \
+  "$(field pendingAfter "$out")|$(field note "$out")"
 
 step "GATE: turning it off is the setting first, then the clone"
 rm -f "$state/verbs.log"
-out=$(run_view settings-toggle-off FACE_HARNESS_LOCK=1)
+out=$(run_view settings-toggle-off FACE_HARNESS_LOCK=1 FACE_HARNESS_LOCK_ENABLED=1 \
+  FACE_HARNESS_RESUME=settings:ok)
 echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
 check "the daemon is told to stop looking before the lock screen is swapped" \
-  "lock-off lock:disable" "$(tr -s ' \n' ' ' <"$state/verbs.log" | sed 's/ *$//')"
+  "lock-off card:switchLock off settings ok" "$(tr -s ' \n' ' ' <"$state/verbs.log" | sed 's/ *$//')"
 
 step "the Setup row's three repairs"
 for case_name in setup-notstaged setup-stale setup-notenabled; do
@@ -501,9 +547,11 @@ check "an update waiting offers the restart" "Finish the update" "$(field fixLab
 check "…and it runs 'sync'" "lock:sync" \
   "$(tr -s ' \n' ' ' <"$state/verbs.log" | sed 's/ *$//')"
 rm -f "$state/verbs.log"
-out=$(run_view setup-notenabled)
-check "a staged but switched-off clone offers 'enable'" "lock:enable" \
+out=$(run_view setup-notenabled FACE_HARNESS_RESUME=setup:ok)
+check "a staged but switched-off clone is enabled by the Face service" \
+  "card:switchLock on setup ok" \
   "$(tr -s ' \n' ' ' <"$state/verbs.log" | sed 's/ *$//')"
+check "…and the row lets go when it answers" "|" "$(field note "$out")|$(field wordLeft "$out")"
 out=$(run_view setup-failed)
 check "a failed lock screen is broken with NO button (plan-gui.md §4 row 8)" "" \
   "$(field fixLabel "$out")"
@@ -534,6 +582,41 @@ check "…and gave Omarchy's lock screen back, whatever Hyprland says" \
   "$(grep 'lock:disable' "$state/verbs.log" | tr -s ' \n' ' ' | sed 's/ *$//')"
 check "…having run sync first, at shell start, as the plan orders it" "lock:sync" \
   "$(head -1 "$state/verbs.log" | tr -s ' \n' ' ' | sed 's/ *$//')"
+
+# A lock service that answers, for the two mid-session cases: the health check
+# has something to find, and the service's call back to the popup is logged.
+cat >"$root/bin/omarchy-shell" <<'ANSWERING'
+#!/bin/bash
+if [[ $1 == lock && $2 == status ]]; then
+  echo '{"locked":false,"requested":false,"secure":false}'
+  exit 0
+fi
+[[ -n ${OMARCHY_FACE_DEV_STATE:-} ]] && printf 'shell:%s\n' "$*" >>"$OMARCHY_FACE_DEV_STATE/verbs.log"
+echo ok
+ANSWERING
+chmod +x "$root/bin/omarchy-shell"
+
+step "GATE: a clone enabled mid-session is checked from then, not from shell start"
+rm -f "$state/verbs.log"
+out=$(run_view service-midsession OMARCHY_FACE_DEV_LOCK_ENABLED=1)
+echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
+# Found live: the shell had been up four days, the first tick of the check read
+# that as its own 30 s, and a lock screen that answered was disabled without
+# being asked -- "no lock service answered in 30 s" fifteen seconds after the
+# wrapper said it had composed.
+check "an hour-old shell start does not count against the check" "settled" "$(field phase "$out")"
+check "…and nothing was disabled" "0" "$(grep -c 'lock:disable' "$state/verbs.log")"
+
+step "the Face service switches the clone on for the popup, and says so"
+rm -f "$state/verbs.log"
+out=$(run_view service-switch OMARCHY_FACE_DEV_LOCK_ENABLED=1)
+echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
+check "it takes the job" "ok" "$(field switchAnswer "$out")"
+check "it enables the clone, then reopens Settings with the word" \
+  "lock:enable shell:graveklar.face resume settings settings:ok" \
+  "$(grep -E '^(lock:enable|shell:)' "$state/verbs.log" | tr -s ' \n' ' ' | sed 's/ *$//')"
+check "…and checks the lock screen it just enabled, without disabling it" "settled|0" \
+  "$(field phase "$out")|$(grep -c 'lock:disable' "$state/verbs.log")"
 
 step "GATE: exactly one notification, not one per check"
 rm -f "$state/verbs.log"

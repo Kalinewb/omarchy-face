@@ -338,6 +338,9 @@ ShellRoot {
         // escapes; this is the string the clipboard would actually receive.
         // Base64 so a multi-line value stays one field.
         rootObj.log("installCommandB64", Qt.btoa(facePanel.ask.installCommand))
+        // And the script the button hands pkexec (argv[3] of installArgv),
+        // which is the README's command with the sudo wrapper taken off.
+        rootObj.log("installBodyB64", Qt.btoa(facePanel.ask.installBody))
         // The delegates, not the model: `rendered` is the expression the
         // delegate's own `visible` is bound to. An Item in a harness with no
         // window is never `visible`, whatever it decided.

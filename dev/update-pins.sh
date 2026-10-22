@@ -44,7 +44,7 @@ installer=$(sha256sum -- system/install.sh | cut -d' ' -f1)
 printf '%s\n' "$installer" >system/install.sh.sha256
 
 # The README's command is generated from the panel's, never typed: the README
-# copy is what a suspicious reader compares the clipboard against, and a copy
+# copy is what a suspicious reader compares the panel's script against, and a copy
 # that has drifted is worse than no copy at all.
 command=$(dev/install-command.py) || exit 1
 python3 - "$command" <<'RDME'

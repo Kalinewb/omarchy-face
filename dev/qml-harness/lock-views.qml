@@ -33,14 +33,19 @@ ShellRoot {
     printErrors: false
   }
 
-  // The `status.lock` object, per case (plan-merged.md §2.2).
+  // The `status.lock` object, per case (plan-merged.md §2.2). `enabled` is
+  // whether the clone is the lock screen, which the Settings switch now reads
+  // alongside `config.lock`: either half alone is a face tried nowhere.
   readonly property var lockStates: ({
-    "settings-off":          { compat: "n/a",          missing: [],                     otherLock: "" },
-    "settings-loading":      { compat: "loading",      missing: [],                     otherLock: "" },
-    "settings-ok":           { compat: "ok",           missing: [],                     otherLock: "" },
-    "settings-incompatible": { compat: "incompatible", missing: ["pendingSessionLock"], otherLock: "" },
-    "settings-failed":       { compat: "failed",       missing: ["no lock service answered"], otherLock: "" },
-    "settings-otherlock":    { compat: "n/a",          missing: [],                     otherLock: "io.github.sirjul1337.lock-explorer" }
+    "settings-off":          { enabled: false, compat: "n/a",          missing: [],                     otherLock: "" },
+    "settings-loading":      { enabled: true,  compat: "loading",      missing: [],                     otherLock: "" },
+    "settings-ok":           { enabled: true,  compat: "ok",           missing: [],                     otherLock: "" },
+    "settings-incompatible": { enabled: true,  compat: "incompatible", missing: ["pendingSessionLock"], otherLock: "" },
+    "settings-failed":       { enabled: false, compat: "failed",       missing: ["no lock service answered"], otherLock: "" },
+    "settings-otherlock":    { enabled: false, compat: "n/a",          missing: [],                     otherLock: "io.github.sirjul1337.lock-explorer" },
+    // The state the old switch order left behind on a bar that rebuilds its
+    // widgets: the wrapper on the lock screen, the setting still off.
+    "settings-halfway":      { enabled: true,  compat: "ok",           missing: [],                     otherLock: "" }
   })
 
   QtObject {
@@ -61,7 +66,18 @@ ShellRoot {
     })
 
     property var lockState: rootObj.lockStates[rootObj.caseName]
-      || ({ compat: Quickshell.env("FACE_HARNESS_COMPAT") || "n/a", missing: [], otherLock: "" })
+      || ({ enabled: Quickshell.env("FACE_HARNESS_LOCK_ENABLED") === "1",
+            compat: Quickshell.env("FACE_HARNESS_COMPAT") || "n/a", missing: [], otherLock: "" })
+
+    // FacePanel's resume word, exactly as it keeps it: what the Face service
+    // hands back when a lock screen switch it ran for a view has finished.
+    property string resumeWord: ""
+    function takeResumeWord(prefix) {
+      var word = resumeWord
+      if (word === "" || word.indexOf(prefix) !== 0) return ""
+      resumeWord = ""
+      return word
+    }
 
     property var people: {
       try { return JSON.parse(peopleFile.text()) } catch (error) { return null }
@@ -157,6 +173,7 @@ ShellRoot {
           rootObj.log("fixLabel", setup.fixLabel(row))
           if (row.fixable) {
             setup.runFix(row)
+            resumeTimer.start()
             settleTimer.start()
             return
           }
@@ -172,11 +189,43 @@ ShellRoot {
         if (rootObj.caseName.indexOf("settings-toggle") === 0) {
           settings.setLock(!settings.lockOn)
           rootObj.log("pendingWhileAsking", settings.pendingLock)
+          resumeTimer.start()
           settleTimer.start()
           return
         }
         rootObj.log("note", settings.note)
         Qt.exit(0)
+      }
+    }
+
+    // The Face service's answer, as `resume(view, word)` would deliver it. The
+    // stand-in `omarchy-shell` has already logged the call that asked for it;
+    // this is the other half of the round trip, which needs the real service
+    // and a real IPC target -- the service cases below run that one.
+    Timer {
+      id: resumeTimer
+      interval: 900
+      onTriggered: {
+        var word = Quickshell.env("FACE_HARNESS_RESUME") || ""
+        if (word !== "") fakePanel.resumeWord = word
+      }
+    }
+
+    // The two mid-session cases: a shell that has been up for an hour when the
+    // clone is switched on. What used to happen is the health check reading
+    // that hour as its own 30 s, and disabling a lock screen that had answered.
+    Timer {
+      interval: 3000
+      running: rootObj.caseName === "service-midsession" || rootObj.caseName === "service-switch"
+      onTriggered: {
+        var service = serviceLoader.item
+        rootObj.log("phaseBefore", service.lockPhase)
+        service.lockPhase = "off"
+        service.lockStartedAt = Date.now() - 3600 * 1000
+        if (rootObj.caseName === "service-switch")
+          rootObj.log("switchAnswer", service.switchLock(true, "settings", "ok"))
+        else
+          service.lockCheck()
       }
     }
 
@@ -188,12 +237,15 @@ ShellRoot {
       onTriggered: {
         if (rootObj.caseName.indexOf("setup") === 0) {
           rootObj.log("note", setupLoader.item.noteText)
+          rootObj.log("wordLeft", fakePanel.resumeWord)
           Qt.exit(0)
           return
         }
         var settings = settingsLoader.item
         rootObj.log("pendingAfter", settings.pendingLock === null)
+        rootObj.log("busyAfter", settings.busy)
         rootObj.log("note", settings.note)
+        rootObj.log("wordLeft", fakePanel.resumeWord)
         Qt.exit(0)
       }
     }

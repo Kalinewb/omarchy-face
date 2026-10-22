@@ -51,7 +51,10 @@ PanelWindow {
   // is the same cancellation Profiles uses, which frees the camera within
   // 300 ms (plan-merged.md §2.5, common/Ask.qml's cancel()).
   signal stopped()
-  signal closed()
+  // Not `closed`: every Quickshell window already has a `closed` signal, and
+  // declaring a second one is an invalid override -- Qt warns about it today
+  // and is on its way to refusing it.
+  signal dismissed()
 
   readonly property string who: card.label !== "" ? card.label : "them"
 
@@ -215,7 +218,7 @@ PanelWindow {
           bordered: true
           foreground: Color.polkit.text
           fontFamily: card.fontFamily
-          onClicked: card.closed()
+          onClicked: card.dismissed()
         }
       }
     }

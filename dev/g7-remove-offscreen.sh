@@ -120,6 +120,23 @@ exit 0
 STANDIN
 chmod 0755 "$root/bin/omarchy"
 
+# Step 1 goes to the Face service when the wrapper is on the lock screen, as
+# `omarchy-shell graveklar.face.card switchLock …`. On this PATH that must
+# never be the real omarchy-shell, which would reach the live shell's Face
+# service and switch this machine's own lock screen off. The stand-in logs the
+# call beside the verbs and answers as the service does; the harness plays the
+# service's answer back (FACE_HARNESS_RESUME).
+cat >"$root/bin/omarchy-shell" <<'CARD'
+#!/bin/bash
+if [[ $1 == graveklar.face.card ]]; then
+  [[ -n ${OMARCHY_FACE_DEV_STATE:-} ]] && printf 'card:%s\n' "${*:2}" >>"$OMARCHY_FACE_DEV_STATE/verbs.log"
+  echo ok
+  exit 0
+fi
+exit 1
+CARD
+chmod 0755 "$root/bin/omarchy-shell"
+
 reset_plugins() {
   rm -rf "$PLUGINS"
   mkdir -p "$PLUGINS"
@@ -295,13 +312,28 @@ echo
 echo "${DIM}== a lock screen that will not switch off stops the removal${RESET}"
 reset_plugins
 rm -f "$state/purged" "$state/verbs.log"
-out=$(run_case remove-locked FACE_HARNESS_LOCK_ENABLED=1 OMARCHY_FACE_DEV_LOCK_ERROR=locked)
+out=$(run_case remove-locked FACE_HARNESS_LOCK_ENABLED=1 FACE_HARNESS_RESUME=remove:failed:locked)
 echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
+check "step 1 went to the Face service, not to a verb run from the popup" \
+  "card:switchLock off remove purge" "$(verbs | grep -v '^status' | paste -sd'|')"
 check "the flow stopped at step 1" "stopped" "$(field phase "$out")"
 check "…before asking for a password" "" "$(verbs | grep '^purge' | paste -sd'|')"
 check "…and said what is in the way" \
   "Nothing is changed behind a lock screen — unlock the session and try again." \
   "$(field note "$out")"
+
+echo
+echo "${DIM}== a bar that rebuilt the popup during step 1 still finishes the removal${RESET}"
+# The popup that comes back is a new view: phase idle, the packages box
+# unticked. The word the service hands it says to go on, and with which choice.
+reset_plugins
+rm -f "$state/purged" "$state/verbs.log"
+out=$(run_case remove-rebuilt FACE_HARNESS_RESUME=remove:purge-keep)
+echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
+check "the new view went straight to step 2" "done" "$(field phase "$out")"
+check "…keeping the packages it was asked to keep" "purge --keep-packages" \
+  "$(verbs | grep '^purge' | tr -s ' \n' ' ' | sed 's/ *$//')"
+check "…without a step 1 of its own" "0" "$(verbs | grep -c '^lock:')"
 
 echo
 echo "${DIM}== a clone that was never enabled does not block one${RESET}"

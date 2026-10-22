@@ -50,7 +50,7 @@ elif [[ $qml_version != "$sh_version" ]]; then
   echo "check-pins: common/Ask.qml says $qml_version, system/install.sh says $sh_version" >&2; bad=1
 fi
 
-# The README's command is what a suspicious reader compares the clipboard
+# The README's command is what a suspicious reader compares the panel's script
 # against, so it has to be the panel's command exactly.
 qml_command=$(dev/install-command.py) || bad=1
 readme_command=$(sed -n '/^### Installing or updating the system files$/,/^```$/p' README.md |

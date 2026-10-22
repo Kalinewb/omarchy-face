@@ -12,9 +12,13 @@ import qs.Ui
 // The order is fixed (plan-engine.md §10.2, plan-gui.md §7.1) and every step of
 // it is here for a reason:
 //
-//   1. `omarchy-face-lock disable` -- config only, so this popup survives it.
-//      The lock service has to be Omarchy's own BEFORE the helpers its wrapper
-//      calls are deleted.
+//   1. `omarchy-face-lock disable`. The lock service has to be Omarchy's own
+//      BEFORE the helpers its wrapper calls are deleted. It is a shell.json
+//      write, which the stock bar survives and a bar that rebuilds its widgets
+//      does not -- so when the wrapper IS on the lock screen, the Face service
+//      makes the write (Service.qml, switchLock) and reopens this view with a
+//      word saying it may go on, and with which choice about the packages.
+//      When it is not, the verb writes nothing and runs from here.
 //   2. `pkexec omarchy-face-admin purge` -- the whole system half, one prompt.
 //      Exit 3 is an engine build in progress, and purge waits for it rather
 //      than deleting /var/lib from under it. A non-empty `incomplete` stops
@@ -131,7 +135,22 @@ Column {
     view.note = ""
     view.incomplete = []
     view.phase = "disabling"
-    // Step 1. It edits `shell.json` only, so this window is still here
+    if (view.lockEnabled) {
+      // Step 1 by the Face service: this window may not survive it. The word it
+      // sends back carries the packages choice, because a rebuilt popup is a
+      // new view with the box unticked again.
+      panel.ask.ask(panel.ask.cardArgv(["switchLock", "off", "remove",
+                                        view.keepPackages ? "purge-keep" : "purge"]), "",
+                    function (result) {
+        if (result.ok && String(result.stdout || "").trim() === "ok") return
+        view.phase = "stopped"
+        view.note = "Face's background service did not answer, so nothing was removed. "
+                    + "Restart the shell (omarchy restart shell) and try again."
+      })
+      return
+    }
+    // Step 1, from here: with the wrapper not on the lock screen, the verb
+    // answers without writing anything, so this window is still here
     // afterwards to run step 2 (plan-merged.md §1 row 15).
     panel.ask.ask(panel.ask.lockArgv(["disable"]), "", function (result) {
       if (!result.ok) {
@@ -152,6 +171,43 @@ Column {
       }
       view.purge()
     })
+  }
+
+  // The Face service's answer to step 1, through the panel's resume word: to
+  // this instance if the bar survived the write, to a new one if it did not.
+  // Only `purge` and `purge-keep` go on, and only from a view that is not
+  // already past step 1. A word that arrives out of nowhere -- anything
+  // running as this account can call the service -- can at most bring up the
+  // same owner prompt it could raise by running `pkexec omarchy-face-admin
+  // purge` itself, and that prompt is still the only thing that removes
+  // anything.
+  function takeRemoveWord() {
+    if (!panel || typeof panel.takeResumeWord !== "function") return
+    var word = panel.takeResumeWord("remove:")
+    if (word === "") return
+    if (view.phase !== "idle" && view.phase !== "disabling") return
+    var rest = word.substring("remove:".length)
+    if (rest === "purge" || rest === "purge-keep") {
+      view.keepPackages = rest === "purge-keep"
+      view.note = ""
+      view.purge()
+      return
+    }
+    var parts = rest.split(":")
+    view.phase = "stopped"
+    view.note = view.lockOutcomeText({ outcome: "error", parsed: { error: parts[1] || "" } })
+    panel.refresh()
+  }
+
+  // Both: the popup hands `panel` over after creation (FacePanel's Loader),
+  // and anything that declares it up front never fires a change for it.
+  onPanelChanged: view.takeRemoveWord()
+  Component.onCompleted: view.takeRemoveWord()
+
+  Connections {
+    target: view.panel
+    ignoreUnknownSignals: true
+    function onResumeWordChanged() { view.takeRemoveWord() }
   }
 
   function purge() {

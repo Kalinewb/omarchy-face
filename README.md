@@ -152,15 +152,17 @@ omarchy plugin add https://github.com/Kalinewb/omarchy-face.git --enable
 
 A face icon appears in the bar. Click it and work down Setup:
 
-1. **Install Face's system files** — from a terminal, with the command below. Setup's
-   **Install Face ID** and **Update Face system files** buttons open these instructions;
-   the panel never installs anything as root itself.
-2. **Build the face engine** — the howdy and dlib build above.
+1. **Install Face ID** — Setup's one button. It asks for your password once, installs
+   Face's system files, and starts building the face engine by itself.
+2. **Wait for the engine build** — the howdy and dlib build above. Setup shows each step
+   as it goes; you can close the panel while it runs.
 3. **Record your face** — People → Add person. The first person recorded on the machine is
    its owner.
 4. **Give that person Sudo, or Lock screen, or both** — Person → the switches. This says
    *who may*; on its own it changes nothing.
-5. **Settings → Face for sudo**, and **Lock screen** if you want it. This is the other
+5. **Settings → Face for sudo**, and **Lock screen** if you want it. Lock screen asks for
+   your password, then hands Omarchy's lock screen over to Face's; on some bars the panel
+   closes for a moment while it does, and comes back on Settings by itself. This is the other
    half, and it is the one that wires the machine: until it is on, no face is tried
    anywhere, however many people have the permission.
 
@@ -172,24 +174,33 @@ is off.
 
 ### Installing or updating the system files
 
-Setup's **Copy the install command** button puts this on your clipboard; it is reproduced
-here so you can compare the two. It is the same command for the first install and for every
-update, and it asks for your password through `sudo`:
+Setup's **Install Face ID** button does this, and so does **Update Face's system files**
+after a plugin update: one password dialog, nothing to copy or type. The dialog is
+polkit's own and says it wants to run **/usr/bin/bash** as the super user — that is this
+installer, because Face's own helpers cannot ask with their own message until they exist.
+
+The script the button runs is printed here, as the terminal command that does the same
+thing — for anyone who would rather read it first, and for a machine whose panel will not
+open. It asks for your password through `sudo`:
 
 ```bash
-sudo /usr/bin/bash -c 'PATH=/usr/bin; set -o pipefail; t=$(mktemp -d) &&
-  [[ -f $1/system/install.sh && ! -L $1/system/install.sh ]] &&
-  install -m 0600 -- "$1/system/install.sh" "$t/install.sh" &&
-  p=$(curl -fsS --max-time 30 -- "https://raw.githubusercontent.com/Kalinewb/omarchy-face/refs/tags/v$3/system/install.sh.sha256") &&
-  [[ $p =~ ^[0-9a-f]{64}$ ]] &&
-  echo "$p  $t/install.sh" | sha256sum --quiet -c - &&
-  bash "$t/install.sh" "$1" "$2"; s=$?; rm -rf -- "$t"; exit $s' \
+sudo /usr/bin/bash -c 'PATH=/usr/bin; set -o pipefail; t=$(mktemp -d) || exit 1
+  no() { echo "{\"error\":\"$1\"}"; }
+  run() {
+    [[ -f $1/system/install.sh && ! -L $1/system/install.sh ]] || { no installer_missing; return 1; }
+    install -m 0600 -- "$1/system/install.sh" "$t/install.sh" || { no installer_missing; return 1; }
+    p=$(curl -fsS --max-time 30 -- "https://raw.githubusercontent.com/Kalinewb/omarchy-face/refs/tags/v$3/system/install.sh.sha256") || { no checksum_unavailable; return 1; }
+    [[ $p =~ ^[0-9a-f]{64}$ ]] || { no checksum_unavailable; return 1; }
+    echo "$p  $t/install.sh" | sha256sum --quiet -c - >/dev/null 2>&1 || { no installer_modified; return 1; }
+    bash "$t/install.sh" "$1" "$2"
+  }
+  run "$@"; s=$?; rm -rf -- "$t"; exit $s' \
   _ "$HOME/.config/omarchy/plugins/graveklar.face" "$USER" 2.0.4
 ```
 
-What it does: root copies the installer out of the plugin folder into a directory only root
-can write, fetches the checksum for this release from this repository over TLS, checks the
-copy against it, and only then runs it. The installer does the same for the ten files it
+What it does, from the button or from a terminal: root copies the installer out of the
+plugin folder into a directory only root can write, fetches the checksum for this release
+from this repository over TLS, checks the copy against it, and only then runs it. The installer does the same for the ten files it
 installs: each is copied into a root-only directory and checked against its own checksum
 before anything is put in place. If the plugin folder has been changed by anything, the
 check fails and nothing is installed.
@@ -201,12 +212,13 @@ that: `sudo` keeps your own `PATH` unless the machine sets `secure_path`, so wit
 shim dropped anywhere on your path — `sha256sum`, `curl`, `mktemp` — would be the copy root
 runs. Pinning the path means every tool comes from a directory only root can write.
 
-What no checksum inside a command can tell you is whether the command itself is the right
-one. The panel builds it from a file in that same writable folder, so a program that had
-already taken over your account could offer you a different command entirely, and the shell
-you paste into resolves `sudo` through your own environment besides. That is the floor of
-this design, and it is why the command is printed above: if you have reason to doubt the
-machine, compare what the panel copied against this text before you run it.
+What no checksum inside a script can tell you is whether the script itself is the right
+one. The panel's copy lives in a file in that same writable folder, so a program that had
+already taken over your account could rewrite it — and such a program could just as well
+open the same polkit dialog itself, or put a `sudo` of its own on your path for the
+terminal form. That is the floor of this design, whichever way you install: Face cannot
+protect a password typed into an account that is already someone else's. If you have
+reason to doubt the machine, read the command above and run it from a terminal instead.
 
 The first install ends by starting the face engine build, and the Setup view shows it.
 

@@ -332,15 +332,21 @@ rm -f "$state/people.json"
 out=$(run_case setup FACE_STATUS_DELAY=0.1)
 echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
 check "it is not calm" false "$(field calm "$out")"
-check "it offers one action" "Copy the install command" "$(field primaryLabel "$out")"
+check "it offers one action" "Install Face ID" "$(field primaryLabel "$out")"
 # dev/check-pins.sh proves README.md against dev/install-command.py, which is a
 # script's model of how QML unescapes a string literal. This is the only place
 # the real engine's answer is available, so it is where the model gets checked.
 readme_command=$(sed -n '/^### Installing or updating the system files$/,/^```$/p' "$REPO/README.md" |
                  sed -n '/^```bash$/,/^```$/p' | sed '1d;$d')
-check "…that copies exactly the command README.md publishes" \
+check "…whose terminal form is exactly the command README.md publishes" \
   "$readme_command" \
   "$(field installCommandB64 "$out" | base64 -d)"
+# The button runs the script itself, through pkexec, so what has to match the
+# README is the text between `bash -c '` and `' \` -- byte for byte.
+readme_body=$(python3 -c 'import re,sys; m=re.match(r"sudo /usr/bin/bash -c \x27(.*)\x27 \\\n  _ ", sys.stdin.read(), re.S); print(m.group(1) if m else "")' <<<"$readme_command")
+check "…and the script the button hands pkexec is the README's, word for word" \
+  "$readme_body" \
+  "$(field installBodyB64 "$out" | base64 -d)"
 check "…and not a checklist" 0 "$(field rowsVisible "$out")"
 check "the rows are still there to read" 4 "$(field rowsVisibleWithDetails "$out")"
 check "the bar button says set up" setup "$(field barState "$out")"

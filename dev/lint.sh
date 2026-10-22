@@ -23,11 +23,10 @@
 # Reported but not fatal:
 #   - `unqualified` access (the QML is written that way throughout)
 #   - members "not found on type QObject" (`bar` and Style tokens arrive
-#     untyped, so qmllint cannot know them)
+#     untyped, so qmllint cannot know them), and on a Loader's untyped `item`
 #   - `uncreatable-type` on PanelWindow and `signal-handler-parameters` on
 #     Process.onExited, which are Quickshell's own type info being incomplete:
-#     Omarchy's shipped QML produces both, and they run fine. QtMultimedia's
-#     MediaDevices members are in the same class.
+#     Omarchy's shipped QML produces both, and they run fine.
 
 set -uo pipefail
 
@@ -57,12 +56,17 @@ out=$("$QMLLINT" -I "$work/qmlpath" -I /usr/lib/qt6/qml "${files[@]}" 2>&1); rc=
 fatal=$(sed -nE "s#^(Warning|Error): (.*) \[($FATAL)\]\$#  \2 [\3]#p" <<<"$out")
 # A member missing on a real type: a typo against someone's API. Members on
 # QObject are the untyped injections and are expected.
-# `QObject` is the untyped injection above. `QMediaDevices` is Qt's own
-# singleton, whose `videoInputs` and `defaultVideoInput` are real properties
-# qmllint's type info does not carry -- named here rather than widening the
-# check, so a genuine typo on any other type still fails.
+# `QObject` is the untyped injection above, and qmllint names it two ways: `on
+# type "QObject"` for an injected property, and `…::item with type QObject` for
+# a Loader's `item`, which is untyped by definition (the newer wording, which
+# made this check fail at a clean HEAD). Anything else still fails.
+#
+# There used to be a third exception, for `QMediaDevices`, on the theory that
+# qmllint's type info lacked `videoInputs`. It did not: RecordPreview.qml was
+# reading those off the TYPE, where they are undefined, and the recording
+# card's preview never showed a camera. The warning was the bug.
 typos=$(grep -E '\[missing-property\]' <<<"$out" \
-  | grep -v 'on type "QObject"' | grep -v 'on type "QMediaDevices"' \
+  | grep -v 'on type "QObject"' | grep -v 'with type QObject \[missing-property\]$' \
   | sed -E 's#^Warning: #  #')
 
 counts=$(sed -nE 's#.*\[([a-z-]+)\]$#\1#p' <<<"$out" | sort | uniq -c | sort -rn | awk '{printf "%s %s, ", $1, $2}')

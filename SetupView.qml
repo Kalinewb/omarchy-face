@@ -122,7 +122,7 @@ Column {
     if (!view.primaryRow) return ""
     if (view.busyRow === String(view.primaryRow.id)) return "Working…"
     if (view.buildRunning) return ""
-    if (String(view.primaryRow.fix || "") === "install-first") return "Copy the install command"
+    if (String(view.primaryRow.fix || "") === "install-first") return "Install Face ID"
     return view.fixLabel(view.primaryRow)
   }
 
@@ -166,7 +166,10 @@ Column {
   // machine, not a broken one, and this is where that is admitted.
   readonly property string calmWhere: {
     var sudo = view.config.sudo === true && view.sudoFaces > 0
-    var lock = view.config.lock === true
+    // Both halves, as the Settings switch reads them: the setting, and the
+    // wrapper actually being the lock screen.
+    var lock = view.config.lock === true && !!panel && !!panel.lockState
+               && panel.lockState.enabled === true
     if (!sudo && !lock) return "No face is accepted anywhere yet — Settings is where that is turned on."
     var parts = []
     if (sudo) parts.push(view.sudoFaces === 1 ? "1 face can approve sudo"
@@ -185,8 +188,8 @@ Column {
     // the person is asking for, and it read as the first of two optional steps
     // when it is in fact the whole install -- it starts the engine build itself
     // (post-ship revision).
-    if (row.fix === "install-first") return "Copy the install command"
-    if (row.fix === "install-system") return "Copy the update command"
+    if (row.fix === "install-first") return "Install Face ID"
+    if (row.fix === "install-system") return "Update Face's system files"
     if (row.fix === "install-engine") {
       // While a build runs there is no button at all. `install-engine` would
       // exit 3, and the row is already showing the build that is happening.
@@ -319,6 +322,16 @@ Column {
       return "/usr/local/bin is not owned by root, or is writable by others — Face will not install helpers there."
     if (code === "plugin_not_owned" || code === "plugin_missing" || code === "plugin_unsafe")
       return "Face could not read its own system files from the plugin folder."
+    // The install command's own three refusals, before the installer runs at
+    // all (common/Ask.qml, installBody).
+    if (code === "installer_missing")
+      return "This plugin's installer (system/install.sh) is missing — reinstall the plugin."
+    if (code === "checksum_unavailable")
+      return "Face could not fetch this release's checksum from GitHub, so nothing was installed. "
+             + "Check the internet connection and try again."
+    if (code === "installer_modified")
+      return "This plugin's installer is not the released one, so nothing was installed — "
+             + "reinstall the plugin."
     if (code === "install_running") return "The engine is already building."
     // The sudo row's repair, in the words of plan-merged.md §2.3.
     if (code === "no_sudo_faces") return "Give someone Sudo first."
@@ -391,26 +404,27 @@ Column {
     } else if (row.fix === "lock-stage") {
       argv = panel.ask.lockArgv(["stage"])
     } else if (row.fix === "lock-enable") {
-      argv = panel.ask.lockArgv(["enable"])
+      // A shell.json write, so the Face service makes it: the bar this popup
+      // lives in may rebuild on it (Service.qml, switchLock). It reopens Setup
+      // with a word saying how it went, taken by takeLockWord below.
+      view.busyRow = row.id
+      view.noteRow = row.id
+      view.noteText = "Working…"
+      panel.ask.ask(panel.ask.cardArgv(["switchLock", "on", "setup", "ok"]), "", function (result) {
+        if (result.ok && String(result.stdout || "").trim() === "ok") return
+        view.busyRow = ""
+        view.noteText = "Face's background service did not answer, so the lock screen was not "
+                        + "switched. Restart the shell (omarchy restart shell) and try again."
+      })
+      return
     } else if (row.fix === "lock-sync") {
       argv = panel.ask.lockArgv(["sync"])
     } else if (row.fix === "install-first" || row.fix === "install-system") {
-      // Not an install: the system half is installed from a terminal, with the
-      // command this copies. The panel never runs it -- it has no root of its
-      // own to run it with until that command has run once (Ask.qml).
-      view.noteRow = row.id
-      view.noteText = "Copying the command…"
-      // Only say it is on the clipboard once wl-copy says so. Claiming it
-      // before the call returns means a missing wl-copy still reads "copied",
-      // and the next thing the owner does is paste whatever was there before
-      // into a root shell.
-      panel.ask.ask(panel.ask.installCopyArgv(), panel.ask.installCommand, function (result) {
-        if (view.noteRow !== row.id) return
-        view.noteText = result && result.ok
-          ? "Command copied. Paste it into a terminal, then come back here."
-          : "The command could not be copied — wl-copy did not run. It is in Face's README, under \"Installing or updating the system files\"."
-      })
-      return
+      // The first install and every update, one password dialog each. What
+      // runs as root is the installer copied out of the plugin folder and
+      // checked against the checksum this release publishes -- not anything
+      // the folder says about itself (common/Ask.qml, installBody).
+      argv = panel.ask.installArgv(Quickshell.env("USER") || "")
     }
     if (!argv) return
 
@@ -424,7 +438,8 @@ Column {
       // A started build answers immediately and then takes half an hour, so the
       // row has to switch to the step list without waiting for the next status
       // read (up to 30 s away).
-      if (result.ok && (row.fix === "install-engine" || row.fix === "install-first")) {
+      if (result.ok && (row.fix === "install-engine" || row.fix === "install-first"
+                        || row.fix === "install-system")) {
         view.logTail = ""
         panel.reloadWatched()
       }
@@ -432,6 +447,34 @@ Column {
       // re-read rather than assumed to have moved.
       panel.refresh()
     })
+  }
+
+  // The Face service's answer to "Put face back on the lock screen" (above),
+  // through the panel's resume word: to this instance if the bar survived the
+  // write, and to a new one if it did not.
+  function takeLockWord() {
+    if (!panel || typeof panel.takeResumeWord !== "function") return
+    var word = panel.takeResumeWord("setup:")
+    if (word === "") return
+    var rest = word.substring("setup:".length)
+    view.busyRow = ""
+    view.noteRow = "lock"
+    if (rest === "ok") { view.noteText = ""; panel.refresh(); return }
+    var parts = rest.split(":")
+    view.noteText = view.outcomeText({ outcome: "error",
+      parsed: { error: parts[1] || "", id: parts.slice(2).join(":") } }, null)
+    panel.refresh()
+  }
+
+  // Both: the popup hands `panel` over after creation (FacePanel's Loader),
+  // and anything that declares it up front never fires a change for it.
+  onPanelChanged: view.takeLockWord()
+  Component.onCompleted: view.takeLockWord()
+
+  Connections {
+    target: view.panel
+    ignoreUnknownSignals: true
+    function onResumeWordChanged() { view.takeLockWord() }
   }
 
   // Three things the popup can be showing, and they must never be confused:
@@ -541,8 +584,7 @@ Column {
       textFormat: Text.PlainText
       width: parent.width
       visible: view.primaryFix === "install-first"
-      text: "One command, copied by the button below and run in a terminal, installs Face's "
-            + "helpers, its service and its polkit "
+      text: "One button installs Face's helpers, its service and its polkit "
             + "policy, and then starts building the face engine — howdy and dlib from the Arch "
             + "User Repository, at the two revisions this version of Face was tested against, "
             + "installed with pacman. The build takes several minutes, needs nothing from you "
@@ -574,11 +616,11 @@ Column {
       textFormat: Text.StyledText
       width: parent.width
       visible: view.primaryFix === "install-first"
-      text: "This panel does not install anything as root. The button copies a command for you "
-            + "to run: it checks the installer against a checksum <b>fetched from this release</b> "
-            + "before running it, so nothing a program could have changed in your plugin folder "
-            + "is ever run as root. The command itself comes from this panel — if you have reason "
-            + "to doubt this machine, compare it with the one in Face's README on GitHub."
+      text: "Your password dialog will say it wants to run <b>/usr/bin/bash</b> as the super "
+            + "user. That is this installer: Face's own helpers cannot ask with their own message "
+            + "until they exist. Before anything runs as root it checks the installer against a "
+            + "checksum <b>fetched from this release</b>, so nothing a program could have changed "
+            + "in your plugin folder is ever run as root."
       color: view.dim
       font.family: view.fontFamily
       font.pixelSize: Style.font.caption
@@ -738,12 +780,15 @@ Column {
         textFormat: Text.StyledText
         width: parent.width
         visible: !rowItem.stale && rowItem.modelData.id === "system"
-                 && rowItem.modelData.fix === "install-first"
+                 && (rowItem.modelData.fix === "install-first"
+                     || rowItem.modelData.fix === "install-system")
         wrapMode: Text.WordWrap
         leftPadding: Style.space(22)
-        text: "Installed from a terminal with the command this row copies, which checks the " +
-              "installer against a checksum <b>fetched from this release</b> before running it " +
-              "as root. The install then starts the engine build by itself."
+        text: "One password dialog, which will say it wants to run <b>/usr/bin/bash</b> as the " +
+              "super user: that is this installer. It checks itself against a checksum " +
+              "<b>fetched from this release</b> before running as root" +
+              (rowItem.modelData.fix === "install-first"
+                ? ", and then starts the engine build by itself." : ".")
         color: view.dim
         font.family: view.fontFamily
         font.pixelSize: Style.font.caption

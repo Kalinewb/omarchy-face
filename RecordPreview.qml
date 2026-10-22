@@ -18,8 +18,15 @@ Item {
   // The RGB node from `camera.rgb`, e.g. /dev/video0.
   property string device: ""
 
+  // An instance, not the type name. MediaDevices is an ordinary object type in
+  // Qt 6, not a singleton: `MediaDevices.videoInputs` read off the type is
+  // undefined, so `chosen` threw on every evaluation and the card never had a
+  // camera to show -- the preview stayed blank on every laptop, with two
+  // warnings in the journal each time a card opened.
+  MediaDevices { id: mediaDevices }
+
   readonly property var chosen: {
-    var devices = MediaDevices.videoInputs
+    var devices = mediaDevices.videoInputs
     for (var i = 0; i < devices.length; i++) {
       // Qt's V4L2 backend uses the device node as the id.
       if (String(devices[i].id) === preview.device) return devices[i]
@@ -31,7 +38,7 @@ Item {
     id: capture
     camera: Camera {
       id: camera
-      cameraDevice: preview.chosen ? preview.chosen : MediaDevices.defaultVideoInput
+      cameraDevice: preview.chosen ? preview.chosen : mediaDevices.defaultVideoInput
       active: preview.visible && preview.chosen !== null
     }
     videoOutput: output
