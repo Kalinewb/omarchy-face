@@ -589,6 +589,20 @@ check, both while PAM is still checking and when PAM said no before the wrapper
 looked. `lock-lines.qml` measures every line the wrapper writes against the real
 lock font and the field's real room — the line this replaced was 360 px in 339.
 
+**The stale `locked`.** Quickshell 0.3.2's `WlSessionLock` never emits
+`lockStateChanged` when it unlocks (`session_lock.cpp:173-184` checks `isLocked()`
+after releasing the lock), so the stock `locked` binding stayed true after every
+unlock and swallowed the next lock request. The wrapper sends the missing notify.
+`dev/qml-harness/stale-lock-service.qml` reproduces the bug in QML: the getters
+are always current, but the binding's copy of them moves only on the two notify
+signals, which is what the QML engine does with the real C++ properties. `g6`
+proves the stand-in stays locked with nobody to repair it, that a password unlock
+and a face unlock both read stale as they end and fresh a turn later, and that the
+next `ipcLock()` locks. It also proves that a Quickshell which sends the signal,
+and a lock that is still up, are left alone. Against the **real** stock lock it
+proves the wrapper finds the session lock, that its repair is a no-op on a healthy
+lock, and that the real C++ signal sent from QML reaches Omarchy's own handler.
+
 `g9-enter-live.sh` is the part a suite cannot do: virtual keyboards do not fire
 Hyprland bindings, so it registers the same binding unlocked and asks a person to
 press Enter once.

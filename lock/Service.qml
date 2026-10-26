@@ -20,6 +20,8 @@ import Quickshell.Io
 //     the check was started for
 //   · a line in $XDG_RUNTIME_DIR/omarchy-face/lock-status.json saying whether
 //     the composition still fits
+//   · after every unlock, the one signal Quickshell forgets to send, so the
+//     stock `locked` does not stay true and swallow the next lock request
 //
 // What it does NOT do, and each of these is a decision:
 //
@@ -272,6 +274,11 @@ Item {
         if (root.compat === "ok") root.armEnter()
         return
       }
+      // Later, not now: this runs from inside the stock finishUnlock(), between
+      // `lockRequested = false` and `sessionLock.locked = false`, so the unlock
+      // is not over yet. Every unlock comes through here -- face, password and
+      // fingerprint all end in the same finishUnlock().
+      Qt.callLater(root.repairStaleLocked)
       // Before the in-flight check below, and whatever its outcome: Enter goes
       // back to being just Enter the moment there is no lock to open.
       root.disarmEnter()
@@ -289,6 +296,63 @@ Item {
         verifyProcess.signal(15)
       }
     }
+  }
+
+  // --- the stale `locked` after an unlock (Quickshell 0.3.2) -----------------
+  //
+  // The stock `locked` is a binding, `lockRequested || sessionLock.locked ||
+  // sessionLock.secure` (Service.qml:38), and its `lock` IPC handler only locks
+  // when it reads false (:520). After every unlock it read true for good, with
+  // all three of its inputs false, so every later lock -- the menu, the key,
+  // idle, suspend -- answered `ok` and did nothing until the shell restarted.
+  //
+  // The cause is in Quickshell, not Omarchy. WlSessionLock::unlock() releases
+  // the lock and only then asks `if (isLocked()) emit lockStateChanged()`
+  // (session_lock.cpp:173-184), which by then is always false: `locked` never
+  // announces going false. The one signal that does fire, secureStateChanged,
+  // fires from inside the release while isLocked() still reads true, so that
+  // is the value the binding keeps. The journal shows it: `secure=false`, and
+  // never `session-locked=false`.
+  //
+  // So once an unlock is over, this sends the signal Quickshell left out. It is
+  // that object's own notify for `locked`, so the stock binding reads its
+  // inputs again and the stock `onLockStateChanged` runs exactly as Omarchy
+  // wrote it, finding nothing to do. It acts only when the stock reads locked
+  // while every input it is made of reads unlocked, so a healthy stock, a lock
+  // still up, or a Quickshell that has fixed this are all left untouched.
+  // Nothing is restarted.
+  //
+  // The session lock is found by shape, among the stock's non-visual children,
+  // because it has no name this file can reach. If Omarchy moves it, this does
+  // nothing and the bug is back; face unlock is unaffected either way.
+
+  property int lockedRepairs: 0
+
+  function stockSessionLock() {
+    var objects = stock.item ? stock.item.resources : null
+    if (!objects) return null
+    for (var i = 0; i < objects.length; i++) {
+      var object = objects[i]
+      if (object && typeof object.locked === "boolean" && typeof object.secure === "boolean"
+          && typeof object.lockStateChanged === "function")
+        return object
+    }
+    return null
+  }
+
+  function repairStaleLocked() {
+    var item = stock.item
+    if (!item || item.locked !== true || item.lockRequested !== false) return
+    var session = root.stockSessionLock()
+    if (!session || session.locked !== false || session.secure !== false) return
+
+    session.lockStateChanged()
+    root.lockedRepairs = root.lockedRepairs + 1
+    if (item.locked === false)
+      root.log("the stock lock still read as locked after unlocking; refreshed it")
+    else
+      console.warn("graveklar.face-lock", "the stock lock still reads as locked after unlocking;",
+                   "the next lock request may do nothing")
   }
 
   // --- the wake poll (E7) ---------------------------------------------------

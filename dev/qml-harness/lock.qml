@@ -118,6 +118,36 @@ ShellRoot {
     }
   }
 
+  // The stale-lock stand-in on its own, with no wrapper to repair it: the proof
+  // that it really does stay locked after an unlock.
+  Loader {
+    id: bare
+    active: rootObj.caseName === "stale-bare"
+    source: active ? "file://" + rootObj.omarchyPath + "/shell/plugins/lock/Service.qml" : ""
+  }
+
+  // Taken at moments the report cannot see: right after an unlock, before the
+  // wrapper's repair has had a turn, and again once it has.
+  property string staleSnapshot: ""
+  property string freshSnapshot: ""
+  property int notifiesAfterUnlock: -1
+  property string relocked: ""
+  property string eventBefore: ""
+  property string eventAfterRepair: ""
+  property string eventAfterSignal: ""
+
+  function snapshot() {
+    var item = wrapper.stockItem
+    return item && typeof item.status === "function" ? item.status() : String(item ? item.locked : "")
+  }
+
+  // The second `omarchy-shell lock lock`, through the stand-in's copy of the
+  // stock IPC handler: did it lock this time?
+  function lockAgain() {
+    rootObj.stock().ipcLock()
+    rootObj.relocked = String(rootObj.stock().lockRequested)
+  }
+
   // --- the script -----------------------------------------------------------
 
   property var steps: []
@@ -174,6 +204,18 @@ ShellRoot {
     console.log("HARNESS lineNoResumed", wrapper.lineNoResumed)
     console.log("HARNESS lineStopped", wrapper.lineStopped)
     console.log("HARNESS resumed", wrapper.resumedAt > 0)
+    console.log("HARNESS stockLocked", item && "locked" in item ? item.locked : "")
+    console.log("HARNESS repairs", wrapper.lockedRepairs)
+    console.log("HARNESS sessionLockFound", wrapper.stockSessionLock() !== null)
+    console.log("HARNESS lockNotifies", item && "lockNotifies" in item ? item.lockNotifies : -1)
+    console.log("HARNESS notifiesAfterUnlock", rootObj.notifiesAfterUnlock)
+    console.log("HARNESS staleSnapshot", rootObj.staleSnapshot)
+    console.log("HARNESS freshSnapshot", rootObj.freshSnapshot)
+    console.log("HARNESS relocked", rootObj.relocked)
+    console.log("HARNESS eventBefore", rootObj.eventBefore)
+    console.log("HARNESS eventAfterRepair", rootObj.eventAfterRepair)
+    console.log("HARNESS eventAfterSignal", rootObj.eventAfterSignal)
+    console.log("HARNESS bareStatus", bare.item ? bare.item.status() : "")
     Qt.exit(0)
   }
 
@@ -451,6 +493,82 @@ ShellRoot {
           { after: 800,  run: function () { rootObj.stock().beginLock() } },
           { after: 800,  run: function () { rootObj.stock().passwordUnlock() } },
           { after: 800,  run: function () {} },
+          done
+        ])
+        break
+
+      // --- the stale `locked` after an unlock (Quickshell 0.3.2) -------------
+
+      // The REAL stock lock, healthy and unlocked: the wrapper finds its
+      // session lock, its repair finds nothing to do, and the real C++ notify,
+      // sent from QML, reaches the stock's own handler. Nothing is locked.
+      case "compose-repair":
+        rootObj.play([
+          { after: 1500, run: function () {
+              rootObj.eventBefore = rootObj.stock().lastEvent
+              wrapper.repairStaleLocked()
+              rootObj.eventAfterRepair = rootObj.stock().lastEvent
+              var session = wrapper.stockSessionLock()
+              if (session) session.lockStateChanged()
+              rootObj.eventAfterSignal = rootObj.stock().lastEvent
+            } },
+          { after: 300, run: function () {} },
+          done
+        ])
+        break
+
+      // The stand-in with nobody to repair it stays locked: the bug, reproduced.
+      case "stale-bare":
+        rootObj.play([
+          { after: 300,  run: function () { bare.item.beginLock() } },
+          { after: 500,  run: function () { bare.item.passwordUnlock() } },
+          { after: 1500, run: function () {} },
+          done
+        ])
+        break
+
+      // A password unlock: stale the moment it ends, fresh a turn later, and
+      // the next lock request locks.
+      case "stale-password":
+      case "healthy-unlock":
+        if (rootObj.caseName === "healthy-unlock") rootObj.stock().quickshellFixed = true
+        rootObj.play([
+          { after: 300, run: function () { rootObj.stock().beginLock() } },
+          { after: 800, run: function () {
+              rootObj.stock().passwordUnlock()
+              rootObj.staleSnapshot = rootObj.snapshot()
+            } },
+          { after: 500, run: function () {
+              rootObj.freshSnapshot = rootObj.snapshot()
+              rootObj.notifiesAfterUnlock = rootObj.stock().lockNotifies
+              rootObj.lockAgain()
+            } },
+          { after: 300, run: function () {} },
+          done
+        ])
+        break
+
+      // A face unlock, which is the wrapper's own finishUnlock() call.
+      case "stale-face":
+        rootObj.play([
+          { after: 300,  run: function () { rootObj.stock().beginLock() } },
+          { after: 800,  run: function () { rootObj.pressEnter() } },
+          { after: 2500, run: function () {
+              rootObj.freshSnapshot = rootObj.snapshot()
+              rootObj.notifiesAfterUnlock = rootObj.stock().lockNotifies
+              rootObj.lockAgain()
+            } },
+          { after: 300,  run: function () {} },
+          done
+        ])
+        break
+
+      // A lock that is up is never touched, whoever asks.
+      case "healthy-locked":
+        rootObj.play([
+          { after: 300, run: function () { rootObj.stock().beginLock() } },
+          { after: 800, run: function () { wrapper.repairStaleLocked() } },
+          { after: 300, run: function () {} },
           done
         ])
         break

@@ -308,6 +308,15 @@ journalctl -t omarchy-face --since -10min
 own reason — gave up, too dark, timed out. Nothing at all means no check was ever started,
 which sends you back to the blanking rule above.
 
+**Locking does nothing after the first unlock.** The menu's Lock, the key and the idle
+timeout all do nothing, and `omarchy-shell lock status` says `"locked":true` with everything
+else false. This is a Quickshell 0.3.2 bug: it never announces that the lock was released,
+so Omarchy's lock screen goes on believing it is locked. With face on the lock screen,
+Face sends the missing signal after every unlock, by face, password or fingerprint, and
+`journalctl --user -t omarchy-shell` says `refreshed it` when it did. With face off the lock
+screen, Omarchy's own lock still has the bug, and `omarchy restart shell` clears it until
+the next unlock.
+
 **The lock screen came back looking like Omarchy's own.** That is on purpose. If Face's
 copy of the lock screen cannot run — after an Omarchy update, or a bad Face update — Face
 steps aside within half a minute and Omarchy's lock screen takes over, with a notification

@@ -95,6 +95,11 @@ cp "$REPO/dev/fixtures/three-people/people.json" "$state/people.json"
 mkdir -p "$root/fake/shell/plugins/lock"
 cp "$REPO/dev/qml-harness/fake-lock-service.qml" "$root/fake/shell/plugins/lock/Service.qml"
 
+# A stand-in whose `locked` goes stale after an unlock, the way Omarchy's does
+# under Quickshell 0.3.2: no lockStateChanged when the session lock goes false.
+mkdir -p "$root/stale/shell/plugins/lock"
+cp "$REPO/dev/qml-harness/stale-lock-service.qml" "$root/stale/shell/plugins/lock/Service.qml"
+
 # A scratch copy of the REAL lock screen with one of the five public names taken
 # out of it. Renamed everywhere, so the file still compiles and still locks --
 # what changes is only whether the wrapper can find what it depends on.
@@ -420,6 +425,72 @@ while IFS= read -r text; do
   i=$((i + 1))
 done <<<"$lines"
 check "…and all four lines were measured" "4" "$i"
+
+# =============================================================================
+# The stale `locked` after an unlock (Quickshell 0.3.2)
+# =============================================================================
+
+# Quickshell's WlSessionLock never announces `locked` going false, so the stock
+# `locked` binding kept true after every unlock and the next `omarchy-shell lock
+# lock` answered ok and did nothing (session_lock.cpp:173-184). The wrapper
+# sends the missing signal once an unlock is over, and only then.
+
+step "GATE: the stand-in reproduces the stale lock, with nothing to repair it"
+out=$(run_lock stale-bare "$root/stale")
+echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
+check "after an unlock it still says locked, with every input unlocked" \
+  '{"locked":true,"requested":false,"sessionLocked":false,"secure":false}' \
+  "$(field bareStatus "$out")"
+note "the same four fields the bug report quotes from \`omarchy-shell lock status\`"
+
+step "GATE: a password unlock — stale as it ends, fresh after, and the next lock locks"
+out=$(run_lock stale-password "$root/stale")
+echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
+check "stale the moment the unlock returns" \
+  '{"locked":true,"requested":false,"sessionLocked":false,"secure":false}' \
+  "$(field staleSnapshot "$out")"
+check "…fresh a moment later" \
+  '{"locked":false,"requested":false,"sessionLocked":false,"secure":false}' \
+  "$(field freshSnapshot "$out")"
+check "…by one repair, which is the one notify Quickshell left out" "1|2" \
+  "$(field repairs "$out")|$(field notifiesAfterUnlock "$out")"
+check "…and the next lock request really locks" "true" "$(field relocked "$out")"
+
+step "GATE: a face unlock — the same"
+out=$(run_lock stale-face "$root/stale")
+echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
+check "face opened the lock" "unlocked" "$(field outcome "$out")"
+check "…and it reads unlocked afterwards" \
+  '{"locked":false,"requested":false,"sessionLocked":false,"secure":false}' \
+  "$(field freshSnapshot "$out")"
+check "…after one repair" "1" "$(field repairs "$out")"
+check "…and the next lock request really locks" "true" "$(field relocked "$out")"
+
+step "GATE: a healthy unlock is left alone"
+out=$(run_lock healthy-unlock "$root/stale")
+echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
+check "a Quickshell that sends the signal reads unlocked at once" \
+  '{"locked":false,"requested":false,"sessionLocked":false,"secure":false}' \
+  "$(field staleSnapshot "$out")"
+check "…so nothing is repaired, and no extra notify is sent" "0|2" \
+  "$(field repairs "$out")|$(field notifiesAfterUnlock "$out")"
+check "…and the next lock request locks" "true" "$(field relocked "$out")"
+
+step "a lock that is up is never touched"
+out=$(run_lock healthy-locked "$root/stale")
+check "no repair, still locked, no extra notify" "0|true|1" \
+  "$(field repairs "$out")|$(field stockLocked "$out")|$(field lockNotifies "$out")"
+
+step "GATE: the repair against the REAL lock screen, unlocked and healthy"
+out=$(run_lock compose-repair "$SHELL_PATH")
+echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
+check "the wrapper finds Omarchy's session lock" "true" "$(field sessionLockFound "$out")"
+check "…its repair does nothing to a healthy lock" "0|$(field eventBefore "$out")" \
+  "$(field repairs "$out")|$(field eventAfterRepair "$out")"
+check "…and the notify it would send reaches Omarchy's own handler" "session-locked=false" \
+  "$(field eventAfterSignal "$out")"
+check "…which still reads unlocked, and nothing was locked" "false|false" \
+  "$(field stockLocked "$out")|$(field locked "$out")"
 
 # =============================================================================
 # The Settings switch and the Setup row (plan-gui.md §6.1, §4 row 8)
