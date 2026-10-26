@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Wayland
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "common/spring.js" as Spring
 
@@ -291,7 +292,7 @@ PanelWindow {
             radius: width
             color: "transparent"
             border.width: 2
-            border.color: card.phase === "capturing" ? Color.accent : Qt.rgba(1, 1, 1, 0.45)
+            border.color: card.phase === "capturing" ? Commons.Color.accent : Qt.rgba(1, 1, 1, 0.45)
           }
 
           Text {
@@ -475,7 +476,7 @@ PanelWindow {
           width: parent.width
           visible: card.notice !== ""
           text: card.notice
-          color: Color.accent
+          color: Commons.Color.accent
           font.family: card.fontFamily
           font.pixelSize: Style.font.caption
           horizontalAlignment: Text.AlignHCenter

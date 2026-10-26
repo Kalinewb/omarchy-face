@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // Settings: the two places a face is accepted, and the way to Remove.
@@ -21,8 +22,8 @@ Column {
 
   property var panel: null
 
-  readonly property color foreground: panel ? panel.foreground : Color.foreground
-  readonly property color dim: panel ? panel.dim : Color.muted
+  readonly property color foreground: panel ? panel.foreground : Commons.Color.foreground
+  readonly property color dim: panel ? panel.dim : Commons.Color.muted
   readonly property string fontFamily: panel ? panel.fontFamily : Style.font.family
   readonly property var config: panel ? panel.config : ({})
   readonly property var lockState: panel ? panel.lockState : ({})
@@ -156,7 +157,7 @@ Column {
           ? " Turning this off stops any face being tried, whether or not the lines can be removed."
           : " Nothing is tried while this is off. Removing the lines needs somebody who can edit "
             + "/etc/pam.d/sudo as root — Face will not touch a block it did not write.")
-    color: Color.urgent
+    color: Commons.Color.urgent
     font.family: view.fontFamily
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap
@@ -360,7 +361,7 @@ Column {
       : (view.lockFaces === 1 ? "1 person can unlock the lock screen"
                               : view.lockFaces + " people can unlock the lock screen")
         + " · " + view.lockStatusText
-    color: view.lockFaces === 0 ? Color.accent : view.dim
+    color: view.lockFaces === 0 ? Commons.Color.accent : view.dim
     font.family: view.fontFamily
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap
@@ -395,7 +396,7 @@ Column {
     visible: view.note !== ""
     topPadding: Style.space(4)
     text: view.note
-    color: Color.urgent
+    color: Commons.Color.urgent
     font.family: view.fontFamily
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap

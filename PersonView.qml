@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "common/names.js" as Names
 
@@ -21,8 +22,8 @@ Column {
 
   property var panel: null
 
-  readonly property color foreground: panel ? panel.foreground : Color.foreground
-  readonly property color dim: panel ? panel.dim : Color.muted
+  readonly property color foreground: panel ? panel.foreground : Commons.Color.foreground
+  readonly property color dim: panel ? panel.dim : Commons.Color.muted
   readonly property string fontFamily: panel ? panel.fontFamily : Style.font.family
   readonly property string name: panel ? panel.personName : ""
 
@@ -568,7 +569,7 @@ Column {
       id: removeButton
       visible: !view.confirmingRemove
       text: "Remove " + view.label
-      foreground: Color.urgent
+      foreground: Commons.Color.urgent
       fontFamily: view.fontFamily
       onClicked: view.confirmingRemove = true
     }
@@ -594,7 +595,7 @@ Column {
         text: "Remove"
         bordered: true
         enabled: view.busy === ""
-        foreground: Color.urgent
+        foreground: Commons.Color.urgent
         fontFamily: view.fontFamily
         onClicked: view.removePerson()
       }
@@ -614,7 +615,7 @@ Column {
     visible: view.note !== ""
     topPadding: Style.space(4)
     text: view.note
-    color: Color.urgent
+    color: Commons.Color.urgent
     font.family: view.fontFamily
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap

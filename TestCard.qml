@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Wayland
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "common/spring.js" as Spring
 
@@ -169,7 +170,7 @@ PanelWindow {
         textFormat: Text.PlainText
         anchors.horizontalCenter: parent.horizontalCenter
         text: card.good ? "✓" : card.bad ? "✕" : "\u{f0643}"
-        color: card.bad ? Color.polkit.textError : Color.polkit.accent
+        color: card.bad ? Commons.Color.polkit.textError : Commons.Color.polkit.accent
         font.family: card.fontFamily
         font.pixelSize: Style.font.display * 1.4
       }
@@ -178,7 +179,7 @@ PanelWindow {
         textFormat: Text.PlainText
         width: parent.width
         text: card.headline
-        color: card.bad ? Color.polkit.textError : Color.polkit.text
+        color: card.bad ? Commons.Color.polkit.textError : Commons.Color.polkit.text
         font.family: card.fontFamily
         font.pixelSize: Style.font.body
         horizontalAlignment: Text.AlignHCenter
@@ -193,7 +194,7 @@ PanelWindow {
         text: card.phase === "done"
               ? "Nothing was unlocked — this was only a test."
               : "Checking who is in front of the camera."
-        color: Color.muted
+        color: Commons.Color.muted
         font.family: card.fontFamily
         font.pixelSize: Style.font.caption
         horizontalAlignment: Text.AlignHCenter
@@ -207,7 +208,7 @@ PanelWindow {
         Button {
           visible: card.phase !== "done"
           text: "Stop"
-          foreground: Color.polkit.text
+          foreground: Commons.Color.polkit.text
           fontFamily: card.fontFamily
           onClicked: card.stopped()
         }
@@ -216,7 +217,7 @@ PanelWindow {
           visible: card.phase === "done"
           text: "Close"
           bordered: true
-          foreground: Color.polkit.text
+          foreground: Commons.Color.polkit.text
           fontFamily: card.fontFamily
           onClicked: card.dismissed()
         }

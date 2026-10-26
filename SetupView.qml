@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // Setup: one row per thing that has to be true before a face can approve
@@ -21,8 +22,8 @@ Column {
 
   property var panel: null
 
-  readonly property color foreground: panel ? panel.foreground : Color.foreground
-  readonly property color dim: panel ? panel.dim : Color.muted
+  readonly property color foreground: panel ? panel.foreground : Commons.Color.foreground
+  readonly property color dim: panel ? panel.dim : Commons.Color.muted
   readonly property string fontFamily: panel ? panel.fontFamily : Style.font.family
   readonly property var rows: panel ? panel.rows : []
 
@@ -653,7 +654,7 @@ Column {
       width: parent.width
       visible: view.noteText !== "" && view.noteRow === view.primaryId
       text: view.noteText
-      color: Color.urgent
+      color: Commons.Color.urgent
       font.family: view.fontFamily
       font.pixelSize: Style.font.caption
       wrapMode: Text.WordWrap
@@ -728,7 +729,7 @@ Column {
           text: "●"
           color: rowItem.modelData.state === "ok" ? view.foreground
                  : rowItem.modelData.state === "unknown" ? view.dim
-                 : Color.urgent
+                 : Commons.Color.urgent
           opacity: rowItem.stale ? 0.45 : 1
           font.family: view.fontFamily
           font.pixelSize: Style.font.caption
@@ -877,7 +878,7 @@ Column {
         leftPadding: Style.space(22)
         visible: view.noteRow === rowItem.modelData.id && view.noteText !== ""
         text: view.noteText
-        color: Color.urgent
+        color: Commons.Color.urgent
         font.family: view.fontFamily
         font.pixelSize: Style.font.caption
         wrapMode: Text.WordWrap
@@ -941,7 +942,7 @@ Column {
             return elapsed === "" ? line : line + "   " + elapsed
           }
           color: view.stepMark(index) === "·" ? view.dim
-               : view.stepMark(index) === "✗" ? Color.urgent
+               : view.stepMark(index) === "✗" ? Commons.Color.urgent
                : view.foreground
           opacity: view.stepMark(index) === "·" ? 0.6 : 1
           font.family: view.fontFamily
@@ -972,7 +973,7 @@ Column {
         visible: view.buildState === "failed"
         topPadding: Style.space(2)
         text: view.buildErrorText(view.buildError)
-        color: Color.urgent
+        color: Commons.Color.urgent
         font.family: view.fontFamily
         font.pixelSize: Style.font.caption
         wrapMode: Text.WordWrap

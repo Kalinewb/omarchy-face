@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "common/spring.js" as Spring
 
@@ -489,7 +490,7 @@ Item {
             text: root.authState === "matched" ? "✓"
                 : root.authState === "failed" ? "✕"
                 : "\u{f0643}"
-            color: root.authState === "failed" ? Color.polkit.textError : Color.polkit.accent
+            color: root.authState === "failed" ? Commons.Color.polkit.textError : Commons.Color.polkit.accent
             font.family: Style.font.family
             font.pixelSize: Style.font.display * 1.4
           }
@@ -498,7 +499,7 @@ Item {
             textFormat: Text.PlainText
             width: parent.width
             text: root.headline
-            color: root.authState === "failed" ? Color.polkit.textError : Color.polkit.text
+            color: root.authState === "failed" ? Commons.Color.polkit.textError : Commons.Color.polkit.text
             font.family: Style.font.family
             font.pixelSize: Style.font.body
             horizontalAlignment: Text.AlignHCenter
@@ -510,7 +511,7 @@ Item {
             width: parent.width
             visible: root.detail !== ""
             text: root.detail
-            color: Color.muted
+            color: Commons.Color.muted
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
             horizontalAlignment: Text.AlignHCenter

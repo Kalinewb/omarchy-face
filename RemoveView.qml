@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // Remove Face ID from this machine.
@@ -35,8 +36,8 @@ Column {
 
   property var panel: null
 
-  readonly property color foreground: panel ? panel.foreground : Color.foreground
-  readonly property color dim: panel ? panel.dim : Color.muted
+  readonly property color foreground: panel ? panel.foreground : Commons.Color.foreground
+  readonly property color dim: panel ? panel.dim : Commons.Color.muted
   readonly property string fontFamily: panel ? panel.fontFamily : Style.font.family
   readonly property var removal: panel && panel.status && panel.status.removal ? panel.status.removal : null
   readonly property var lockState: panel && panel.lockState ? panel.lockState : ({})
@@ -501,7 +502,7 @@ Column {
     visible: view.phase === "incomplete"
     text: "Face's system files are partly still here, so the plugin has been left in place — "
           + "it is the only way back to this page. Still on the machine:"
-    color: Color.urgent
+    color: Commons.Color.urgent
     font.family: view.fontFamily
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap
@@ -528,7 +529,7 @@ Column {
     visible: view.note !== ""
     topPadding: Style.space(2)
     text: view.note
-    color: Color.urgent
+    color: Commons.Color.urgent
     font.family: view.fontFamily
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap
