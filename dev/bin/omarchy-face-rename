@@ -1,0 +1,12 @@
+#!/bin/bash
+
+# Stub of the rename helper (bin/omarchy-face-rename).
+#
+# The real one edits shell.json and moves plugin folders, which nothing run from
+# a development shell or an offscreen harness may do. This answers every verb
+# with the state $OMARCHY_FACE_DEV_RENAME names ("nothing" by default) and
+# writes nothing anywhere -- not even verbs.log, whose exact contents several
+# suites assert on. The real script is exercised by dev/g10-rename.sh.
+
+printf '{"ok":true,"state":"%s","dev":true}\n' "${OMARCHY_FACE_DEV_RENAME:-nothing}"
+exit 0

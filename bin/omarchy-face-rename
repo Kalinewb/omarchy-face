@@ -1,0 +1,525 @@
+#!/bin/bash
+#
+# omarchy-face v2
+# omarchy-face-version: 2.0.4
+#
+# Face's move from graveklar.face to kalinewb.face (and graveklar.face-lock to
+# kalinewb.face-lock), and everything that has to move with it. One script, run
+# by every route a rename can take (plan-suite.md §3.4):
+#
+#   omarchy-face-rename --prename      2.2.0's service start: name kalinewb.face
+#                                      once, so 3.0.0 starts enabled however it lands
+#   omarchy-face-rename --unmark       2.2.0's Remove: take that name out again
+#   omarchy-face-rename --check        read-only: {"needed":…,"reason":…}
+#   omarchy-face-rename --finish [--wait] [--from <commit>]
+#                                      3.0.0's service start, and the notch's update
+#   omarchy-face-rename --repair [--if-needed] [--when-unlocked] [--from <commit>]
+#                                      Setup's button, the boot hook, the README
+#   omarchy-face-rename --rollback     put back what the last rename changed
+#
+# One JSON document on stdout, like every other helper here: `{"ok":true,
+# "state":…}` and exit 0, or `{"error":…}` and exit 1 -- 3 when Profiles is in
+# the middle of something, which is the GUI's "busy" (common/Ask.qml).
+#
+# WHY IT CANNOT HAPPEN FROM INSIDE. Omarchy enables a plugin only when its id is
+# named in shell.json (PluginRegistry.qml:135-164), and runs a service only for
+# an enabled id (shell.qml:964). A Face whose manifest says kalinewb.face, in a
+# shell.json that names only graveklar.face, is installed and off: its service
+# never starts, and nothing in it can run. So 2.2.0, still running under the old
+# id, adds a marker entry for the new one (`--prename`): Omarchy ignores an entry
+# for an id that is not installed, and the moment 3.0.0 lands -- by the notch, by
+# `omarchy plugin update`, by install.sh -- it starts enabled and runs
+# `--finish`. Users who skipped 2.2.0 are caught by the boot hook every Face has
+# installed since 2.0, which runs whatever health script sits in the old folder:
+# after the update, 3.0.0's, which runs `--repair`.
+#
+# WHAT A RENAME DOES, in this order, and nothing in Face runs after step 5:
+#
+#   1. refuse while the session is locked, on local edits in a git checkout, or
+#      while Profiles is switching (its flock, or its switch.json)
+#   2. snapshot shell.json, Profiles' profile files and the commit to go back to
+#      under $XDG_STATE_HOME/omarchy-face/rename -- the only record, and what
+#      --rollback reads
+#   3. stage kalinewb.face-lock beside the old clone, so the lock screen can flip
+#      in one write
+#   4. one `omarchy-shell-config commit` mapping both ids, then the profile files
+#   5. move the old clone (and an old 2.x folder beside a 3.x one) into the
+#      snapshot, move the folder to its new name, and take the old hooks out
+#   6. one detached `omarchy restart shell`, which a lock screen refuses: then it
+#      waits for the unlock and tries once more
+#
+# The restart is the point of step 6, not tidiness: a keepLoaded service keeps
+# running across a rescan (shell.qml:976-981), so the Face service that started
+# this would otherwise carry on from a folder that is no longer there.
+
+set -uo pipefail
+unset IFS
+umask 077
+export LC_ALL=C
+
+SELF=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$(basename -- "${BASH_SOURCE[0]}")
+
+OLD_ID=graveklar.face
+NEW_ID=kalinewb.face
+OLD_LOCK=graveklar.face-lock
+NEW_LOCK=kalinewb.face-lock
+OLD_HOOK=graveklar-face.hook
+
+# Omarchy's own paths, spelled the way omarchy-shell-config and the plugin
+# commands spell them: $HOME/.config, not $XDG_CONFIG_HOME. The commit below goes
+# through omarchy-shell-config, so the file read here has to be the one it writes.
+CONFIG=$HOME/.config/omarchy
+SHELL_JSON=$CONFIG/shell.json
+PLUGINS=$CONFIG/plugins
+HOOKS=$CONFIG/hooks
+
+# Profiles' own paths (bin/omarchy-profile:24-51).
+PROFILE_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/profiles
+PROFILES_STATE=${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-profiles
+
+STATE=${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-face
+SNAP=$STATE/rename
+LOCK_FILE=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/omarchy-face-rename.lock
+
+# How often a rename waiting for an unlock looks again, and for how long. The
+# override is for dev/g10-rename.sh, which cannot wait five seconds a case.
+POLL=${OMARCHY_FACE_RENAME_POLL:-5}
+POLL_FOR=3600
+
+# The installed system half, read for its version only: a rollback must not put
+# back a plugin older than 2.2.0 next to a 3.x system half (§3.4 Rollback).
+SYSTEM_ADMIN=${OMARCHY_FACE_RENAME_ADMIN:-/usr/local/bin/omarchy-face-admin}
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+ok() { # ok <state> [key json]…
+  local out="{\"ok\":true,\"state\":\"$1\"" key
+  shift
+  while (($# >= 2)); do key=$1; out+=",\"$key\":$2"; shift 2; done
+  printf '%s}\n' "$out"
+  exit 0
+}
+
+die() { # die <code> [status]
+  printf '{"error":"%s"}\n' "$1"
+  exit "${2:-1}"
+}
+
+json_string() { jq -Rn --arg s "$1" '$s'; }
+
+locked() { have omarchy-hyprland-session-locked && omarchy-hyprland-session-locked; }
+
+# --- what is there ------------------------------------------------------------
+
+manifest() { # manifest <dir> <field>
+  jq -r --arg f "$2" '.[$f] // ""' "$1/manifest.json" 2>/dev/null
+}
+
+# A Face that carries the new id and is 3.0.0 or later. Only that one may take
+# over the old one's settings.
+is_renamed_face() { # is_renamed_face <dir>
+  [[ -f $1/manifest.json ]] || return 1
+  [[ $(manifest "$1" id) == "$NEW_ID" ]] || return 1
+  local major
+  major=$(manifest "$1" version)
+  major=${major%%.*}
+  [[ $major =~ ^[0-9]+$ ]] && ((major >= 3))
+}
+
+# The filters, in one place, so --check and the rename can never disagree about
+# what "names the old id" means. A name is an exact string or an exact object
+# key; the bridge's marker is the one entry that names both.
+JQ_DEFS='
+  def ids: {"graveklar.face": "kalinewb.face", "graveklar.face-lock": "kalinewb.face-lock"};
+  def marker: type == "object" and .renamedFrom == "graveklar.face";
+  def names_old: any((.. | strings), (.. | objects | keys[]); ids[.] != null);
+  def entry_id: if type == "object" then (.id? // "" | tostring) elif type == "string" then . else "" end;
+  def is_new: entry_id as $i | $i == "kalinewb.face" or $i == "kalinewb.face-lock";
+  # Keep the first entry for each new id: an old and a new entry for the same
+  # plugin map to two of the same, and Omarchy would draw the widget twice.
+  def dedupe: reduce .[] as $x ({seen: {}, out: []};
+      if ($x | is_new) then ($x | entry_id) as $k
+        | if .seen[$k] then . else .seen[$k] = true | .out += [$x] end
+      else .out += [$x] end) | .out;
+  # The marker first, while it still says graveklar.face; then strings and
+  # keys, everywhere below. Where an old key meets a new one, the new one keeps
+  # its value.
+  def rename:
+    walk(if type == "array" then map(select(marker | not)) else . end)
+    | walk(
+      if type == "string" then (ids[.] // .)
+      elif type == "object" then
+        reduce to_entries[] as $e ({}; (ids[$e.key] // $e.key) as $k
+          | if has($k) and ids[$e.key] != null then . else .[$k] = $e.value end)
+      elif type == "array" then dedupe
+      else . end);
+  # The four places shell.json names a plugin by id (round 1 B1 and the notch
+  # audit): the bar with its layout and the notch lists, plugins[],
+  # disabledPlugins[] and cloneSourceRestores[].
+  def regions: ["bar", "plugins", "disabledPlugins", "cloneSourceRestores"];
+  def shell_names_old: [regions[] as $k | .[$k]? | select(. != null)] | names_old;
+  def shell_rename: reduce regions[] as $k (.; if has($k) then .[$k] |= rename else . end);
+  # Enabled, as PluginRegistry.isEnabled decides it for a third-party plugin
+  # (:148-164, :231-249): named in the layout, in plugins[] or as the bar, and
+  # not in disabledPlugins[].
+  def named($id): ([(.bar.layout // {}) | (.left, .center, .right) | arrays | .[] | entry_id] | index($id) != null)
+      or ([(.plugins // [])[] | entry_id] | index($id) != null)
+      or ((.bar.id? // "") == $id);
+  def enabled($id): named($id) and (((.disabledPlugins // []) | index($id)) == null);
+'
+
+shell_names_old() { [[ -f $SHELL_JSON ]] && jq -e "$JQ_DEFS shell_names_old" "$SHELL_JSON" >/dev/null 2>&1; }
+
+profiles_naming_old() { # prints the profile files that name an old id
+  local file
+  for file in "$PROFILE_DIR"/*.json; do
+    [[ -f $file ]] || continue
+    jq -e "$JQ_DEFS names_old" "$file" >/dev/null 2>&1 && printf '%s\n' "$file"
+  done
+}
+
+# Sets FACE (the 3.x folder, or empty), CASE and REASON. CASE:
+#
+#   move    the 3.x Face sits in the old folder: it is moved to the new name
+#   beside  a 3.x kalinewb.face with a graveklar.face beside it: the old one, of
+#           whatever version, goes into the snapshot
+#   map     a 3.x kalinewb.face alone, with settings still naming the old ids
+#   refuse  a kalinewb.face older than 3.0.0 beside a graveklar.face
+survey() {
+  FACE="" CASE="" REASON=""
+  local old=$PLUGINS/$OLD_ID new=$PLUGINS/$NEW_ID
+  if [[ -d $new ]] && is_renamed_face "$new"; then
+    FACE=$new
+    if [[ -d $old ]]; then CASE=beside; REASON=two_folders; return; fi
+    CASE=map
+  elif [[ -d $new && -d $old ]]; then
+    CASE=refuse REASON=face_too_old
+    return
+  elif [[ -d $old ]] && is_renamed_face "$old"; then
+    FACE=$old CASE=move REASON=folder
+    return
+  else
+    return
+  fi
+  # A 3.x kalinewb.face alone: only its settings, or the old clone, can be left.
+  if shell_names_old || [[ -n $(profiles_naming_old) ]]; then REASON=settings
+  elif [[ -d $PLUGINS/$OLD_LOCK ]]; then REASON=old_lock
+  else CASE=""
+  fi
+}
+
+needed() { [[ -n $FACE && -n $CASE ]]; }
+
+# --- waiting and locking ------------------------------------------------------
+
+take_lock() { # take_lock -n | -w <seconds>
+  mkdir -p "$(dirname -- "$LOCK_FILE")" 2>/dev/null
+  exec 9>"$LOCK_FILE" || return 1
+  flock "$@" 9
+}
+
+wait_for_unlock() {
+  local deadline=$((SECONDS + POLL_FOR))
+  while locked && ((SECONDS < deadline)); do sleep "$POLL"; done
+}
+
+# Profiles rewrites shell.json and its profile files as one switch, under a
+# flock on its state directory and with switch.json written for as long as the
+# switch lasts (bin/omarchy-profile:41-51, :2245-2261). A rename landing inside
+# one would be undone by it, or would rename half of it.
+take_profiles_lock() {
+  [[ -e $PROFILES_STATE/switch.json ]] && die profiles_busy 3
+  [[ -d $PROFILES_STATE ]] || return 0
+  exec 8>"$PROFILES_STATE/.lock" || die profiles_busy 3
+  flock -n 8 || die profiles_busy 3
+}
+
+# The one restart, detached from everything Face: the shell that is about to go
+# may well be this script's grandparent, and quickshell kills a Process's child
+# with it. Closes both flocks first -- a restart that inherited them would hold
+# Profiles' lock for as long as it waits for an unlock. It runs no file of
+# Face's, which is what lets it outlive the folder moving under it.
+restart_shell() {
+  have setsid && have omarchy || return 1
+  # shellcheck disable=SC2016
+  setsid -f bash -c '
+    omarchy restart shell >/dev/null 2>&1 && exit 0
+    deadline=$((SECONDS + $2))
+    while omarchy-hyprland-session-locked 2>/dev/null && ((SECONDS < deadline)); do
+      sleep "$1"
+    done
+    omarchy restart shell >/dev/null 2>&1' _ "$POLL" "$POLL_FOR" \
+    >/dev/null 2>&1 </dev/null 8>&- 9>&-
+}
+
+# --- the shell.json writes ----------------------------------------------------
+
+# Through Omarchy's own writer (omarchy-shell-config:53-62): one atomic rename of
+# the whole file and a config reload, the same path `omarchy plugin enable`
+# takes. In a subshell, because the helper installs an EXIT trap of its own.
+commit_shell() { # commit_shell <jq program>
+  local helper
+  helper=$(command -v omarchy-shell-config) || return 1
+  # shellcheck disable=SC1090
+  (source "$helper" && commit "$1")
+}
+
+# --- --prename and --unmark (2.2.0) --------------------------------------------
+
+prename() {
+  [[ -f $PLUGINS/$OLD_ID/manifest.json && $(manifest "$PLUGINS/$OLD_ID" id) == "$OLD_ID" ]] || ok nothing
+  [[ -f $SHELL_JSON ]] || ok nothing
+  # Once, and only for a Face that is on: an entry naming kalinewb.face already,
+  # or an old id that is off, means there is nothing for the marker to carry.
+  jq -e "$JQ_DEFS"' enabled("graveklar.face") and ([(.plugins // [])[] | entry_id] | index("kalinewb.face") == null)' \
+    "$SHELL_JSON" >/dev/null 2>&1 || ok nothing
+  locked && die locked
+  take_lock -w 5 || ok renaming
+  take_profiles_lock
+  commit_shell '.plugins = ((.plugins // []) + [{"id": "kalinewb.face", "renamedFrom": "graveklar.face"}])' ||
+    die commit_failed
+  ok marked
+}
+
+unmark() {
+  [[ -f $SHELL_JSON ]] || ok nothing
+  jq -e "$JQ_DEFS"' any((.plugins // [])[]; marker)' "$SHELL_JSON" >/dev/null 2>&1 || ok nothing
+  take_lock -w 5 || die busy 3
+  take_profiles_lock
+  commit_shell "$JQ_DEFS"' .plugins |= map(select(marker | not))' || die commit_failed
+  ok unmarked
+}
+
+# --- the rename ---------------------------------------------------------------
+
+# The commit to go back to. Given by the notch, which knows it; otherwise the one
+# `omarchy plugin update`'s fast-forward left in ORIG_HEAD
+# (omarchy-plugin-update:67), when that is an ancestor of HEAD. A folder that is
+# not a checkout -- install.sh's copy -- has none.
+pick_from() { # pick_from <dir>
+  local dir=$1 orig
+  if [[ -n $FROM ]]; then printf '%s' "$FROM"; return; fi
+  git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  orig=$(git -C "$dir" rev-parse -q --verify 'ORIG_HEAD^{commit}' 2>/dev/null) || return 0
+  [[ $orig != "$(git -C "$dir" rev-parse HEAD 2>/dev/null)" ]] || return 0
+  git -C "$dir" merge-base --is-ancestor "$orig" HEAD 2>/dev/null && printf '%s' "$orig"
+}
+
+rename() {
+  survey
+  [[ $CASE == refuse ]] && die face_too_old
+  needed || ok nothing
+
+  # 1. Refusals, before anything is written.
+  locked && die locked
+  local old=$PLUGINS/$OLD_ID new=$PLUGINS/$NEW_ID
+  if [[ $CASE == move ]] && git -C "$old" rev-parse --git-dir >/dev/null 2>&1; then
+    [[ -z $(git -C "$old" status --porcelain 2>/dev/null) ]] || die local_edits
+  fi
+  take_profiles_lock
+
+  # 2. The snapshot. A previous one is kept beside it, never overwritten.
+  mkdir -p "$STATE" || die snapshot_failed
+  [[ -e $SNAP ]] && { mv -T "$SNAP" "$SNAP.$(date +%s%N)" || die snapshot_failed; }
+  mkdir -p "$SNAP/profiles" "$SNAP/hooks" || die snapshot_failed
+  if [[ -f $SHELL_JSON ]]; then
+    cp -p -- "$SHELL_JSON" "$SNAP/shell.json" || die snapshot_failed
+  fi
+  local file
+  while IFS= read -r file; do
+    [[ -n $file ]] && { cp -p -- "$file" "$SNAP/profiles/" || die snapshot_failed; }
+  done < <(profiles_naming_old)
+  printf '%s\n' "$CASE" >"$SNAP/case"
+  pick_from "$FACE" >"$SNAP/from"
+  [[ -d $PLUGINS/$NEW_LOCK ]] && : >"$SNAP/new-lock-existed"
+
+  # 3. The new clone, staged by the Face that carries it -- unless one is there
+  # already. Disabled until step 4 names it, and nothing reloads it before then.
+  if [[ ! -d $PLUGINS/$NEW_LOCK ]]; then
+    XDG_CONFIG_HOME=$HOME/.config "$FACE/bin/omarchy-face-lock" stage >/dev/null 2>&1 || die stage_failed
+  fi
+
+  # 4. One write of shell.json: both ids, every key, the lock in the same write
+  # so exactly one clone is ever the lock screen, and the marker gone. The new
+  # id is on only where the old one was named outside the marker.
+  if shell_names_old; then
+    commit_shell "$JQ_DEFS shell_rename" || die commit_failed
+  fi
+  local tmp
+  while IFS= read -r file; do
+    [[ -n $file ]] || continue
+    tmp=$(mktemp "$file.XXXXXX") || die profiles_failed
+    if jq "$JQ_DEFS rename" "$file" >"$tmp" 2>/dev/null; then
+      mv -f -- "$tmp" "$file" || { rm -f -- "$tmp"; die profiles_failed; }
+    else
+      rm -f -- "$tmp"
+      die profiles_failed
+    fi
+  done < <(profiles_naming_old)
+
+  # 5. The folders. The old clone and an old folder beside the new one go into
+  # the snapshot rather than away: --rollback puts them back.
+  if [[ -d $PLUGINS/$OLD_LOCK ]]; then
+    mv -T -- "$PLUGINS/$OLD_LOCK" "$SNAP/$OLD_LOCK" || die move_failed
+  fi
+  case $CASE in
+    beside) mv -T -- "$old" "$SNAP/$OLD_ID" || die move_failed ;;
+    move) mv -T -- "$old" "$new" || die move_failed ;;
+  esac
+  local verb
+  for verb in post-update post-boot; do
+    [[ -e $HOOKS/$verb.d/$OLD_HOOK ]] || continue
+    mkdir -p "$SNAP/hooks/$verb.d" && mv -f -- "$HOOKS/$verb.d/$OLD_HOOK" "$SNAP/hooks/$verb.d/"
+  done
+  : >"$SNAP/done"
+
+  # 6. The restart. Nothing of Face's runs after this.
+  local restart=requested
+  restart_shell || restart=unavailable
+  ok renamed case "\"$CASE\"" restart "\"$restart\""
+}
+
+# --- --rollback ---------------------------------------------------------------
+
+# The commit a rolled-back checkout goes to: the one it came from, unless that is
+# older than 2.2.0 and the system half is already 3.x. 3.0.0's admin helper
+# refuses a downgrade (system/omarchy-face-admin, install-system), and a 2.x
+# status that does not know the new policy file offers a Fix that always fails;
+# 2.2.0 is the oldest Face that reads a 3.x system half correctly.
+rollback_target() { # rollback_target <dir> <from>
+  local dir=$1 target=$2 system version
+  git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  system=$(head -40 "$SYSTEM_ADMIN" 2>/dev/null | sed -n 's/^# omarchy-face-version: *\([0-9][0-9.]*\).*/\1/p' | head -1)
+  if [[ -z $target ]]; then
+    target=v2.2.0
+  elif [[ ${system%%.*} =~ ^[0-9]+$ ]] && ((${system%%.*} >= 3)); then
+    version=$(git -C "$dir" show "$target:manifest.json" 2>/dev/null | jq -r '.version // ""' 2>/dev/null)
+    [[ $(printf '%s\n%s\n' "${version:-0}" 2.2.0 | sort -V | head -1) == 2.2.0 ]] || target=v2.2.0
+  fi
+  git -C "$dir" rev-parse -q --verify "$target^{commit}" >/dev/null 2>&1 && printf '%s' "$target"
+}
+
+rollback() {
+  [[ -f $SNAP/case ]] || die no_snapshot
+  locked && die locked
+  take_lock -w 120 || die busy 3
+  take_profiles_lock
+  local case from old=$PLUGINS/$OLD_ID new=$PLUGINS/$NEW_ID tmp file verb
+  case=$(cat "$SNAP/case")
+  from=$(cat "$SNAP/from" 2>/dev/null)
+
+  # Byte for byte: copies, not a commit through jq, which would sort the keys.
+  if [[ -f $SNAP/shell.json ]]; then
+    tmp=$(mktemp "$SHELL_JSON.XXXXXX") || die rollback_failed
+    cp -p -- "$SNAP/shell.json" "$tmp" && mv -f -- "$tmp" "$SHELL_JSON" || { rm -f -- "$tmp"; die rollback_failed; }
+  fi
+  for file in "$SNAP/profiles"/*.json; do
+    [[ -f $file ]] || continue
+    tmp=$(mktemp "$PROFILE_DIR/.${file##*/}.XXXXXX") || die rollback_failed
+    cp -p -- "$file" "$tmp" && mv -f -- "$tmp" "$PROFILE_DIR/${file##*/}" || { rm -f -- "$tmp"; die rollback_failed; }
+  done
+
+  case $case in
+    move) [[ -d $new && ! -e $old ]] && { mv -T -- "$new" "$old" || die rollback_failed; } ;;
+    beside) [[ -d $SNAP/$OLD_ID && ! -e $old ]] && { mv -T -- "$SNAP/$OLD_ID" "$old" || die rollback_failed; } ;;
+  esac
+  if [[ -d $SNAP/$OLD_LOCK && ! -e $PLUGINS/$OLD_LOCK ]]; then
+    mv -T -- "$SNAP/$OLD_LOCK" "$PLUGINS/$OLD_LOCK" || die rollback_failed
+  fi
+  # Staged from the template by step 3, so nothing is lost by taking it away.
+  [[ -e $SNAP/new-lock-existed ]] || rm -rf -- "${PLUGINS:?}/$NEW_LOCK"
+  for verb in post-update post-boot; do
+    [[ -f $SNAP/hooks/$verb.d/$OLD_HOOK ]] || continue
+    mkdir -p "$HOOKS/$verb.d" && mv -f -- "$SNAP/hooks/$verb.d/$OLD_HOOK" "$HOOKS/$verb.d/"
+  done
+
+  # The code, last. A checkout goes back to where it came from; a copy has
+  # nothing to go back to, and the README says what to run instead.
+  local target="" checkout=false
+  if [[ $case == move ]]; then
+    target=$(rollback_target "$old" "$from")
+    if [[ -n $target ]] && git -C "$old" checkout --quiet --detach "$target" 2>/dev/null; then
+      checkout=true
+    fi
+  fi
+
+  mv -T -- "$SNAP" "$SNAP.undone.$(date +%s%N)" 2>/dev/null
+  local restart=requested
+  restart_shell || restart=unavailable
+  ok rolledback checkout "$(json_string "$([[ $checkout == true ]] && printf '%s' "$target")")" restart "\"$restart\""
+}
+
+# --- verbs --------------------------------------------------------------------
+
+have jq || die missing_jq
+
+MODE=${1:-}
+shift 2>/dev/null || true
+FROM="" WAIT=false IF_NEEDED=false WHEN_UNLOCKED=false DETACHED=false
+while (($# > 0)); do
+  case $1 in
+    --from) FROM=${2:-}; shift ;;
+    --wait) WAIT=true ;;
+    --if-needed) IF_NEEDED=true ;;
+    --when-unlocked) WHEN_UNLOCKED=true ;;
+    --detached) DETACHED=true ;;
+    *) die usage 2 ;;
+  esac
+  shift
+done
+[[ -z $FROM || $FROM =~ ^[0-9a-f]{7,40}$ ]] || die bad_from 2
+
+case $MODE in
+  --prename) prename ;;
+  --unmark) unmark ;;
+
+  --check)
+    survey
+    jq -nc --argjson needed "$([[ $CASE == refuse ]] || needed && echo true || echo false)" \
+      --arg reason "$REASON" '{needed: $needed, reason: $reason}'
+    exit 0
+    ;;
+
+  --finish)
+    if [[ $WAIT == true ]]; then
+      # The notch's route: in the foreground, inside its own snapshot and Undo.
+      # A rename Face started first is waited out, then found already done.
+      take_lock -w 120 || die busy 3
+      rename
+    fi
+    if [[ $DETACHED == true ]]; then
+      take_lock -n || ok renaming
+      rename
+    fi
+    # The Face service's route. A rename already under way, or one about to be,
+    # is "renaming", and the service leaves the lock screen alone that start.
+    # The rename itself runs detached: step 4 can switch off the very service
+    # that asked for it. The lock file only exists once a rename has run, so a
+    # start with nothing to do creates nothing.
+    if [[ -e $LOCK_FILE ]]; then take_lock -n || ok renaming; fi
+    survey
+    needed || ok nothing
+    exec 9>&-
+    mkdir -p "$STATE"
+    setsid -f "$SELF" --finish --detached ${FROM:+--from "$FROM"} \
+      >>"$STATE/rename.log" 2>&1 </dev/null 8>&- 9>&-
+    ok renaming
+    ;;
+
+  --repair)
+    survey
+    [[ $CASE == refuse ]] && die face_too_old
+    # --if-needed is the boot hook's: with nothing left, not even a document.
+    if ! needed; then [[ $IF_NEEDED == true ]] && exit 0; ok nothing; fi
+    [[ $WHEN_UNLOCKED == true ]] && wait_for_unlock
+    take_lock -n || ok renaming
+    rename
+    ;;
+
+  --rollback) rollback ;;
+
+  *)
+    echo "usage: omarchy-face-rename --prename|--unmark|--check|--finish|--repair|--rollback" >&2
+    exit 2
+    ;;
+esac

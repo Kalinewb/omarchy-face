@@ -199,9 +199,15 @@ check "the final step is one detached command, with --yes in it" "true" \
        $(field finalArgv "$out") == *'plugin remove --yes graveklar.face'* ]] && echo true || echo false)"
 check "…and it is handed both hook paths, beside the plugins folder, as arguments" \
   "$(jq -c --arg u "$HOOK_UPDATE" --arg b "$HOOK_BOOT" -n '[$u, $b]')" \
-  "$(field finalArgv "$out" | jq -c '.[-3:-1]')"
-check "…and Face's state directory last, inside the harness's sandbox, never this account's" \
-  "$STATE_HOME/omarchy-face" "$(field finalArgv "$out" | jq -r '.[-1]')"
+  "$(field finalArgv "$out" | jq -c '.[-4:-2]')"
+check "…and Face's state directory, inside the harness's sandbox, never this account's" \
+  "$STATE_HOME/omarchy-face" "$(field finalArgv "$out" | jq -r '.[-2]')"
+# The bridge's marker comes out first (bin/omarchy-face-rename --unmark). Under a
+# harness the helper is dev/bin's stub, which writes nothing, so the command can
+# run for real here without reaching this account's shell.json.
+check "…and the rename helper last, run with --unmark before anything is removed" \
+  "$REPO/dev/bin/omarchy-face-rename|true" \
+  "$(field finalArgv "$out" | jq -r '.[-1]')|$(field finalArgv "$out" | jq -r '.[4] | startswith("[ -x \"$6\" ] && \"$6\" --unmark")')"
 
 echo
 echo "${DIM}== GATE: the result is on screen BEFORE anything writes the plugins folder${RESET}"

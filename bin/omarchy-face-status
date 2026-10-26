@@ -48,7 +48,14 @@ RUN_DIR=/run/omarchy-face
 INSTALL_FILE=$RUN_DIR/install.json
 INSTALL_LOG=$RUN_DIR/install.log
 INSTALL_UNIT=omarchy-face-install.service
-POLICY=/usr/share/polkit-1/actions/no.graveklar.face.policy
+# 2.x installs its polkit action as no.graveklar.face.policy and 3.0.0 as
+# no.kalinewb.face.policy (plan-suite.md §3.4). Whichever is there is counted as
+# the policy: a 3.x system half under a rolled-back 2.2.0 then reads as "newer
+# than this plugin", which is true, and not as a half-installed system half with
+# a Fix that 3.x's admin helper refuses every time.
+LEGACY_POLICY=/usr/share/polkit-1/actions/no.graveklar.face.policy
+POLICY=/usr/share/polkit-1/actions/no.kalinewb.face.policy
+[[ -e $POLICY ]] || POLICY=$LEGACY_POLICY
 UNIT_DIR=/etc/systemd/system
 
 # source name : destination : mode, the same table omarchy-face-admin installs
@@ -202,7 +209,7 @@ for entry in "${SYSTEM_FILES[@]}"; do
   legacy_fixable=true
 done
 
-[[ -f $POLICY ]] && grep -q 'no.graveklar.face.admin' "$POLICY" 2>/dev/null &&
+[[ -f $LEGACY_POLICY ]] && grep -q 'no.graveklar.face.admin' "$LEGACY_POLICY" 2>/dev/null &&
   { legacy+=("the old polkit action"); legacy_fixable=true; }
 
 [[ -e /etc/pam.d/omarchy-lock-face ]] && { legacy+=("/etc/pam.d/omarchy-lock-face"); legacy_fixable=true; }

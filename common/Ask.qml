@@ -63,6 +63,12 @@ Item {
     return [pluginBin + "/omarchy-face-health"].concat(args || [])
   }
 
+  // The move to kalinewb.face (bin/omarchy-face-rename). In development the
+  // stub in dev/bin, which writes nothing: the real one edits shell.json.
+  function renameArgv(args) {
+    return [pluginBin + "/omarchy-face-rename"].concat(args || [])
+  }
+
   function identityArgv(args) {
     return [systemBin + "/omarchy-face-identity"].concat(args || [])
   }

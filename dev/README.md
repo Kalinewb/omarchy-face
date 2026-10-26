@@ -22,6 +22,7 @@ the four helpers, answering from `dev/fixtures/<name>/`:
 | `omarchy-face-status` | prints `dev/fixtures/$OMARCHY_FACE_DEV_FIXTURE/status.json`, exit 0 always |
 | `omarchy-face-admin` | answers in the contract's shape, writes nothing outside the fixture directory; `enroll-session` is not scripted yet. Setup never installs the system half itself (it opens the README's terminal instructions). `install-engine` and `install-system` start the stand-in build below |
 | `omarchy-face-lock` | answers `{ok}` and deliberately never touches the plugins folder. `OMARCHY_FACE_DEV_LOCK_ERROR=<code>` makes the next write verb fail, `OMARCHY_FACE_DEV_LOCK_ENABLED=1` makes `status` report the clone enabled, and every verb is appended to `verbs.log` as `lock:<verb>` — the Settings switch has to be *shown* to call `enable` before `lock-on` and `disable` after a declined prompt |
+| `omarchy-face-rename` | answers every verb with `{"ok":true,"state":…}`, the state taken from `OMARCHY_FACE_DEV_RENAME` (`nothing` by default), and writes nothing — not even `verbs.log`. The real one edits `shell.json` and moves plugin folders; `dev/g10-rename.sh` (from 3.0.0) runs it in a sandbox `HOME` |
 | `omarchy-face-identity` | `list` from the fixture; `verify` exits 3 (unavailable) unless `OMARCHY_FACE_DEV_VERIFY=<code>` says otherwise, and `OMARCHY_FACE_DEV_VERIFY_SECONDS=N` makes it take that long first, so a test can watch the Test card while it checks and stop it |
 
 With `OMARCHY_FACE_DEV_BIN` set, the GUI takes every helper from that directory

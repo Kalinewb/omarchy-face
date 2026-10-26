@@ -259,15 +259,21 @@ Column {
   // glob, so this is the wider glob. Dot entries map to no plugin id
   // (PluginRegistry.qml:735), so none of this causes a second reload.
   //
-  // The first line takes Face's two Omarchy hooks out (bin/omarchy-face-health),
+  // Before any of that, the bridge's marker comes out of shell.json
+  // (bin/omarchy-face-rename --unmark): an entry naming kalinewb.face, which
+  // would otherwise switch a later install of Face back on for somebody who
+  // removed it. It writes shell.json and nothing under the plugins folder.
+  //
+  // Then the next line takes Face's two Omarchy hooks out (bin/omarchy-face-health),
   // before the plugin they call is gone. It is only tidiness, and it is ordered
-  // first because it is the one line that writes nothing under the plugins
+  // before the folders because it writes nothing under the plugins
   // folder: a hook left behind by a step that did not run deletes itself the
   // first time it finds no plugin to call. The paths are arguments, never text
   // in the script, and they are the plugins folder's sibling `hooks` -- the same
   // derivation as everything else here, which is what keeps a harness running
   // this command against a throwaway folder away from this account's own hooks.
   readonly property string finalScript:
+    '[ -x "$6" ] && "$6" --unmark >/dev/null 2>&1\n' +
     'rm -f -- "$3" "$4"\n' +
     'rm -rf "$1"\n' +
     'omarchy plugin remove --yes graveklar.face\n' +
@@ -309,7 +315,8 @@ Column {
             view.pluginsDir + "/graveklar.face-lock", view.pluginsDir,
             view.hooksDir + "/post-update.d/graveklar-face.hook",
             view.hooksDir + "/post-boot.d/graveklar-face.hook",
-            view.stateDir]
+            view.stateDir,
+            view.panel && view.panel.ask ? view.panel.ask.renameArgv([])[0] : ""]
   }
 
   function runFinal() {

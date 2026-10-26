@@ -692,10 +692,30 @@ Item {
   Component { id: cardComponent;    RecordCard {} }
   Component { id: testComponent;    TestCard {} }
 
+  // --- the bridge to kalinewb.face (plan-suite.md §3.4 b) ----------------------
+  //
+  // The next major version of Face is the same plugin under a new id, and
+  // Omarchy only runs a plugin whose id shell.json names. So before anything
+  // else at start, this names the new id once, in an entry Omarchy ignores until
+  // a plugin with that id is installed (bin/omarchy-face-rename --prename). Then
+  // whichever way 3.0.0 lands, it starts enabled and finishes the move itself.
+  // Before lockSync() and not beside it: both can write, and one at a time is
+  // the order the lock screen's own start has always assumed.
+  function prename() {
+    engine.ask(engine.renameArgv(["--prename"]), "", function (result) {
+      // Locked, or Profiles mid-switch: the next start tries again, and
+      // neither is worth a word.
+      var code = result.parsed && result.parsed.error ? String(result.parsed.error) : result.outcome
+      if (result.outcome === "error" && code !== "locked")
+        console.warn("graveklar.face", "omarchy-face-rename --prename:", code)
+      root.lockSync()
+    })
+  }
+
   Component.onCompleted: {
     console.log("graveklar.face", "service loaded")
     root.lockStartedAt = Date.now()
-    root.lockSync()
+    root.prename()
     root.installHooks()
   }
 }
