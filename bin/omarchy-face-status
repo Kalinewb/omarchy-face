@@ -163,6 +163,14 @@ has_v2_marker() {
 }
 
 plugin_version=$(jq -r '.version // ""' "$MANIFEST" 2>/dev/null)
+# What the `system` row compares the installed files with: the version of the
+# system half this plugin carries, which is the one its install button fetches
+# (dev/check-pins.sh holds system/install.sh to common/Ask.qml's systemVersion).
+# Not the manifest's: a release that leaves system/ alone moves the manifest and
+# nothing else, and reading it here would offer an owner prompt that installs
+# the same files again and never clears.
+system_version=$(file_version "$SYSTEM_SRC/install.sh")
+: "${system_version:=$plugin_version}"
 account=$(config_get account)
 config_sudo=$(config_get sudo false)
 config_lock=$(config_get lock false)
@@ -347,8 +355,8 @@ if ((present == 0)) && [[ ! -e $CONFIG_FILE ]]; then
 elif ((present < ${#SYSTEM_FILES[@]})) || [[ $mixed_versions == true ]]; then
   add_row system "Face's system files" broken \
     "a half-installed system half: $(join_comma "${system_problems[@]}")" true install-system
-elif [[ -n $plugin_version && -n $installed_version && $installed_version != "$plugin_version" ]]; then
-  if version_newer "$plugin_version" "$installed_version"; then
+elif [[ -n $system_version && -n $installed_version && $installed_version != "$system_version" ]]; then
+  if version_newer "$system_version" "$installed_version"; then
     add_row system "Face's system files" needs_action \
       "the plugin ($plugin_version) is newer than the installed system files ($installed_version)" \
       true install-system

@@ -92,9 +92,13 @@ unprivileged helpers that ship with the plugin (`plan-engine.md §8.1`):
 
 Every installed file carries two headers, `omarchy-face v2` and
 `omarchy-face-version: X.Y.Z`. The version is a **literal**, bumped by hand when
-the plugin is released: nothing substitutes it at install time, because the
-`system` row compares the installed files byte for byte with the plugin's
-`system/` copies, and a substitution would make every machine look modified.
+a release changes the system half: nothing substitutes it at install time,
+because the `system` row compares the installed files byte for byte with the
+plugin's `system/` copies, and a substitution would make every machine look
+modified. It is the system half's version, not the plugin's: the `system` row
+compares the installed files' version with `system/install.sh`'s, never with
+`manifest.json`'s, so a release that leaves `system/` alone (2.1.0) asks nobody
+for a password.
 
 ## F1 — install → purge
 
