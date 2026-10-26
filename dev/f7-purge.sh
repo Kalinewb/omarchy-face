@@ -16,7 +16,7 @@
 #   * `purge` on a machine it has already been through exits 0 with nothing
 #     incomplete, because every step tolerates its target being absent;
 #   * the last three items of §10.3 -- the plugin folders, the
-#     `.graveklar.face*` backups and `shell.json` -- which `purge` never
+#     `.kalinewb.face*` backups and `shell.json` -- which `purge` never
 #     touches. They belong to the Remove view's final step, and that step is
 #     read out of RemoveView.qml itself, so a change to the view that is not a
 #     change to this test cannot pass;
@@ -191,7 +191,7 @@ check "every helper is still installed" \
                     omarchy-face-identity omarchy-face-lock-verify omarchy-face-camera; do
              [[ -e /usr/local/bin/\$f ]] || exit 1; done"
 check "the policy, the units and the config are still there" \
-  bash -c "[[ -e /usr/share/polkit-1/actions/no.graveklar.face.policy &&
+  bash -c "[[ -e /usr/share/polkit-1/actions/no.kalinewb.face.policy &&
               -e /etc/systemd/system/omarchy-faced.socket &&
               -e /etc/omarchy-face/config ]]"
 check "the store and the model files are still there" \
@@ -216,7 +216,7 @@ check "no helper left in /usr/local/bin" \
   bash -c "for f in omarchy-face-admin omarchy-face-gate omarchy-face-verify omarchy-faced \
                     omarchy-face-identity omarchy-face-lock-verify omarchy-face-camera; do
              [[ ! -e /usr/local/bin/\$f ]] || exit 1; done"
-check "no polkit policy" test ! -e /usr/share/polkit-1/actions/no.graveklar.face.policy
+check "no polkit policy" test ! -e /usr/share/polkit-1/actions/no.kalinewb.face.policy
 check "no units, and the socket is not enabled" \
   bash -c "[[ ! -e /etc/systemd/system/omarchy-faced.socket && ! -e /etc/systemd/system/omarchy-faced.service ]] &&
            ! systemctl is-enabled --quiet omarchy-faced.socket 2>/dev/null"
@@ -259,13 +259,13 @@ check "the state directory goes too, by argument, and only when it was given one
 check "Face's two Omarchy hooks go first, by argument rather than by text in the script" \
   bash -c "head -1 <<<'$final_script' | grep -qxF 'rm -f -- \"\$3\" \"\$4\"'"
 check "the plugin is removed with --yes (no tty here, omarchy-plugin-remove:18-30)" \
-  bash -c "grep -q 'omarchy plugin remove --yes graveklar.face' <<<'$final_script'"
+  bash -c "grep -q 'omarchy plugin remove --yes kalinewb.face' <<<'$final_script'"
 
 root=$(mktemp -d /tmp/omarchy-face-f7.XXXXXX)
 PLUGINS=$root/plugins
 # The hooks folder beside it, as RemoveView.qml derives it (`hooksDir`).
 HOOKS=$root/hooks
-HOOK_ARGS=("$HOOKS/post-update.d/graveklar-face.hook" "$HOOKS/post-boot.d/graveklar-face.hook")
+HOOK_ARGS=("$HOOKS/post-update.d/kalinewb-face.hook" "$HOOKS/post-boot.d/kalinewb-face.hook")
 CALLS=$root/calls.log
 # <state>/omarchy-face, as RemoveView.qml hands it over. Seeded so its removal
 # is something the checks can see rather than assume.
@@ -276,7 +276,7 @@ mkdir -p "$PLUGINS" "$root/bin" "$root/config/omarchy"
 # `shell.json` as it stands with face on the lock screen: the clone in plugins[]
 # and Omarchy's own lock put aside in disabledPlugins[] (PluginRegistry.qml:540-555).
 cat >"$SHELL_JSON" <<'JSON'
-{"plugins":[{"id":"graveklar.face"},{"id":"graveklar.face-lock"}],
+{"plugins":[{"id":"kalinewb.face"},{"id":"kalinewb.face-lock"}],
  "disabledPlugins":["omarchy.lock"]}
 JSON
 
@@ -324,17 +324,17 @@ chmod 0755 "$root/bin/omarchy"
 
 seed_plugins() {
   rm -rf "$PLUGINS"
-  mkdir -p "$PLUGINS/graveklar.face" "$PLUGINS/graveklar.face-lock"
-  cp "$REPO/manifest.json" "$PLUGINS/graveklar.face/"
+  mkdir -p "$PLUGINS/kalinewb.face" "$PLUGINS/kalinewb.face-lock"
+  cp "$REPO/manifest.json" "$PLUGINS/kalinewb.face/"
   # Staged, so it is a manifest.json here even though the template calls it
   # manifest.json.in (see TEMPLATE_MANIFEST in bin/omarchy-face-lock).
-  cp "$REPO/lock/manifest.json.in" "$PLUGINS/graveklar.face-lock/manifest.json"
+  cp "$REPO/lock/manifest.json.in" "$PLUGINS/kalinewb.face-lock/manifest.json"
   # The dot-directories a `stage` interrupted half way leaves behind. §10.3
-  # asserts the whole `.graveklar.face*` glob is empty afterwards, which is
+  # asserts the whole `.kalinewb.face*` glob is empty afterwards, which is
   # wider than the `.bak` §10.2 names -- so the view's last `rm -rf` is wider too.
-  mkdir -p "$PLUGINS/.graveklar.face-lock.old.20260101000000" \
-           "$PLUGINS/.graveklar.face-lock.Ab3De9" \
-           "$PLUGINS/.graveklar.face.bak.20260101000000"
+  mkdir -p "$PLUGINS/.kalinewb.face-lock.old.20260101000000" \
+           "$PLUGINS/.kalinewb.face-lock.Ab3De9" \
+           "$PLUGINS/.kalinewb.face.bak.20260101000000"
   # The two hooks bin/omarchy-face-health install-hooks writes.
   mkdir -p "$HOOKS/post-update.d" "$HOOKS/post-boot.d"
   : >"${HOOK_ARGS[0]}"
@@ -345,7 +345,7 @@ seed_plugins() {
 # Step 1 of the flow, for shell.json's sake: the lock screen goes back to
 # Omarchy's own before anything is deleted.
 seed_plugins
-PATH="$root/bin:$PATH" omarchy plugin disable graveklar.face-lock >/dev/null 2>&1
+PATH="$root/bin:$PATH" omarchy plugin disable kalinewb.face-lock >/dev/null 2>&1
 
 # The final step, launched the way the popup launches it and then orphaned. The
 # launcher is its own session leader, so SIGKILLing its whole process group is
@@ -355,7 +355,7 @@ printf '%s\n' "$final_script" >"$root/final.sh"
 cat >"$root/launcher.sh" <<LAUNCH
 #!/bin/bash
 echo \$\$ >"$root/launcher.pid"
-setsid -f bash -c "\$(cat '$root/final.sh')" _ "$PLUGINS/graveklar.face-lock" "$PLUGINS" "${HOOK_ARGS[0]}" "${HOOK_ARGS[1]}"
+setsid -f bash -c "\$(cat '$root/final.sh')" _ "$PLUGINS/kalinewb.face-lock" "$PLUGINS" "${HOOK_ARGS[0]}" "${HOOK_ARGS[1]}"
 sleep 60
 LAUNCH
 chmod 0755 "$root/launcher.sh"
@@ -379,43 +379,43 @@ fi
 
 # The work was still in `plugin remove`'s two-second sleep when the group died.
 for _ in $(seq 1 60); do
-  [[ -e $PLUGINS/graveklar.face ]] || break
+  [[ -e $PLUGINS/kalinewb.face ]] || break
   sleep 0.25
 done
 sleep 0.5
 
 check "the detached command finished after its launcher was killed" \
-  bash -c "grep -q 'plugin remove --yes graveklar.face' '$CALLS'"
-check "the lock screen wrapper folder is gone" test ! -e "$PLUGINS/graveklar.face-lock"
+  bash -c "grep -q 'plugin remove --yes kalinewb.face' '$CALLS'"
+check "the lock screen wrapper folder is gone" test ! -e "$PLUGINS/kalinewb.face-lock"
 check "both of Face's Omarchy hooks are gone" \
   bash -c "[[ ! -e '${HOOK_ARGS[0]}' && ! -e '${HOOK_ARGS[1]}' ]]"
-check "the plugin folder is gone" test ! -e "$PLUGINS/graveklar.face"
-check "no .graveklar.face* backup or staging directory is left" \
-  bash -c "! compgen -G '$PLUGINS/.graveklar.face*' >/dev/null"
+check "the plugin folder is gone" test ! -e "$PLUGINS/kalinewb.face"
+check "no .kalinewb.face* backup or staging directory is left" \
+  bash -c "! compgen -G '$PLUGINS/.kalinewb.face*' >/dev/null"
 check "nothing at all is left in the plugins folder" \
   bash -c "[[ -z \$(ls -A '$PLUGINS') ]]"
 check "shell.json holds neither plugin id" \
-  bash -c "! grep -q 'graveklar.face' '$SHELL_JSON'"
+  bash -c "! grep -q 'kalinewb.face' '$SHELL_JSON'"
 check "…and omarchy.lock is not in disabledPlugins" \
   bash -c "! jq -e '.disabledPlugins // [] | index(\"omarchy.lock\")' '$SHELL_JSON' >/dev/null"
 
 step "the same command on a git checkout, which leaves no backup"
 seed_plugins
 mkdir -p "$FACE_STATE" && : >"$FACE_STATE/lock-notified"
-rm -rf "$PLUGINS/.graveklar.face.bak.20260101000000"
-mkdir -p "$PLUGINS/graveklar.face/.git"
-PATH="$root/bin:$PATH" bash -c "$final_script" _ "$PLUGINS/graveklar.face-lock" "$PLUGINS" "${HOOK_ARGS[@]}" "$FACE_STATE"
-check "a git checkout is deleted rather than backed up" test ! -e "$PLUGINS/graveklar.face"
+rm -rf "$PLUGINS/.kalinewb.face.bak.20260101000000"
+mkdir -p "$PLUGINS/kalinewb.face/.git"
+PATH="$root/bin:$PATH" bash -c "$final_script" _ "$PLUGINS/kalinewb.face-lock" "$PLUGINS" "${HOOK_ARGS[@]}" "$FACE_STATE"
+check "a git checkout is deleted rather than backed up" test ! -e "$PLUGINS/kalinewb.face"
 check "the state directory goes with it, so nothing of Face's is left behind" \
   test ! -e "$FACE_STATE"
 check "…and the wider glob still cleared the staging directories" \
-  bash -c "! compgen -G '$PLUGINS/.graveklar.face*' >/dev/null"
+  bash -c "! compgen -G '$PLUGINS/.kalinewb.face*' >/dev/null"
 
 step "the same command with nothing there: no output, no failure"
 seed_plugins
 rm -rf "$PLUGINS"
 mkdir -p "$PLUGINS"
-out=$(PATH="$root/bin:$PATH" bash -c "$final_script" _ "$PLUGINS/graveklar.face-lock" "$PLUGINS" "${HOOK_ARGS[@]}" 2>&1)
+out=$(PATH="$root/bin:$PATH" bash -c "$final_script" _ "$PLUGINS/kalinewb.face-lock" "$PLUGINS" "${HOOK_ARGS[@]}" 2>&1)
 same "an already-removed plugin leaves the command with nothing to say on stdout" "" \
   "$(grep -v 'is not installed' <<<"$out")"
 # Four arguments, as an older RemoveView would pass: $5 is empty and the last

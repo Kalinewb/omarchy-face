@@ -256,7 +256,7 @@ Item {
   // own, whatever it has in hand (plan-engine.md §12 risk 9).
   function expire(reason) {
     if (!session.proc) return
-    console.log("graveklar.face", "the recording session expired:", reason)
+    console.log("kalinewb.face", "the recording session expired:", reason)
     session.message = reason === "idle"
                       ? "Recording closed — nothing happened for a while."
                       : "Recording closed — a session does not stay open."

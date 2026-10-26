@@ -67,7 +67,7 @@ check "no omarchy-faced units" \
 check "omarchy-faced.socket is not enabled" \
   bash -c '! systemctl is-enabled --quiet omarchy-faced.socket 2>/dev/null'
 check "no polkit policy, no /etc/pam.d/omarchy-lock-face" \
-  bash -c '[[ ! -e /usr/share/polkit-1/actions/no.graveklar.face.policy && ! -e /etc/pam.d/omarchy-lock-face ]]'
+  bash -c '[[ ! -e /usr/share/polkit-1/actions/no.kalinewb.face.policy && ! -e /etc/pam.d/omarchy-lock-face ]]'
 check "no face lines in any PAM stack" \
   bash -c '! grep -lE "omarchy-face-(gate|verify)" /etc/pam.d/* 2>/dev/null'
 check "no state, store or config directory" \
@@ -76,8 +76,8 @@ check "howdy and python-dlib are not installed" no_packages
 check "no howdy polkit drop-in, no /usr/lib/security/howdy" \
   bash -c '[[ ! -e /usr/lib/systemd/system/polkit-agent-helper@.service.d/10-howdy.conf && ! -d /usr/lib/security/howdy ]]'
 check "no build temp directory" no_glob '/tmp/omarchy-face-build.*'
-check "no graveklar.face in shell.json" \
-  bash -c '! grep -q "graveklar.face" "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json"'
+check "no kalinewb.face in shell.json" \
+  bash -c '! grep -q "kalinewb.face" "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json"'
 check "no face entries in the Omarchy menu" \
   bash -c '! grep -q "security.face" "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/extensions/omarchy-menu.jsonc" 2>/dev/null'
 check "no patched lock clone" \
@@ -87,9 +87,9 @@ check "no patched lock clone" \
 # plugin that is not a git checkout (plan-engine.md §10.3). §2's list checks only
 # the live folder, which is why a removal from the old design can look clean and
 # still leave the whole old tree on disk under a dot name.
-check "no graveklar.face plugin folder" bash -c "[[ ! -e '$PLUGINS/graveklar.face' ]]"
-check "no graveklar.face-lock plugin folder" bash -c "[[ ! -e '$PLUGINS/graveklar.face-lock' ]]"
-check "no .graveklar.face* backup or staging folder" no_glob "$PLUGINS/.graveklar.face*"
+check "no kalinewb.face plugin folder" bash -c "[[ ! -e '$PLUGINS/kalinewb.face' ]]"
+check "no kalinewb.face-lock plugin folder" bash -c "[[ ! -e '$PLUGINS/kalinewb.face-lock' ]]"
+check "no .kalinewb.face* backup or staging folder" no_glob "$PLUGINS/.kalinewb.face*"
 
 echo
 if (( failures == 0 )); then

@@ -1,0 +1,6 @@
+{
+  "name": "quiet",
+  "theme": "nord",
+  "bar": {"id": "omarchy.bar", "layout": {"left": [], "center": [], "right": []}},
+  "plugins": {"disabled": []}
+}

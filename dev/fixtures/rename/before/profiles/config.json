@@ -1,0 +1,5 @@
+{
+  "master": "work",
+  "pinned_plugins": ["graveklar.face", "kalinewb.profiles"],
+  "workspace_span": 10
+}

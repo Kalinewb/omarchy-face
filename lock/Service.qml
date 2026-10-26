@@ -156,7 +156,7 @@ Item {
     return dir === "" ? "" : dir + "/omarchy-face"
   }
 
-  function log(message) { console.log("graveklar.face-lock", message) }
+  function log(message) { console.log("kalinewb.face-lock", message) }
 
   // The journal line for a lock that face opened. It is advisory and forgeable
   // by anything running as this account -- `logger` is unprivileged -- which is
@@ -171,7 +171,7 @@ Item {
     try {
       Quickshell.execDetached(["logger", "-t", "omarchy-face", String(message)])
     } catch (error) {
-      console.warn("graveklar.face-lock", "could not write a journal line:", error)
+      console.warn("kalinewb.face-lock", "could not write a journal line:", error)
     }
   }
 
@@ -207,7 +207,7 @@ Item {
     root.missing = gone
     root.compat = gone.length > 0 ? "incompatible" : "ok"
     if (gone.length > 0)
-      console.warn("graveklar.face-lock", "Omarchy's lock screen changed; face is off on it. Missing:",
+      console.warn("kalinewb.face-lock", "Omarchy's lock screen changed; face is off on it. Missing:",
                    gone.join(", "))
     else
       root.log("composed with Omarchy's lock screen at " + root.stockUrl)
@@ -227,7 +227,7 @@ Item {
   function loadFailed() {
     root.missing = ["Omarchy's lock screen could not be loaded from " + root.stockUrl]
     root.compat = "failed"
-    console.warn("graveklar.face-lock", "could not load", root.stockUrl,
+    console.warn("kalinewb.face-lock", "could not load", root.stockUrl,
                  "- Omarchy's own lock screen is what should be running here")
     root.writeStatus()
   }
@@ -351,7 +351,7 @@ Item {
     if (item.locked === false)
       root.log("the stock lock still read as locked after unlocking; refreshed it")
     else
-      console.warn("graveklar.face-lock", "the stock lock still reads as locked after unlocking;",
+      console.warn("kalinewb.face-lock", "the stock lock still reads as locked after unlocking;",
                    "the next lock request may do nothing")
   }
 
@@ -492,7 +492,7 @@ Item {
 
   function armEnter() {
     if (!root.enterEventValid) {
-      console.warn("graveklar.face-lock", "refusing an Enter event name that is not a plain word")
+      console.warn("kalinewb.face-lock", "refusing an Enter event name that is not a plain word")
       return
     }
     root.enterArmed = true
@@ -531,7 +531,7 @@ Item {
     id: evalSafety
     interval: 5000
     onTriggered: if (evalProcess.running) {
-      console.warn("graveklar.face-lock", "hyprctl eval did not answer; stopping it")
+      console.warn("kalinewb.face-lock", "hyprctl eval did not answer; stopping it")
       evalProcess.signal(15)
     }
   }
@@ -544,7 +544,7 @@ Item {
       evalSafety.stop()
       var said = String(evalOut.text || "").trim()
       if (code !== 0)
-        console.warn("graveklar.face-lock", "hyprctl eval failed (exit " + code + "):", said,
+        console.warn("kalinewb.face-lock", "hyprctl eval failed (exit " + code + "):", said,
                      "- Enter will not start a face check on this lock")
       else if (evalProcess.success !== "")
         root.log(evalProcess.success)
@@ -803,7 +803,7 @@ Item {
     interval: root.attemptSafetyMs
     onTriggered: {
       if (!verifyProcess.running) { root.attemptBusy = false; return }
-      console.warn("graveklar.face-lock", "the face check did not answer; stopping it")
+      console.warn("kalinewb.face-lock", "the face check did not answer; stopping it")
       // Signalled, not abandoned: the check runs as this account, and its death
       // is what makes the daemon let go of the camera. `attemptBusy` is cleared
       // by the exit that follows, never here -- a second check started while
@@ -915,7 +915,7 @@ Item {
   Process {
     id: statusWriter
     onExited: function (code, status) {
-      if (code !== 0) console.warn("graveklar.face-lock", "could not write lock-status.json")
+      if (code !== 0) console.warn("kalinewb.face-lock", "could not write lock-status.json")
       if (root.pendingStatus !== "") {
         var doc = root.pendingStatus
         root.pendingStatus = ""

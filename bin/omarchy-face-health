@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 2.0.4
+# omarchy-face-version: 3.0.0
 #
 # Is Face still working after something else changed this machine?
 #
@@ -40,6 +40,8 @@
 #
 #   it never prompts, never opens the camera, never needs root
 #   it writes nothing outside $XDG_STATE_HOME/omarchy-face and the two hooks
+#   (an unfinished rename is handed to bin/omarchy-face-rename, which writes
+#   what a rename writes; see start_rename_repair)
 #   a check it cannot make says nothing -- it is never reported as healthy, and
 #   it is never reported as broken either
 #
@@ -58,7 +60,7 @@ umask 077
 export LC_ALL=C
 
 PLUGIN_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-PLUGIN_ID=graveklar.face
+PLUGIN_ID=kalinewb.face
 
 # The status helper, from the same place the GUI takes it (common/Ask.qml
 # `pluginBin`): the development stubs when OMARCHY_FACE_DEV_BIN is set, which is
@@ -74,7 +76,7 @@ fi
 # and on every Omarchy machine the two are the same directory anyway (Omarchy's
 # own plugin scripts use $HOME/.config too).
 HOOKS_DIR=$HOME/.config/omarchy/hooks
-HOOK_NAME=graveklar-face.hook
+HOOK_NAME=kalinewb-face.hook
 HOOK_VERBS=(post-update post-boot)
 
 STATE_DIR=${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-face
@@ -210,6 +212,9 @@ remove_hooks() {
 #   install-job              never: the GUI folds it into `engine`, and a failed
 #                            rebuild with the old engine still `ok` is not a
 #                            stoppage
+#   rename                   never: the hook that runs this has already started
+#                            the repair (start_rename_repair), and the Setup row
+#                            says so if it could not finish
 #   lock, incompatible/failed  never: Service.qml's `notify-once` is the single
 #                            notifier for those reasons (plan-merged.md §1 row
 #                            13), and this would be a second one for the same
@@ -237,6 +242,7 @@ ROW_FILTER='
       | select(
           (.state == "broken"
              and .id != "install-job"
+             and .id != "rename"
              and (.id != "lock" or ((($doc.lock.compat // "") == "incompatible"
                                      or ($doc.lock.compat // "") == "failed") | not)))
           or (.state == "needs_action"
@@ -314,6 +320,20 @@ notify() { # notify <title> <body>
     return 0
   fi
   have notify-send && notify-send -a "Face ID" -u critical "$1" "$2" >/dev/null 2>&1
+}
+
+# The fourth trigger of Face's rename (plan-suite.md §3.4 c). Every Face since
+# 2.0 has put a hook in post-boot.d and post-update.d that runs the health script
+# in the plugin folder of the old id -- and after `omarchy plugin update` lands
+# 3.0.0 in that folder, that script is this one. Its shell.json still names only
+# the old id, so Omarchy keeps the new one off and its service never starts:
+# this is the one piece of 3.0.0 that runs. It hands over to the rename helper,
+# detached so the hook returns at once, and the helper waits out a lock screen
+# and does nothing at all when there is nothing left to rename.
+start_rename_repair() {
+  local rename=$PLUGIN_DIR/bin/omarchy-face-rename
+  [[ -x $rename ]] && have setsid || return 0
+  setsid -f "$rename" --repair --if-needed --when-unlocked >/dev/null 2>&1 </dev/null
 }
 
 run_checks() { # run_checks post-update|post-boot
@@ -398,6 +418,7 @@ run_checks() { # run_checks post-update|post-boot
 
 case ${1:-} in
   post-update | post-boot)
+    start_rename_repair
     run_checks "$1"
     exit 0
     ;;

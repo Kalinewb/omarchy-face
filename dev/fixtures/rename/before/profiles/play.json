@@ -1,0 +1,9 @@
+{
+  "name": "play",
+  "theme": "catppuccin",
+  "bar": {
+    "id": "kalinewb.notch",
+    "layout": {"left": [], "center": [{"id": "kalinewb.notch-menu"}], "right": [{"id": "graveklar.face"}, {"id": "kalinewb.face", "renamedFrom": "graveklar.face"}]}
+  },
+  "plugins": {"disabled": ["graveklar.face", "omarchy.lock"]}
+}

@@ -55,7 +55,10 @@ command_source = re.search(r"readonly property string installCommand:\s*\n(.*?)\
 if not command_source:
     sys.exit("install-command: no installCommand in common/Ask.qml")
 
-values = {"installBody": body, "systemVersion": version.group(1)}
+# The panel names the folder it runs from (`pluginFolder`); README.md names the
+# folder an installed copy has, which is the manifest's id.
+plugin_id = json.loads((root / "manifest.json").read_text())["id"]
+values = {"installBody": body, "systemVersion": version.group(1), "pluginFolder": plugin_id}
 text = ""
 for literal, name in re.findall(LITERAL + r"|root\.([A-Za-z]+)", command_source.group(1)):
     if name:

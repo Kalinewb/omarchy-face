@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 2.0.4
+# omarchy-face-version: 3.0.0
 #
 # The read half of the contract (plan-merged.md §2.2, plan-engine.md §10.1,
 # §11.1): one JSON document describing everything the GUI renders.
@@ -20,7 +20,8 @@
 #
 # All nine rows of plan-engine.md §10.1 are answered here -- `legacy`, `camera`,
 # `system`, `engine`, `install-job`, `people`, `sudo`, `polkit-1`, `lock` -- each
-# from what is on disk and none of them from a guess. A row offers a Fix only
+# from what is on disk and none of them from a guess. 3.0.0 adds a tenth,
+# `rename`, shown only while the move from graveklar.face is unfinished. A row offers a Fix only
 # where a verb can actually perform it: `people` never carries one (its repair is
 # the GUI's enrol flow) and a `system` row that is `broken` at the same release
 # version carries none on purpose, so a same-user edit of the plugin's own copy
@@ -49,10 +50,10 @@ INSTALL_FILE=$RUN_DIR/install.json
 INSTALL_LOG=$RUN_DIR/install.log
 INSTALL_UNIT=omarchy-face-install.service
 # 2.x installs its polkit action as no.graveklar.face.policy and 3.0.0 as
-# no.kalinewb.face.policy (plan-suite.md §3.4). Whichever is there is counted as
-# the policy: a 3.x system half under a rolled-back 2.2.0 then reads as "newer
-# than this plugin", which is true, and not as a half-installed system half with
-# a Fix that 3.x's admin helper refuses every time.
+# no.kalinewb.face.policy (plan-suite.md §3.4). Until the update installs the
+# new file, the old one stands in for it: the row then reads "the plugin is newer
+# than the installed system files", whose Fix is the update, and not "a
+# half-installed system half". The 2.x path is also where v1 kept its action.
 LEGACY_POLICY=/usr/share/polkit-1/actions/no.graveklar.face.policy
 POLICY=/usr/share/polkit-1/actions/no.kalinewb.face.policy
 [[ -e $POLICY ]] || POLICY=$LEGACY_POLICY
@@ -71,7 +72,7 @@ SYSTEM_FILES=(
   "omarchy-face-camera:/usr/local/bin/omarchy-face-camera:755"
   "omarchy-faced.socket:$UNIT_DIR/omarchy-faced.socket:644"
   "omarchy-faced.service:$UNIT_DIR/omarchy-faced.service:644"
-  "no.graveklar.face.policy:$POLICY:644"
+  "no.kalinewb.face.policy:$POLICY:644"
 )
 HELPER_COUNT=7
 
@@ -633,7 +634,7 @@ lock_other=$(jq -r '.otherLock // ""' <<<"$lock_doc")
 lock_missing=$(jq -r '(.missing // []) | join(", ")' <<<"$lock_doc")
 
 lock_staged=false
-[[ -d $PLUGINS_DIR/graveklar.face-lock ]] && lock_staged=true
+[[ -d $PLUGINS_DIR/kalinewb.face-lock ]] && lock_staged=true
 
 # A Face update that changed the wrapper. The same `diff -rq` `sync` makes, made
 # here so the row can offer it rather than waiting for the next shell start
@@ -644,9 +645,9 @@ if [[ $lock_staged == true && -d $PLUGIN_DIR/lock ]]; then
   # its manifest as `manifest.json.in` and the staged copy as `manifest.json`,
   # so that one pair is compared by name rather than by the recursive walk.
   { diff -rq --exclude=manifest.json --exclude=manifest.json.in \
-      "$PLUGIN_DIR/lock" "$PLUGINS_DIR/graveklar.face-lock" >/dev/null 2>&1 &&
+      "$PLUGIN_DIR/lock" "$PLUGINS_DIR/kalinewb.face-lock" >/dev/null 2>&1 &&
     cmp -s "$PLUGIN_DIR/lock/manifest.json.in" \
-      "$PLUGINS_DIR/graveklar.face-lock/manifest.json"; } || lock_stale=true
+      "$PLUGINS_DIR/kalinewb.face-lock/manifest.json"; } || lock_stale=true
 fi
 
 lock_visible=false
@@ -684,13 +685,46 @@ if [[ $lock_visible == true ]]; then
   fi
 fi
 
+# --- row: rename -------------------------------------------------------------
+#
+# Face was graveklar.face before 3.0.0 (plan-suite.md §3.4). A move that did not
+# finish -- this Face still in the folder of its old name, an older Face beside
+# it, or shell.json or a profile still naming the old ids -- leaves Face off the
+# bar, or a profile that switches the old ids back in. The rename helper decides,
+# so the row and the rename can never disagree; the helper's --check is a read.
+# The fix runs it detached, because it ends in a shell restart. No password.
+
+rename_doc=""
+if [[ -x $PLUGIN_DIR/bin/omarchy-face-rename ]]; then
+  rename_doc=$("$PLUGIN_DIR/bin/omarchy-face-rename" --check 2>/dev/null) || rename_doc=""
+fi
+if [[ $(jq -r '.needed // false' <<<"$rename_doc" 2>/dev/null) == true ]]; then
+  case $(jq -r '.reason // ""' <<<"$rename_doc" 2>/dev/null) in
+    folder) why="Face is still in the folder of its old name" ;;
+    two_folders) why="an older Face is installed beside this one" ;;
+    old_lock) why="the old lock screen wrapper is still installed" ;;
+    face_too_old) why="" ;;
+    *) why="your settings still use the old name" ;;
+  esac
+  if [[ -n $why ]]; then
+    add_row rename "Rename" broken "Face ID's rename didn't finish — $why" true rename-repair
+  else
+    # Not this Face's to move: a kalinewb.face older than 3.0.0 is in the way,
+    # and the rename refuses rather than guess which of the two to keep.
+    add_row rename "Rename" broken \
+      "Face ID's rename didn't finish — a kalinewb.face older than 3.0.0 is in the way; remove one of the two" \
+      false ""
+  fi
+fi
+
 # With no infrared camera nothing else can be made true, so the engine hides
 # every other row rather than handing the GUI a list of things to fix that would
 # not help (plan-engine.md §10.1, camera row). `legacy` survives the cut when it
 # has something to say: removing the old install is worth doing on a machine
-# Face will never run on.
+# Face will never run on. So does `rename`, which is about the plugin, not the
+# camera.
 if [[ $camera_ok != true ]]; then
-  rows=$(jq -c '[.[] | select(.id == "camera" or (.id == "legacy" and .state != "ok"))]' <<<"$rows")
+  rows=$(jq -c '[.[] | select(.id == "camera" or .id == "rename" or (.id == "legacy" and .state != "ok"))]' <<<"$rows")
 fi
 
 # --- the objects -------------------------------------------------------------

@@ -60,10 +60,10 @@ through a second hand-written fixture).
 ## Asking the popup what it is doing
 
 ```sh
-omarchy-shell graveklar.face state             # {"open":true,"view":"setup",…}
-omarchy-shell graveklar.face open people ""    # open on a view
-omarchy-shell graveklar.face open person anna  # open on one person
-omarchy-shell graveklar.face.card state        # the keepLoaded service
+omarchy-shell kalinewb.face state             # {"open":true,"view":"setup",…}
+omarchy-shell kalinewb.face open people ""    # open on a view
+omarchy-shell kalinewb.face open person anna  # open on one person
+omarchy-shell kalinewb.face.card state        # the keepLoaded service
 ```
 
 **Both arguments of `open` are required.** Quickshell checks arity, so
@@ -82,14 +82,14 @@ unprivileged helpers that ship with the plugin (`plan-engine.md §8.1`):
 | | |
 |---|---|
 | `system/install.sh` | the first install. The GUI reads it and passes its **text** to `pkexec /bin/bash -c`, so what polkit authorised is what runs. It installs `omarchy-face-admin` from a root-owned snapshot and hands over. |
-| `system/omarchy-face-admin` | every privileged verb, behind `no.graveklar.face.owner`: the installs, the store and its permissions, the sudo wiring, the lock setting, and `purge`. |
+| `system/omarchy-face-admin` | every privileged verb, behind `no.kalinewb.face.owner`: the installs, the store and its permissions, the sudo wiring, the lock setting, and `purge`. |
 | `system/omarchy-face-camera` | which V4L2 node is the infrared one. Runs as anybody, and the status script runs the plugin's own copy before anything is installed. |
 | `system/omarchy-face-{gate,verify}` | phase 5: the two lines `sudo-on` puts in `/etc/pam.d/sudo`. The gate decides whether asking the camera is worth it (exit 0 = skip); the verifier is the only file in this project whose exit 0 authenticates somebody. |
 | `system/omarchy-faced` | phase 6: the socket daemon, and the one listening thing in the project. It is the only root process that opens the camera for a caller holding no privilege, which is why peer credentials and draining are gates on it rather than details. |
 | `system/omarchy-face-lock-verify` | phase 7: the socket client the lock wrapper runs. Two exit codes and nothing else — every reason for a no is the same no, because a lock screen is the one place where telling them apart is telling whoever is standing there. |
 | `bin/omarchy-face-status` | the whole read half of the contract. |
 | `bin/omarchy-face-lock` | phase 7: the only thing in this plugin allowed to write `~/.config/omarchy/plugins`, and it does so from exactly one verb (`stage`). |
-| `lock/` | the wrapper **template** — two files, staged byte-for-byte into a separate `graveklar.face-lock` plugin folder. It holds no Omarchy code at all: a `Loader` on an absolute URL runs Omarchy's own lock `Service.qml`. Not scanned as a plugin where it sits, because the registry only looks one level deep (`PluginRegistry.qml` `scan_thirdparty`). |
+| `lock/` | the wrapper **template** — two files, staged byte-for-byte into a separate `kalinewb.face-lock` plugin folder. It holds no Omarchy code at all: a `Loader` on an absolute URL runs Omarchy's own lock `Service.qml`. Not scanned as a plugin where it sits, because the registry only looks one level deep (`PluginRegistry.qml` `scan_thirdparty`). |
 
 Every installed file carries two headers, `omarchy-face v2` and
 `omarchy-face-version: X.Y.Z`. The version is a **literal**, bumped by hand when
@@ -653,7 +653,7 @@ a TTY, or an ssh session from another device):
 `f7-purge.sh` does not repeat it for its own sake: it adds `purge` refusing with
 exit 3 while the engine builds (and removing *nothing* when it does), a second
 purge on a machine it has already been through, and the last three items of
-§10.3 — the plugin folders, the `.graveklar.face*` backups and `shell.json` —
+§10.3 — the plugin folders, the `.kalinewb.face*` backups and `shell.json` —
 which `purge` never touches because they belong to the Remove view's final step.
 That step is **read out of `RemoveView.qml`** rather than copied into the test,
 and it is launched from a process whose whole group is then SIGKILLed, which is
@@ -742,11 +742,11 @@ is the only evidence that it is testing anything.
 ## F0
 
 `./dev/f0-verify.sh` is `plan-engine.md §2` as a runnable checklist, plus the
-`.graveklar.face*` backup glob from `§10.3` that §2's list does not cover. Run
+`.kalinewb.face*` backup glob from `§10.3` that §2's list does not cover. Run
 it before `install.sh`: its last checks are about the plugin folders, which
 installing legitimately fills.
 
 That extra glob is not pedantry. On this machine §2's own list passed while
-`.graveklar.face.bak.20260912221457` still held the entire old plugin — the
+`.kalinewb.face.bak.20260912221457` still held the entire old plugin — the
 backup `omarchy plugin remove` leaves behind for a plugin that is not a git
 checkout (`omarchy-plugin-remove:105-115`).

@@ -85,14 +85,14 @@ done
 # from the real document rather than rebuilt, because a shell.json without its
 # `version` is a shell.json the shell ignores in favour of the defaults.
 jq '
-  def keep(id): (id | startswith("omarchy.")) or id == "graveklar.face";
+  def keep(id): (id | startswith("omarchy.")) or id == "kalinewb.face";
   .plugins = [ (.plugins // [])[] | select(keep(.id // "")) ]
   | .bar.layout = (.bar.layout | with_entries(.value = [ .value[] | select(keep(.id // .)) ]))
   | .disabledPlugins = [ (.disabledPlugins // [])[] | select(. != "omarchy.background") ]
 ' "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json" >"$CONFIG/shell.json" || exit 1
 
 XDG_CONFIG_HOME="$HOME_DIR/.config" "$REPO/install.sh" --no-restart >/dev/null || exit 1
-echo "${DIM}this checkout installed at $CONFIG/plugins/graveklar.face${RESET}"
+echo "${DIM}this checkout installed at $CONFIG/plugins/kalinewb.face${RESET}"
 
 # --- the nested compositor ---------------------------------------------------
 
@@ -158,7 +158,7 @@ state=""
 bar_state=""
 for _ in $(seq 1 60); do
   sleep 0.5
-  state=$(timeout 5 qs ipc --pid "$shell_pid" call graveklar.face state 2>/dev/null)
+  state=$(timeout 5 qs ipc --pid "$shell_pid" call kalinewb.face state 2>/dev/null)
   [[ $state == \{* ]] || continue
   bar_state=$(jq -r '.barState' <<<"$state")
   [[ $bar_state == on ]] && break
@@ -168,7 +168,7 @@ done
 
 # --- the two shots, and the crop between them --------------------------------
 
-qs ipc --pid "$shell_pid" call graveklar.face hide >/dev/null 2>&1
+qs ipc --pid "$shell_pid" call kalinewb.face hide >/dev/null 2>&1
 
 # Hyprland puts its own banner on screen when it is started outside
 # `start-hyprland`, and a banner that fades between the two shots would be
@@ -185,7 +185,7 @@ for _ in $(seq 1 30); do
 done
 ((settled)) || { echo "${RED}the nested screen never held still${RESET}"; exit 1; }
 
-qs ipc --pid "$shell_pid" call graveklar.face open people "" >/dev/null || exit 1
+qs ipc --pid "$shell_pid" call kalinewb.face open people "" >/dev/null || exit 1
 sleep 2
 timeout 20 grim -o HEADLESS-1 "$root/open.png" || exit 1
 

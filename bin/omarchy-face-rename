@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 2.0.4
+# omarchy-face-version: 3.0.0
 #
 # Face's move from graveklar.face to kalinewb.face (and graveklar.face-lock to
 # kalinewb.face-lock), and everything that has to move with it. One script, run

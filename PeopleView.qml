@@ -78,7 +78,7 @@ Column {
       function (result) {
         if (!result.ok) {
           view.note = "The recording card could not be opened."
-          console.warn("graveklar.face", "card record failed:", result.outcome, result.stdout)
+          console.warn("kalinewb.face", "card record failed:", result.outcome, result.stdout)
         }
       })
     panel.close()

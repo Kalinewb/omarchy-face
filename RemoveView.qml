@@ -251,13 +251,14 @@ Column {
   // (omarchy-plugin-remove:18-30).
   //
   // The last `rm -rf` clears every dot entry Face leaves in that folder: the
-  // `.graveklar.face.bak.<ts>` copy `plugin remove` makes of a plugin that is
-  // not a git checkout (:105-115), and the `.graveklar.face-lock.old.*` /
-  // `.graveklar.face-lock.XXXXXX` staging directories a `stage` interrupted
+  // `.kalinewb.face.bak.<ts>` copy `plugin remove` makes of a plugin that is
+  // not a git checkout (:105-115), and the `.kalinewb.face-lock.old.*` /
+  // `.kalinewb.face-lock.XXXXXX` staging directories a `stage` interrupted
   // half way can leave behind. plan-engine.md §10.2 names only the first;
-  // §10.3's checklist asserts `.graveklar.face*` is empty, which is the wider
+  // §10.3's checklist asserts `.kalinewb.face*` is empty, which is the wider
   // glob, so this is the wider glob. Dot entries map to no plugin id
-  // (PluginRegistry.qml:735), so none of this causes a second reload.
+  // (PluginRegistry.qml:735), so none of this causes a second reload. The same
+  // entries from before 3.0.0 carry the old id, `.graveklar.face*`, and go too.
   //
   // Before any of that, the bridge's marker comes out of shell.json
   // (bin/omarchy-face-rename --unmark): an entry naming kalinewb.face, which
@@ -276,8 +277,8 @@ Column {
     '[ -x "$6" ] && "$6" --unmark >/dev/null 2>&1\n' +
     'rm -f -- "$3" "$4"\n' +
     'rm -rf "$1"\n' +
-    'omarchy plugin remove --yes graveklar.face\n' +
-    'rm -rf "$2"/.graveklar.face*\n' +
+    'omarchy plugin remove --yes kalinewb.face\n' +
+    'rm -rf "$2"/.kalinewb.face* "$2"/.graveklar.face*\n' +
     '[ -n "$5" ] && rm -rf -- "$5"\n'
 
   // <config>/omarchy/hooks, beside <config>/omarchy/plugins.
@@ -312,9 +313,9 @@ Column {
 
   function finalArgv() {
     return ["setsid", "-f", "bash", "-c", view.finalScript, "_",
-            view.pluginsDir + "/graveklar.face-lock", view.pluginsDir,
-            view.hooksDir + "/post-update.d/graveklar-face.hook",
-            view.hooksDir + "/post-boot.d/graveklar-face.hook",
+            view.pluginsDir + "/kalinewb.face-lock", view.pluginsDir,
+            view.hooksDir + "/post-update.d/kalinewb-face.hook",
+            view.hooksDir + "/post-boot.d/kalinewb-face.hook",
             view.stateDir,
             view.panel && view.panel.ask ? view.panel.ask.renameArgv([])[0] : ""]
   }
@@ -322,7 +323,7 @@ Column {
   function runFinal() {
     if (view.finalRan || !view.armed || view.pluginsDir === "") return
     view.finalRan = true
-    console.log("graveklar.face", "removal: final step, detached:", JSON.stringify(view.finalArgv()))
+    console.log("kalinewb.face", "removal: final step, detached:", JSON.stringify(view.finalArgv()))
     Quickshell.execDetached(view.finalArgv())
   }
 

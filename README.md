@@ -95,7 +95,7 @@ file goes back byte for byte. There is at most one face attempt per `sudo` call 
 password retry does not re-open the camera — and at most six attempts a minute across
 separate calls.
 
-**The lock screen** is a second plugin, `graveklar.face-lock`, that holds no copy of
+**The lock screen** is a second plugin, `kalinewb.face-lock`, that holds no copy of
 Omarchy's lock screen: it loads *Omarchy's own* lock code and adds a face check alongside
 the password field and the fingerprint reader. It draws nothing of its own — nothing may
 draw over a session-lock surface, and a plugin that tried would be defeating the one
@@ -123,8 +123,8 @@ If Enter or Esc ever stopped reaching the password field while locked, switch to
 
 **After an update, and at login,** Face checks itself and tells you if something stopped
 working, rather than leaving you to find out at a lock screen. It puts two small hooks in
-`~/.config/omarchy/hooks/` — `post-update.d/graveklar-face.hook` and
-`post-boot.d/graveklar-face.hook` — which Omarchy runs during `omarchy update` and a
+`~/.config/omarchy/hooks/` — `post-update.d/kalinewb-face.hook` and
+`post-boot.d/kalinewb-face.hook` — which Omarchy runs during `omarchy update` and a
 moment after you log in. They read the same status the Setup view shows, as you, without
 the camera and without a password, and send one notification per new problem that opens
 Face ID → Setup. During an update they also catch the three things updates break: a Python
@@ -195,7 +195,7 @@ sudo /usr/bin/bash -c 'PATH=/usr/bin; set -o pipefail; t=$(mktemp -d) || exit 1
     bash "$t/install.sh" "$1" "$2"
   }
   run "$@"; s=$?; rm -rf -- "$t"; exit $s' \
-  _ "$HOME/.config/omarchy/plugins/graveklar.face" "$USER" 2.0.4
+  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.0.0
 ```
 
 What it does, from the button or from a terminal: root copies the installer out of the
@@ -232,7 +232,7 @@ others) and builds howdy and python-dlib from the AUR. Removing Face takes those
 off with `pacman -Rns`, unless you tick "keep howdy and dlib installed".
 
 **A second plugin appears, and that is Face.** The lock-screen wrapper
-(`graveklar.face-lock`) is staged into your plugins folder the first time the shell starts
+(`kalinewb.face-lock`) is staged into your plugins folder the first time the shell starts
 with Face enabled, whether or not you use face on the lock screen. It is what lets Face
 answer the lock screen without replacing Omarchy's own; Remove takes it away with
 everything else.
@@ -240,6 +240,50 @@ everything else.
 **Updating from 2.0.2 or earlier.** Those versions let the installed helper update itself
 from the plugin folder with your own password, behind Face's own dialog. Update promptly,
 and until you have, do not answer a Face ID password dialog ("Authentication is required to change who can unlock with a face") that you did not start.
+
+### Updating from 2.x
+
+Face ID 3.0.0 is the same plugin under a new id: `kalinewb.face`, which was
+`graveklar.face` (a machine's username, where everything else of the author's says
+`kalinewb`), and its lock-screen wrapper is now `kalinewb.face-lock`. Omarchy treats a new
+id as a new plugin, so the move is made in steps, and none of them needs you:
+
+1. **2.2.0**, the last 2.x release, names the new id in `shell.json` when it starts, in an
+   entry Omarchy ignores until a plugin with that id is installed. Update to it first if you
+   can, and let the shell restart once.
+2. **3.0.0** then starts however it arrives — the notch's Plugins page, `omarchy plugin
+   update graveklar.face`, or `./install.sh` from a checkout, which keeps syncing into the
+   `graveklar.face` folder while that is there. It moves its folder to `kalinewb.face`,
+   swaps the lock-screen wrapper in the same write that renames the ids in `shell.json` (the
+   bar layout, the notch's lists, `plugins`, `disabledPlugins`, `cloneSourceRestores`) and
+   in the Profiles plugin's saved profiles, and restarts the shell. Your people, your
+   recordings and the PAM lines do not move: their names never had the old id in them.
+3. **Face's Setup** then shows *the plugin (3.0.0) is newer than the installed system
+   files* — **Update Face's system files**, one password, for the renamed polkit policy.
+   The old policy file is removed only once polkit has loaded the new one.
+
+If you went straight from an older 2.x to 3.0.0, Face is missing from the bar until your
+next login or `omarchy update`, when the update and boot hooks every 2.x Face installed
+finish the move; face keeps unlocking the lock screen in the meantime. Or finish it now:
+
+```sh
+~/.config/omarchy/plugins/graveklar.face/bin/omarchy-face-rename --repair
+```
+
+Anything left over — a `graveklar.face` folder beside `kalinewb.face`, or a profile that
+switches the old ids back in — shows in Setup as *Face ID's rename didn't finish*, with
+**Finish the rename** (no password).
+
+Everything the move changed is kept under `~/.local/state/omarchy-face/rename/`, and one
+command puts it back byte for byte, moves the folders back and restarts the shell:
+
+```sh
+~/.config/omarchy/plugins/kalinewb.face/bin/omarchy-face-rename --rollback
+```
+
+A git checkout goes back to the commit it came from (`v2.2.0` when the system files are
+already 3.0.0). A copy installed with `./install.sh` has no commit to go back to: run
+`git checkout v2.2.0 && ./install.sh` in your checkout afterwards.
 
 ## The views
 
@@ -351,7 +395,7 @@ installed if you expect to come back.
 
 Removing the plugin any other way leaves the system half working — face still answers
 `sudo`, and nothing is lost — but it is not tidy. Left behind are the lock-screen wrapper
-plugin (`graveklar.face-lock`, below), its entries in `shell.json`, Face's own state
+plugin (`kalinewb.face-lock`, below), its entries in `shell.json`, Face's own state
 directory, and the whole system half. To take all of it off, install the plugin again and
 use Remove.
 
@@ -367,7 +411,7 @@ howdy and dlib installed. What it cannot do from there is remove the two plugin 
 delete those by hand afterwards if they are still present:
 
 ```sh
-rm -rf ~/.config/omarchy/plugins/graveklar.face ~/.config/omarchy/plugins/graveklar.face-lock
+rm -rf ~/.config/omarchy/plugins/kalinewb.face ~/.config/omarchy/plugins/kalinewb.face-lock
 ```
 
 ## Licence

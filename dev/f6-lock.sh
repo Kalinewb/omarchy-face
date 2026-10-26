@@ -65,7 +65,7 @@ mkdir -p "$root"/{bin,config/omarchy/plugins,run,home/.local/state}
 
 PLUGINS=$root/config/omarchy/plugins
 SHELL_JSON=$root/config/omarchy/shell.json
-STAGED=$PLUGINS/graveklar.face-lock
+STAGED=$PLUGINS/kalinewb.face-lock
 STATUS=$root/run/omarchy-face/lock-status.json
 NOTIFIED=$root/home/.local/state/omarchy-face/lock-notified
 CONTROL=$root/control
@@ -211,7 +211,7 @@ check "…and the clone declared against Omarchy's own lock" "omarchy.lock" \
   "$(jq -r '.omarchy.clonedFrom' "$STAGED/manifest.json")"
 check "…readable like any plugin folder" "755" "$(stat -c '%a' "$STAGED")"
 check "no staging directory was left behind" "" \
-  "$(compgen -G "$PLUGINS/.graveklar.face-lock.*" || true)"
+  "$(compgen -G "$PLUGINS/.kalinewb.face-lock.*" || true)"
 /usr/share/omarchy/bin/omarchy-plugin-validate "$STAGED" >/dev/null 2>&1
 check "Omarchy's own validation passes on what landed" "0" "$?"
 
@@ -222,7 +222,7 @@ check "it staged again" "true" "$(jq -r '.ok' <<<"$out")"
 check "…and the leftover is gone" "false" \
   "$([[ -e $STAGED/leftover ]] && echo true || echo false)"
 check "…with no .old directory left" "" \
-  "$(compgen -G "$PLUGINS/.graveklar.face-lock.old.*" || true)"
+  "$(compgen -G "$PLUGINS/.kalinewb.face-lock.old.*" || true)"
 
 # =============================================================================
 step "GATE: sync writes nothing when the staged copy is current"
@@ -266,7 +266,7 @@ reset_calls
 locker unlocked
 events=$(watch_plugins run enable)
 check "enabling wrote nothing under the plugins folder" "" "$events"
-check "…it edited shell.json instead" "graveklar.face-lock" \
+check "…it edited shell.json instead" "kalinewb.face-lock" \
   "$(jq -r '.plugins[0].id // ""' "$SHELL_JSON")"
 check "…and put Omarchy's own lock aside, the way the registry does (E4)" "omarchy.lock" \
   "$(jq -r '.disabledPlugins[0] // ""' "$SHELL_JSON")"
@@ -353,7 +353,7 @@ check "enable gives up and says so" "enable_failed" "$(jq -r '.error' <<<"$out")
 check "…inside its thirty seconds" "true" "$([[ $elapsed -ge 29 && $elapsed -le 36 ]] && echo true || echo false)"
 note "took ${elapsed}s"
 check "…having put Omarchy's own lock screen back, whatever the compositor says" "1" \
-  "$(calls | grep -c 'omarchy plugin disable graveklar.face-lock')"
+  "$(calls | grep -c 'omarchy plugin disable kalinewb.face-lock')"
 check "…and the clone really is off in shell.json" "0" \
   "$(jq -r '(.plugins // []) | length' "$SHELL_JSON")"
 check "…with the reason written where the Setup row reads it" "failed" \
@@ -380,7 +380,7 @@ step "GATE: a locker that DOES answer is never destroyed"
 locker unlocked
 compositor 1
 run enable >/dev/null 2>&1
-check "the clone is the lock screen to begin with" "graveklar.face-lock" \
+check "the clone is the lock screen to begin with" "kalinewb.face-lock" \
   "$(jq -r '.plugins[0].id // ""' "$SHELL_JSON")"
 reset_calls
 locker secure
@@ -388,7 +388,7 @@ compositor 0
 out=$(run disable --stranded)
 check "the recovery refuses" "live_locker" "$(jq -r '.error' <<<"$out")"
 check "…and nothing was disabled" "0" "$(calls | grep -c 'plugin disable')"
-check "…so the drawing clone is still the lock screen" "graveklar.face-lock" \
+check "…so the drawing clone is still the lock screen" "kalinewb.face-lock" \
   "$(jq -r '.plugins[0].id // ""' "$SHELL_JSON")"
 note "destroying a live locker is the crashed-lockscreen fallback (shell.qml:1030-1032)"
 
@@ -406,7 +406,7 @@ stall 1
 out=$(run disable --stranded)
 check "one stalled probe does not become permission to destroy it" "live_locker" \
   "$(jq -r '.error' <<<"$out")"
-check "…and the clone is still the lock screen" "graveklar.face-lock" \
+check "…and the clone is still the lock screen" "kalinewb.face-lock" \
   "$(jq -r '.plugins[0].id // ""' "$SHELL_JSON")"
 check "…it was asked more than once before it was believed" "true" \
   "$([[ $(calls | grep -c 'omarchy-shell lock status') -ge 2 ]] && echo true || echo false)"
@@ -446,7 +446,7 @@ check "the recovery runs" "true true" "$(jq -r '"\(.ok) \(.recovered)"' <<<"$out
 check "…having asked three times before believing it" "3" \
   "$(calls | grep -c 'omarchy-shell lock status')"
 check "…and disabled the clone exactly once" "1" \
-  "$(calls | grep -c 'omarchy plugin disable graveklar.face-lock')"
+  "$(calls | grep -c 'omarchy plugin disable kalinewb.face-lock')"
 check "…so Omarchy's own lock is back in shell.json" "0" \
   "$(jq -r '(.disabledPlugins // []) | length' "$SHELL_JSON")"
 check "…and nothing else in shell.json moved" "0" \

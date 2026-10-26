@@ -63,7 +63,7 @@ REAL_STOCK=/usr/share/omarchy/shell/plugins/lock/Service.qml
 
 # Face's hooks in this account's real hooks folder, before and after: whatever
 # they are (installed or not), this suite must leave them so.
-real_hooks() { stat -c '%n %i %y' "$HOME"/.config/omarchy/hooks/*/graveklar-face.hook 2>/dev/null; }
+real_hooks() { stat -c '%n %i %y' "$HOME"/.config/omarchy/hooks/*/kalinewb-face.hook 2>/dev/null; }
 REAL_HOOKS_BEFORE=$(real_hooks)
 
 root=$(mktemp -d /tmp/omarchy-face-h1.XXXXXX)
@@ -225,7 +225,7 @@ check "…titled, with the row as its body" \
   '["Face ID needs attention","Face engine: Python was upgraded to 3.15, but the face engine was built for 3.14 — build the engine again"]' \
   "$(jq -c '.[7:9]' <<<"$sent")"
 check "…and a click that opens the panel on Setup (both IPC arguments)" \
-  '["--exec","omarchy-shell","graveklar.face","open","setup",""]' "$(jq -c '.[9:]' <<<"$sent")"
+  '["--exec","omarchy-shell","kalinewb.face","open","setup",""]' "$(jq -c '.[9:]' <<<"$sent")"
 check "the problem set is remembered" "true" "$(yes_no test -s "$NOTIFIED")"
 
 out=$(health post-boot broken-engine)
@@ -282,7 +282,7 @@ STANDIN
     "$HEALTH" post-boot >/dev/null
   hint=$(jq -r 'index("omarchy-exec-argv") as $i | if $i then .[$i + 2] else "" end' "$CALLS" 2>/dev/null | head -1)
   check "the real omarchy-notification-send accepts it, and the click it carries is" \
-    '["omarchy-shell","graveklar.face","open","setup",""]' "$hint"
+    '["omarchy-shell","kalinewb.face","open","setup",""]' "$hint"
   check "…as app Face ID" "Face ID" "$(jq -r '.[9]' "$CALLS" | head -1)"
   check "…and it counts as said" "true" "$(yes_no test -s "$NOTIFIED")"
 else
@@ -373,8 +373,8 @@ step "install-hooks"
 # =============================================================================
 
 hooks=$home/.config/omarchy/hooks
-H_UPDATE=$hooks/post-update.d/graveklar-face.hook
-H_BOOT=$hooks/post-boot.d/graveklar-face.hook
+H_UPDATE=$hooks/post-update.d/kalinewb-face.hook
+H_BOOT=$hooks/post-boot.d/kalinewb-face.hook
 
 hooks_cmd() { env -i HOME="$home" PATH="/usr/bin" "$HEALTH" "$1"; }
 
@@ -382,7 +382,7 @@ out=$(hooks_cmd install-hooks); rc=$?
 check "into an empty HOME: exit 0" "0" "$rc"
 check "…both written" '{"ok":true,"written":2}' "$out"
 check "…755" "755 755" "$(stat -c '%a' "$H_UPDATE" "$H_BOOT" 2>/dev/null | paste -sd' ')"
-check "…and nothing else left in either folder (no temp files)" "graveklar-face.hook graveklar-face.hook" \
+check "…and nothing else left in either folder (no temp files)" "kalinewb-face.hook kalinewb-face.hook" \
   "$(ls -A "${H_UPDATE%/*}" "${H_BOOT%/*}" 2>/dev/null | grep -v '^$\|:$' | paste -sd' ')"
 check "each hook passes its own verb" "post-update|post-boot" \
   "$(grep -ho '"\$health" post-[a-z]*' "$H_UPDATE" "$H_BOOT" | sed 's/"$health" //' | paste -sd'|')"
@@ -420,7 +420,7 @@ check "the hook finds the plugin where Omarchy puts it, not under XDG_CONFIG_HOM
 step "the hooks themselves"
 # =============================================================================
 
-plugin_bin=$home/.config/omarchy/plugins/graveklar.face/bin
+plugin_bin=$home/.config/omarchy/plugins/kalinewb.face/bin
 mkdir -p "$plugin_bin"
 cat >"$plugin_bin/omarchy-face-health" <<STANDIN
 #!/bin/bash
@@ -570,20 +570,20 @@ QML
 
   out=$(run_service OMARCHY_FACE_DEV_BIN="$REPO/dev/bin" OMARCHY_FACE_DEV_STATE="$root/devstate" \
     OMARCHY_FACE_DEV_FIXTURE=configured)
-  check "development: the service loads" "true" "$(yes_no grep -q 'graveklar.face service loaded' <<<"$out")"
+  check "development: the service loads" "true" "$(yes_no grep -q 'kalinewb.face service loaded' <<<"$out")"
   check "…says it is not installing the hooks" "true" \
     "$(yes_no grep -q 'development: not installing the update and boot hooks' <<<"$out")"
   check "…and writes none" "false" "$(yes_no test -e "$qhome/.config/omarchy/hooks")"
 
   out=$(run_service)
   for _ in $(seq 1 20); do
-    [[ -e $qhome/.config/omarchy/hooks/post-boot.d/graveklar-face.hook ]] && break
+    [[ -e $qhome/.config/omarchy/hooks/post-boot.d/kalinewb-face.hook ]] && break
     sleep 0.1
   done
-  check "installed plugin: the service loads" "true" "$(yes_no grep -q 'graveklar.face service loaded' <<<"$out")"
+  check "installed plugin: the service loads" "true" "$(yes_no grep -q 'kalinewb.face service loaded' <<<"$out")"
   check "…and both hooks are in place under its HOME" "true" \
-    "$(yes_no test -x "$qhome/.config/omarchy/hooks/post-update.d/graveklar-face.hook" -a \
-       -x "$qhome/.config/omarchy/hooks/post-boot.d/graveklar-face.hook")"
+    "$(yes_no test -x "$qhome/.config/omarchy/hooks/post-update.d/kalinewb-face.hook" -a \
+       -x "$qhome/.config/omarchy/hooks/post-boot.d/kalinewb-face.hook")"
 fi
 
 check "this account's own ~/.config/omarchy/hooks are as they were" "$REAL_HOOKS_BEFORE" "$(real_hooks)"

@@ -79,7 +79,7 @@ Item {
   // person" travels as one `omarchy-shell` call -- one Process either way, and
   // the same shape in development, where the stub bin has nothing to do with it.
   function cardArgv(args) {
-    return ["omarchy-shell", "graveklar.face.card"].concat(args || [])
+    return ["omarchy-shell", "kalinewb.face.card"].concat(args || [])
   }
 
   // Every store change, permission change, install, wiring and purge
@@ -125,7 +125,7 @@ Item {
   // The version is here rather than read from the folder for the same reason
   // the URL is pinned: check-pins.sh fails the build if it drifts from
   // system/install.sh's own header.
-  readonly property string systemVersion: "2.0.4"
+  readonly property string systemVersion: "3.0.0"
 
   // pins:command:begin -- dev/check-pins.sh compares this against README.md
   //
@@ -157,11 +157,18 @@ Item {
     "  run \"$@\"; s=$?; rm -rf -- \"$t\"; exit $s"
   // pins:command:end
 
+  // The folder this plugin runs from, by name. That is its id's folder once
+  // the 3.0.0 rename has finished, and the old id's for as long as it has not,
+  // which is exactly when a command naming the new folder would install from
+  // nowhere.
+  readonly property string pluginFolder: pluginDir.substring(pluginDir.lastIndexOf("/") + 1)
+
   // The same script as README.md prints it, for a terminal: sudo instead of
   // pkexec, and the folder and account spelled the way a shell can expand them.
+  // The folder is this plugin's own, as installArgv's is.
   readonly property string installCommand:
     "sudo /usr/bin/bash -c '" + root.installBody + "' \\\n" +
-    "  _ \"$HOME/.config/omarchy/plugins/graveklar.face\" \"$USER\" " + root.systemVersion
+    "  _ \"$HOME/.config/omarchy/plugins/" + root.pluginFolder + "\" \"$USER\" " + root.systemVersion
 
   // What Setup runs. pkexec and bash by absolute path, never whatever PATH
   // finds first; the folder is this plugin's own, taken from where its QML was
@@ -288,7 +295,7 @@ Item {
       argvCopy: argv
     })
     if (!proc) {
-      console.warn("graveklar.face", "could not create a stream process for", JSON.stringify(argv))
+      console.warn("kalinewb.face", "could not create a stream process for", JSON.stringify(argv))
       if (onExit) onExit({ outcome: "error", code: -1 })
       return null
     }
@@ -386,7 +393,7 @@ Item {
           if (text === "") return
           var event = null
           try { event = JSON.parse(text) } catch (e) {
-            console.warn("graveklar.face", "ignoring a non-JSON line from", sp.argvCopy[0], text)
+            console.warn("kalinewb.face", "ignoring a non-JSON line from", sp.argvCopy[0], text)
             return
           }
           if (sp.eventCb) sp.eventCb(event)

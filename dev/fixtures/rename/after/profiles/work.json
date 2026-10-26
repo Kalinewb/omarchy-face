@@ -1,0 +1,33 @@
+{
+  "name": "work",
+  "theme": "tokyo-night",
+  "bar": {
+    "id": "kalinewb.notch",
+    "layout": {
+      "left": [],
+      "center": [
+        {
+          "id": "kalinewb.notch-menu"
+        }
+      ],
+      "right": [
+        {
+          "id": "kalinewb.face"
+        }
+      ]
+    },
+    "notch": {
+      "hostedPanels": [
+        "kalinewb.face"
+      ]
+    }
+  },
+  "plugins": {
+    "disabled": [
+      "omarchy.lock"
+    ],
+    "enabled": [
+      "kalinewb.face-lock"
+    ]
+  }
+}

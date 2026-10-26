@@ -1,0 +1,71 @@
+{
+  "bar": {
+    "id": "kalinewb.notch",
+    "layout": {
+      "center": [
+        {
+          "id": "kalinewb.notch-menu"
+        }
+      ],
+      "left": [
+        "x.workspaces"
+      ],
+      "right": [
+        {
+          "id": "x.clock"
+        },
+        {
+          "id": "kalinewb.face",
+          "size": 2
+        },
+        {
+          "id": "x.battery"
+        }
+      ]
+    },
+    "notch": {
+      "hiddenPlugins": [
+        "kalinewb.face"
+      ],
+      "hostedPanels": [
+        "x.wifi",
+        "kalinewb.face",
+        "x.audio"
+      ],
+      "hoverPlugins": [
+        "kalinewb.face"
+      ],
+      "openPlugin": "kalinewb.face",
+      "panelOptions": {
+        "kalinewb.face": {
+          "width": 480
+        },
+        "x.wifi": {
+          "width": 300
+        }
+      }
+    }
+  },
+  "cloneSourceRestores": [
+    "kalinewb.notch-menu",
+    "kalinewb.face-lock"
+  ],
+  "disabledPlugins": [
+    "omarchy.lock",
+    "omarchy.menu"
+  ],
+  "idle": {
+    "graveklar.face": "outside the four places ids live, so left alone",
+    "lock": 300
+  },
+  "plugins": [
+    {
+      "id": "kalinewb.face-lock"
+    },
+    {
+      "id": "x.service",
+      "note": "graveklar.face is mentioned here, but not as an id"
+    }
+  ],
+  "version": 1
+}

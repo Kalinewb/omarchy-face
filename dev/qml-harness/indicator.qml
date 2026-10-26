@@ -119,14 +119,14 @@ ShellRoot {
       onTriggered: {
         if (rootObj.caseName === "service") {
           // The service's IPC `state()` -- the same function
-          // `omarchy-shell graveklar.face.card state` calls on the live shell --
+          // `omarchy-shell kalinewb.face.card state` calls on the live shell --
           // reached here by finding the handler among the service's own objects,
           // because an offscreen runtime has no shell to route a call through.
           // So the document the live test reads is the document asserted here.
           var handler = null
           var objects = serviceLoader.item.data
           for (var i = 0; i < objects.length; i++)
-            if (objects[i] && objects[i].target === "graveklar.face.card") handler = objects[i]
+            if (objects[i] && objects[i].target === "kalinewb.face.card") handler = objects[i]
           rootObj.log("handlerFound", handler !== null)
           if (handler) rootObj.log("serviceState", handler.state())
           Qt.exit(0)

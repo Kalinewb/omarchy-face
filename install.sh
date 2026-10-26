@@ -21,11 +21,28 @@
 
 set -euo pipefail
 
-ID="graveklar.face"
-DEST="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/$ID"
+ID="kalinewb.face"
+# The id before 3.0.0. While a copy installed under it is still there and the
+# new folder is not, this syncs INTO it: a second folder beside it would be a
+# second Face service and a second lock screen wrapper. The restart then starts
+# 3.0.0 from the old folder, enabled by 2.2.0's marker, and its rename moves it
+# (bin/omarchy-face-rename). Both folders at once is what the rename's repair
+# is for, so this refuses rather than guessing which one is live.
+WAS="graveklar.face"
+PLUGINS="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins"
+DEST="$PLUGINS/$ID"
 SRC="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 MODE=${1:-}
+
+if [[ -d $PLUGINS/$WAS ]]; then
+  if [[ -d $PLUGINS/$ID ]]; then
+    echo "install.sh: both $WAS and $ID are installed; finish the rename first:" >&2
+    echo "  $PLUGINS/$ID/bin/omarchy-face-rename --repair" >&2
+    exit 1
+  fi
+  DEST="$PLUGINS/$WAS"
+fi
 
 # Stale pins would make every install of the system half refuse for everyone on
 # this commit, so they are caught before anything is synced.
@@ -40,7 +57,7 @@ MODE=${1:-}
 # installed and the reload has already run, and the exit code only tells you so.
 # The staging directory is a dot name, which the plugin watcher ignores
 # (PluginRegistry.qml:735), so building it costs no reload either.
-STAGE=$(mktemp -d "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/.graveklar.face.stage.XXXXXX")
+STAGE=$(mktemp -d "$PLUGINS/.kalinewb.face.stage.XXXXXX")
 trap 'rm -rf "$STAGE"' EXIT
 
 # dev/ stays out of the installed copy: the stubs are run from the repo through

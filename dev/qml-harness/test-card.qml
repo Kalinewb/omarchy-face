@@ -9,7 +9,7 @@ import "face" as Face
 // Run by dev/g5b-test-card-offscreen.sh. It loads the REAL Service.qml -- which
 // owns the card -- calls the same `testMatch(name)` the popup calls over IPC,
 // and prints what the service says about itself through the same `state()` a
-// live test reads with `omarchy-shell graveklar.face.card state`.
+// live test reads with `omarchy-shell kalinewb.face.card state`.
 //
 // **This one really does put a card on the screen for a second.** The card is a
 // layer-shell window; there is no way to instantiate the shipped file without
@@ -31,7 +31,7 @@ ShellRoot {
     if (rootObj.handler) return rootObj.handler
     var objects = serviceLoader.item.data
     for (var i = 0; i < objects.length; i++)
-      if (objects[i] && objects[i].target === "graveklar.face.card") rootObj.handler = objects[i]
+      if (objects[i] && objects[i].target === "kalinewb.face.card") rootObj.handler = objects[i]
     return rootObj.handler
   }
 

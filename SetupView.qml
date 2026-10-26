@@ -208,6 +208,7 @@ Column {
     if (row.fix === "lock-stage") return "Finish lock screen setup"
     if (row.fix === "lock-enable") return "Put face back on the lock screen"
     if (row.fix === "lock-sync") return "Finish the update"
+    if (row.fix === "rename-repair") return "Finish the rename"
     return ""
   }
 
@@ -420,6 +421,15 @@ Column {
       return
     } else if (row.fix === "lock-sync") {
       argv = panel.ask.lockArgv(["sync"])
+    } else if (row.fix === "rename-repair") {
+      // Detached, and never waited on: the rename's last step restarts the
+      // shell, this popup with it, and the row is gone when Face comes back.
+      view.busyRow = row.id
+      view.noteRow = row.id
+      view.noteText = "Working…"
+      Quickshell.execDetached(["setsid", "-f"].concat(panel.ask.renameArgv(["--repair"])))
+      renameSettle.restart()
+      return
     } else if (row.fix === "install-first" || row.fix === "install-system") {
       // The first install and every update, one password dialog each. What
       // runs as root is the installer copied out of the plugin folder and
@@ -448,6 +458,20 @@ Column {
       // re-read rather than assumed to have moved.
       panel.refresh()
     })
+  }
+
+  // A repair that refused -- the session locked, Profiles mid-switch -- has
+  // nobody to say so, and no restart comes. After that long, the row is read
+  // again and the button is offered again.
+  Timer {
+    id: renameSettle
+    interval: 12000
+    onTriggered: {
+      if (view.busyRow !== "rename") return
+      view.busyRow = ""
+      view.noteText = ""
+      if (panel) panel.refresh()
+    }
   }
 
   // The Face service's answer to "Put face back on the lock screen" (above),
@@ -790,6 +814,22 @@ Column {
               "<b>fetched from this release</b> before running as root" +
               (rowItem.modelData.fix === "install-first"
                 ? ", and then starts the engine build by itself." : ".")
+        color: view.dim
+        font.family: view.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+
+      // The rename's repair closes the popup by restarting the shell, so it is
+      // said before the click, like the lock screen fixes below.
+      Text {
+        textFormat: Text.PlainText
+        width: parent.width
+        visible: !rowItem.stale && rowItem.modelData.fix === "rename-repair"
+        wrapMode: Text.WordWrap
+        leftPadding: Style.space(22)
+        text: "Face ID is now kalinewb.face. This moves the rest of it to the new name — its "
+              + "folder, its lock screen files and your settings — and restarts the shell. "
+              + "No password."
         color: view.dim
         font.family: view.fontFamily
         font.pixelSize: Style.font.caption

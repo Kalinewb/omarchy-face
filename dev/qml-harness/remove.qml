@@ -182,7 +182,7 @@ ShellRoot {
     if (caseName === "remove-keep") removeView.keepPackages = true
     removeView.start()
     // The service's answer to a step 1 handed over to it, delivered the way
-    // `omarchy-shell graveklar.face resume` would deliver it.
+    // `omarchy-shell kalinewb.face resume` would deliver it.
     if ((Quickshell.env("FACE_HARNESS_RESUME") || "") !== "") resumeTimer.start()
   }
 
@@ -206,7 +206,7 @@ ShellRoot {
     if (phase === "done") {
       // The gate's first clause, at the only moment it can be asked: the result
       // is on screen, and the plugins folder has not been touched.
-      probe(removeView.pluginsDir + "/graveklar.face-lock", "cloneAtResult", function () {
+      probe(removeView.pluginsDir + "/kalinewb.face-lock", "cloneAtResult", function () {
         // The two values that make the ordering a fact rather than a hope: the
         // step is owed, and it has not run.
         rootObj.log("armedAtResult", removeView.armed)
@@ -256,8 +256,8 @@ ShellRoot {
     // Long enough for a detached command with a stand-in `omarchy` in it.
     interval: 2500
     onTriggered: {
-      rootObj.probe(rootObj.pluginsDir + "/graveklar.face-lock", "cloneAfterClose", function () {
-        rootObj.probe(rootObj.pluginsDir + "/graveklar.face", "sourceAfterClose", function () {
+      rootObj.probe(rootObj.pluginsDir + "/kalinewb.face-lock", "cloneAfterClose", function () {
+        rootObj.probe(rootObj.pluginsDir + "/kalinewb.face", "sourceAfterClose", function () {
           rootObj.report()
           Qt.exit(0)
         })
@@ -269,8 +269,8 @@ ShellRoot {
     id: stoppedTimer
     interval: 1200
     onTriggered: {
-      rootObj.probe(rootObj.pluginsDir + "/graveklar.face-lock", "cloneAfterClose", function () {
-        rootObj.probe(rootObj.pluginsDir + "/graveklar.face", "sourceAfterClose", function () {
+      rootObj.probe(rootObj.pluginsDir + "/kalinewb.face-lock", "cloneAfterClose", function () {
+        rootObj.probe(rootObj.pluginsDir + "/kalinewb.face", "sourceAfterClose", function () {
           rootObj.report()
           Qt.exit(0)
         })

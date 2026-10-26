@@ -109,8 +109,8 @@ if [[ ${OMARCHY_FACE_F1_IN_NS:-0} == 1 ]]; then
   # against the code being written. The bind is namespace-local: nothing is
   # written under ~/.config/omarchy/plugins, which would reload every bar widget
   # (E13) on a machine somebody is using.
-  if [[ -d $PLUGINS/graveklar.face ]]; then
-    mount --bind "$REPO" "$PLUGINS/graveklar.face" && bound_plugin=1
+  if [[ -d $PLUGINS/kalinewb.face ]]; then
+    mount --bind "$REPO" "$PLUGINS/kalinewb.face" && bound_plugin=1
   fi
   echo "${DIM}sandbox: uid $(id -u), /etc /run /usr/local and polkit actions are private to this run${RESET}"
 fi
@@ -192,10 +192,10 @@ for unit in omarchy-faced.socket omarchy-faced.service; do
     bash -c "[[ \$(stat -c '%U %G %a' /etc/systemd/system/$unit) == 'root root 644' ]]"
 done
 check "the polkit policy is root:root 0644" \
-  bash -c "[[ \$(stat -c '%U %G %a' /usr/share/polkit-1/actions/no.graveklar.face.policy) == 'root root 644' ]]"
+  bash -c "[[ \$(stat -c '%U %G %a' /usr/share/polkit-1/actions/no.kalinewb.face.policy) == 'root root 644' ]]"
 check "the policy is the owner action, annotated with exec.path" \
-  bash -c "grep -q 'no.graveklar.face.owner' /usr/share/polkit-1/actions/no.graveklar.face.policy &&
-           grep -q 'policykit.exec.path' /usr/share/polkit-1/actions/no.graveklar.face.policy"
+  bash -c "grep -q 'no.kalinewb.face.owner' /usr/share/polkit-1/actions/no.kalinewb.face.policy &&
+           grep -q 'policykit.exec.path' /usr/share/polkit-1/actions/no.kalinewb.face.policy"
 check "/etc/omarchy-face/config is root:root 0644 and names the account" \
   bash -c "[[ \$(stat -c '%U %G %a' /etc/omarchy-face/config) == 'root root 644' ]] &&
            grep -qx 'account=$ACCOUNT' /etc/omarchy-face/config &&
@@ -208,7 +208,7 @@ check "every installed file is byte-identical to the plugin's system/ copy" \
            done
            diff -q '$REPO/system/omarchy-faced.socket' /etc/systemd/system/omarchy-faced.socket >/dev/null &&
            diff -q '$REPO/system/omarchy-faced.service' /etc/systemd/system/omarchy-faced.service >/dev/null &&
-           diff -q '$REPO/system/no.graveklar.face.policy' /usr/share/polkit-1/actions/no.graveklar.face.policy >/dev/null"
+           diff -q '$REPO/system/no.kalinewb.face.policy' /usr/share/polkit-1/actions/no.kalinewb.face.policy >/dev/null"
 check "nothing in /etc/pam.d was touched by the install" \
   bash -c "[[ \"\$(find /etc/pam.d -type f -exec sha256sum {} + | sort -k2)\" == \"\$(cat <<'PAM'
 $pam_before
@@ -512,7 +512,7 @@ check "no helper left in /usr/local/bin" \
   bash -c "for f in omarchy-face-admin omarchy-face-gate omarchy-face-verify omarchy-faced \
                     omarchy-face-identity omarchy-face-lock-verify omarchy-face-camera; do
              [[ ! -e /usr/local/bin/\$f ]] || exit 1; done"
-check "no polkit policy" test ! -e /usr/share/polkit-1/actions/no.graveklar.face.policy
+check "no polkit policy" test ! -e /usr/share/polkit-1/actions/no.kalinewb.face.policy
 check "no units, and the socket is not enabled" \
   bash -c "[[ ! -e /etc/systemd/system/omarchy-faced.socket && ! -e /etc/systemd/system/omarchy-faced.service ]] &&
            ! systemctl is-enabled --quiet omarchy-faced.socket 2>/dev/null"
@@ -541,16 +541,16 @@ check "howdy and python-dlib are not installed" \
 # the plugin is gone must pass them -- but on a development machine the plugin
 # is installed on purpose, and failing the gate for that would be noise.
 SHELL_JSON=/home/$ACCOUNT/.config/omarchy/shell.json
-if [[ -e $PLUGINS/graveklar.face || -e $PLUGINS/graveklar.face-lock ]] ||
-   compgen -G "$PLUGINS/.graveklar.face*" >/dev/null ||
-   grep -q 'graveklar.face' "$SHELL_JSON" 2>/dev/null; then
+if [[ -e $PLUGINS/kalinewb.face || -e $PLUGINS/kalinewb.face-lock ]] ||
+   compgen -G "$PLUGINS/.kalinewb.face*" >/dev/null ||
+   grep -q 'kalinewb.face' "$SHELL_JSON" 2>/dev/null; then
   note "the plugin is still installed in $PLUGINS and named in shell.json"
   note "  -- removed by the Remove view's final step (phase 8), never by purge"
 else
-  check "no plugin folder and no .graveklar.face* backup" true
+  check "no plugin folder and no .kalinewb.face* backup" true
   check "shell.json holds neither plugin id, and omarchy.lock is not disabled" \
     bash -c "[[ ! -f '$SHELL_JSON' ]] ||
-             { ! grep -q 'graveklar.face' '$SHELL_JSON' &&
+             { ! grep -q 'kalinewb.face' '$SHELL_JSON' &&
                ! jq -e '.disabledPlugins // [] | index(\"omarchy.lock\")' '$SHELL_JSON' >/dev/null; }"
 fi
 

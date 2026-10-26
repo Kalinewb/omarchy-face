@@ -19,7 +19,7 @@
 # checkout inside a throwaway plugins folder, with a stand-in `omarchy` ahead of
 # the real one on PATH -- the stand-in does what `omarchy-plugin-remove` does to
 # a plugin that is not a git checkout (:105-115): it MOVES it to
-# `.graveklar.face.bak.<ts>` rather than deleting it, which is the whole reason
+# `.kalinewb.face.bak.<ts>` rather than deleting it, which is the whole reason
 # the command has a third `rm -rf` in it. Nothing outside /tmp is written, and
 # the plugin this session is running is never touched.
 
@@ -71,8 +71,8 @@ HOOKS=$root/hooks
 # A state home of the harness's own, so the removal's last argument can be
 # exercised without ever naming this account's ~/.local/state.
 STATE_HOME=$root/statehome
-HOOK_UPDATE=$HOOKS/post-update.d/graveklar-face.hook
-HOOK_BOOT=$HOOKS/post-boot.d/graveklar-face.hook
+HOOK_UPDATE=$HOOKS/post-update.d/kalinewb-face.hook
+HOOK_BOOT=$HOOKS/post-boot.d/kalinewb-face.hook
 CALLS=$root/calls.log
 
 mkdir -p "$harness" "$state" "$PLUGINS" "$root/bin"
@@ -121,14 +121,14 @@ STANDIN
 chmod 0755 "$root/bin/omarchy"
 
 # Step 1 goes to the Face service when the wrapper is on the lock screen, as
-# `omarchy-shell graveklar.face.card switchLock …`. On this PATH that must
+# `omarchy-shell kalinewb.face.card switchLock …`. On this PATH that must
 # never be the real omarchy-shell, which would reach the live shell's Face
 # service and switch this machine's own lock screen off. The stand-in logs the
 # call beside the verbs and answers as the service does; the harness plays the
 # service's answer back (FACE_HARNESS_RESUME).
 cat >"$root/bin/omarchy-shell" <<'CARD'
 #!/bin/bash
-if [[ $1 == graveklar.face.card ]]; then
+if [[ $1 == kalinewb.face.card ]]; then
   [[ -n ${OMARCHY_FACE_DEV_STATE:-} ]] && printf 'card:%s\n' "${*:2}" >>"$OMARCHY_FACE_DEV_STATE/verbs.log"
   echo ok
   exit 0
@@ -142,13 +142,13 @@ reset_plugins() {
   mkdir -p "$PLUGINS"
   # The plugin, as `install.sh` leaves it: a copy, with no .git, so `plugin
   # remove` backs it up instead of deleting it.
-  rsync -a --exclude '.git' --exclude 'dev' "$REPO/" "$PLUGINS/graveklar.face/"
+  rsync -a --exclude '.git' --exclude 'dev' "$REPO/" "$PLUGINS/kalinewb.face/"
   # The staged wrapper, and the two dot-directories a `stage` interrupted half
-  # way leaves behind. §10.3 asserts `.graveklar.face*` is empty afterwards, so
+  # way leaves behind. §10.3 asserts `.kalinewb.face*` is empty afterwards, so
   # these are part of what the final step has to clear.
-  cp -r "$REPO/lock" "$PLUGINS/graveklar.face-lock"
-  mkdir -p "$PLUGINS/.graveklar.face-lock.old.20260101000000" \
-           "$PLUGINS/.graveklar.face-lock.abc123"
+  cp -r "$REPO/lock" "$PLUGINS/kalinewb.face-lock"
+  mkdir -p "$PLUGINS/.kalinewb.face-lock.old.20260101000000" \
+           "$PLUGINS/.kalinewb.face-lock.abc123"
   mkdir -p "${HOOK_UPDATE%/*}" "${HOOK_BOOT%/*}"
   : >"$HOOK_UPDATE"
   : >"$HOOK_BOOT"
@@ -158,7 +158,7 @@ reset_plugins() {
 run_case() { # run_case <case> [env…]
   local name=$1
   shift
-  env FACE_HARNESS_CASE="$name" FACE_HARNESS_PLUGIN="$PLUGINS/graveklar.face" \
+  env FACE_HARNESS_CASE="$name" FACE_HARNESS_PLUGIN="$PLUGINS/kalinewb.face" \
     OMARCHY_FACE_DEV_BIN="$REPO/dev/bin" OMARCHY_FACE_DEV_STATE="$state" \
     OMARCHY_FACE_DEV_STATE_HOME="$STATE_HOME" \
     OMARCHY_FACE_DEV_FIXTURES="$root" OMARCHY_FACE_DEV_FIXTURE="state" \
@@ -196,7 +196,7 @@ check "the plugins folder is derived from the plugin's own directory" "$PLUGINS"
   "$(field pluginsDir "$out")"
 check "the final step is one detached command, with --yes in it" "true" \
   "$([[ $(field finalArgv "$out") == '["setsid","-f","bash","-c",'* &&
-       $(field finalArgv "$out") == *'plugin remove --yes graveklar.face'* ]] && echo true || echo false)"
+       $(field finalArgv "$out") == *'plugin remove --yes kalinewb.face'* ]] && echo true || echo false)"
 check "…and it is handed both hook paths, beside the plugins folder, as arguments" \
   "$(jq -c --arg u "$HOOK_UPDATE" --arg b "$HOOK_BOOT" -n '[$u, $b]')" \
   "$(field finalArgv "$out" | jq -c '.[-4:-2]')"
@@ -228,9 +228,9 @@ check "the plugin itself is gone" "gone" "$(field sourceAfterClose "$out")"
 check "Face's update and boot hooks are gone" "gone" \
   "$([[ ! -e $HOOK_UPDATE && ! -e $HOOK_BOOT ]] && echo gone || echo present)"
 check "omarchy plugin remove was asked, with --yes" "1" \
-  "$(grep -c 'plugin remove --yes graveklar.face' "$CALLS")"
+  "$(grep -c 'plugin remove --yes kalinewb.face' "$CALLS")"
 check "…and the backup it leaves behind was cleared" "" \
-  "$(compgen -G "$PLUGINS/.graveklar.face*" | tr '\n' ' ' | sed 's/ *$//')"
+  "$(compgen -G "$PLUGINS/.kalinewb.face*" | tr '\n' ' ' | sed 's/ *$//')"
 check "nothing else is left in the plugins folder" "" \
   "$(ls -A "$PLUGINS" | tr '\n' ' ' | sed 's/ *$//')"
 
@@ -271,7 +271,7 @@ check "…and purge finished anyway" "done" "$(field phase "$out")"
 check "…having been called exactly once" "1" "$(verbs | grep -c '^purge')"
 check "the final step was not run behind a closed popup" "false" "$(field finalRan "$out")"
 check "…so the plugin is still installed, and the view can finish the job" "present" \
-  "$([[ -e $PLUGINS/graveklar.face ]] && echo present || echo gone)"
+  "$([[ -e $PLUGINS/kalinewb.face ]] && echo present || echo gone)"
 
 echo
 echo "${DIM}== GATE: reopening shows removal empty${RESET}"

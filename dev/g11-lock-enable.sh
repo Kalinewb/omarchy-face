@@ -154,7 +154,7 @@ out=$(run enable)
 elapsed=$((SECONDS - start))
 # One check per case, so the gate reads as the plan states it (3/3).
 check "enable waits it out: on, in shell.json, and Omarchy's lock not given back" \
-  "true|graveklar.face-lock|0" \
+  "true|kalinewb.face-lock|0" \
   "$(jq -r '.enabled' <<<"$out")|$(jq -r '.plugins[0].id // ""' "$SHELL_JSON")|$(calls | grep -c 'omarchy plugin disable')"
 note "took ${elapsed}s, with $(calls | grep -c 'omarchy-shell shell rescanPlugins') rescans; the old 3 × 0.5 s gave up after 1.5 s"
 
@@ -170,7 +170,7 @@ out=$(run enable)
 elapsed=$((SECONDS - start))
 check "enable gives up after thirty seconds, not ten, and gives Omarchy's lock back" \
   "enable_failed|true|1|0" \
-  "$(jq -r '.error' <<<"$out")|$([[ $elapsed -ge 29 && $elapsed -le 36 ]] && echo true || echo false)|$(calls | grep -c 'omarchy plugin disable graveklar.face-lock')|$(jq -r '(.plugins // []) | length' "$SHELL_JSON")"
+  "$(jq -r '.error' <<<"$out")|$([[ $elapsed -ge 29 && $elapsed -le 36 ]] && echo true || echo false)|$(calls | grep -c 'omarchy plugin disable kalinewb.face-lock')|$(jq -r '(.plugins // []) | length' "$SHELL_JSON")"
 note "took ${elapsed}s"
 
 # =============================================================================

@@ -87,7 +87,7 @@ Item {
   // The card returns to the popup on the person it just recorded
   // (plan-gui.md §5.3: Done → `saved` → close, IPC open("person", name)).
   function openPerson(name) {
-    openProcess.command = ["omarchy-shell", "graveklar.face", "open", "person", String(name)]
+    openProcess.command = ["omarchy-shell", "kalinewb.face", "open", "person", String(name)]
     openProcess.running = true
   }
 
@@ -223,7 +223,7 @@ Item {
   }
 
   IpcHandler {
-    target: "graveklar.face.card"
+    target: "kalinewb.face.card"
 
     // Drive one enroll-session in a card under the webcam (G3).
     //
@@ -420,7 +420,7 @@ Item {
   // Settings reading "Starting" until the next lock. The file's own `at` against
   // this shell's start time is the whole staleness rule (plan-merged.md §2.6).
 
-  // start | syncing | restarting | checking | settled | recovering | recovered | off
+  // start | renaming | syncing | restarting | checking | settled | recovering | recovered | off
   property string lockPhase: "start"
   property double lockStartedAt: 0
   property bool lockProbeBusy: false
@@ -433,7 +433,7 @@ Item {
   // waits 30 s for the same reason (:39-46).
   readonly property int lockCheckMs: 30000
 
-  function lockLog(message) { console.log("graveklar.face", message) }
+  function lockLog(message) { console.log("kalinewb.face", message) }
 
   function lockSync() {
     root.lockPhase = "syncing"
@@ -451,7 +451,7 @@ Item {
         // worth a word: staging behind a lock screen is never urgent.
         var code = parsed.error ? String(parsed.error) : result.outcome
         if (code !== "locked")
-          console.warn("graveklar.face", "omarchy-face-lock sync:", code)
+          console.warn("kalinewb.face", "omarchy-face-lock sync:", code)
       } else if (parsed.staged === true) {
         root.lockLog("the lock screen wrapper was staged")
       }
@@ -519,7 +519,7 @@ Item {
         var parsed = result.parsed || {}
         var code = parsed.error ? String(parsed.error) : String(result.outcome)
         word = String(view) + ":failed:" + code + (parsed.id ? ":" + String(parsed.id) : "")
-        console.warn("graveklar.face", "the lock screen could not be switched", on ? "on:" : "off:", code)
+        console.warn("kalinewb.face", "the lock screen could not be switched", on ? "on:" : "off:", code)
       }
       root.resumePopup(view, word)
     })
@@ -527,7 +527,7 @@ Item {
   }
 
   function resumePopup(view, word) {
-    resumeProcess.command = ["omarchy-shell", "graveklar.face", "resume", String(view || ""), String(word || "")]
+    resumeProcess.command = ["omarchy-shell", "kalinewb.face", "resume", String(view || ""), String(word || "")]
     resumeProcess.running = true
   }
 
@@ -570,12 +570,12 @@ Item {
   // destroying a live locker is the crashed-lockscreen fallback, never a repair.
   function lockRecover() {
     root.lockPhase = "recovering"
-    console.warn("graveklar.face",
+    console.warn("kalinewb.face",
                  "no lock service answered in 30 s — giving Omarchy's lock screen back")
     engine.ask(engine.lockArgv(["disable", "--stranded"]), "", function (result) {
       root.lockPhase = "recovered"
       if (!result.ok)
-        console.warn("graveklar.face", "the lock screen could not be given back:",
+        console.warn("kalinewb.face", "the lock screen could not be given back:",
                      result.parsed && result.parsed.error ? String(result.parsed.error) : result.outcome)
       lockStatusFile.reload()
     })
@@ -609,7 +609,7 @@ Item {
       root.lockStatusRaw = raw
       var parsed = null
       try { parsed = JSON.parse(raw) } catch (e) {
-        console.warn("graveklar.face", "ignoring bad lock-status.json", root.lockStatusPath)
+        console.warn("kalinewb.face", "ignoring bad lock-status.json", root.lockStatusPath)
         return
       }
       root.noteLockStatus(parsed)
@@ -682,7 +682,7 @@ Item {
   // plugin installed the ordinary way does.
   function installHooks() {
     if (engine.dev) {
-      console.log("graveklar.face", "development: not installing the update and boot hooks")
+      console.log("kalinewb.face", "development: not installing the update and boot hooks")
       return
     }
     Quickshell.execDetached(engine.healthArgv(["install-hooks"]))
@@ -692,30 +692,37 @@ Item {
   Component { id: cardComponent;    RecordCard {} }
   Component { id: testComponent;    TestCard {} }
 
-  // --- the bridge to kalinewb.face (plan-suite.md §3.4 b) ----------------------
+  // --- finishing the 3.0.0 rename (plan-suite.md §3.4) -------------------------
   //
-  // The next major version of Face is the same plugin under a new id, and
-  // Omarchy only runs a plugin whose id shell.json names. So before anything
-  // else at start, this names the new id once, in an entry Omarchy ignores until
-  // a plugin with that id is installed (bin/omarchy-face-rename --prename). Then
-  // whichever way 3.0.0 lands, it starts enabled and finishes the move itself.
-  // Before lockSync() and not beside it: both can write, and one at a time is
-  // the order the lock screen's own start has always assumed.
-  function prename() {
-    engine.ask(engine.renameArgv(["--prename"]), "", function (result) {
-      // Locked, or Profiles mid-switch: the next start tries again, and
-      // neither is worth a word.
-      var code = result.parsed && result.parsed.error ? String(result.parsed.error) : result.outcome
+  // Until 3.0.0 this plugin had another id. 2.2.0 named the new one in
+  // shell.json ahead of time, which is why this service is running at all; what
+  // is left -- the folder, the old ids in shell.json and Profiles, the lock
+  // screen wrapper, the hooks -- is bin/omarchy-face-rename's, and it runs
+  // first. It answers "renaming" when it has started the move, detached because
+  // its one shell.json write can switch this very service off, or when a move is
+  // already under way: then the shell restarts within seconds, and this start
+  // leaves the lock screen and the hooks alone rather than staging the wrapper
+  // a second time next to the rename doing it.
+  function finishRename() {
+    engine.ask(engine.renameArgv(["--finish"]), "", function (result) {
+      var parsed = result.parsed || {}
+      if (result.ok && String(parsed.state || "") === "renaming") {
+        root.lockPhase = "renaming"
+        root.lockLog("Face ID is moving to its new name; the shell restarts when it is done")
+        return
+      }
+      // Locked or Profiles mid-switch: Setup's `rename` row offers it again.
+      var code = parsed.error ? String(parsed.error) : result.outcome
       if (result.outcome === "error" && code !== "locked")
-        console.warn("graveklar.face", "omarchy-face-rename --prename:", code)
+        console.warn("kalinewb.face", "omarchy-face-rename --finish:", code)
       root.lockSync()
+      root.installHooks()
     })
   }
 
   Component.onCompleted: {
-    console.log("graveklar.face", "service loaded")
+    console.log("kalinewb.face", "service loaded")
     root.lockStartedAt = Date.now()
-    root.prename()
-    root.installHooks()
+    root.finishRename()
   }
 }

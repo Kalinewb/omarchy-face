@@ -1,0 +1,26 @@
+{
+  "name": "play",
+  "theme": "catppuccin",
+  "bar": {
+    "id": "kalinewb.notch",
+    "layout": {
+      "left": [],
+      "center": [
+        {
+          "id": "kalinewb.notch-menu"
+        }
+      ],
+      "right": [
+        {
+          "id": "kalinewb.face"
+        }
+      ]
+    }
+  },
+  "plugins": {
+    "disabled": [
+      "kalinewb.face",
+      "omarchy.lock"
+    ]
+  }
+}

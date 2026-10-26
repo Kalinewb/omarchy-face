@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 2.0.4
+# omarchy-face-version: 3.0.0
 #
 # Every privileged thing Face does, behind one polkit action
 # (plan-engine.md §8.2, plan-merged.md §2.3).
@@ -60,7 +60,11 @@ CONFIG_DIR=/etc/omarchy-face
 CONFIG_FILE=$CONFIG_DIR/config
 STORE_DIR=/var/lib/omarchy-face
 RUN_DIR=/run/omarchy-face
-POLICY=/usr/share/polkit-1/actions/no.graveklar.face.policy
+POLICY=/usr/share/polkit-1/actions/no.kalinewb.face.policy
+# Where 2.x installed the same action, as no.graveklar.face.owner, and where v1
+# kept its no.graveklar.face.admin. install-system retires it once the new one
+# is loaded (retire_old_policy), and purge takes either.
+OLD_POLICY=/usr/share/polkit-1/actions/no.graveklar.face.policy
 UNIT_DIR=/etc/systemd/system
 MODELS=/usr/lib/security/howdy/models
 BUILD_STATE=/var/lib/private/omarchy-face-build
@@ -125,7 +129,7 @@ SYSTEM_FILES=(
   "omarchy-face-camera:/usr/local/bin/omarchy-face-camera:0755"
   "omarchy-faced.socket:$UNIT_DIR/omarchy-faced.socket:0644"
   "omarchy-faced.service:$UNIT_DIR/omarchy-faced.service:0644"
-  "no.graveklar.face.policy:$POLICY:0644"
+  "no.kalinewb.face.policy:$POLICY:0644"
 )
 
 # --- output ------------------------------------------------------------------
@@ -407,6 +411,30 @@ install_from_snapshot() { # install_from_snapshot <snapshot dir>
     install -o root -g root -m "$mode" "$source" "$dest.tmp" || die "install_failed"
     mv -f "$dest.tmp" "$dest" || { rm -f "$dest.tmp"; die "install_failed"; }
   done
+}
+
+# The 2.x policy file, removed only once the 3.x one has been seen to work: the
+# installed file is byte for byte the verified snapshot's, and polkit answers for
+# no.kalinewb.face.owner. polkitd reads action files asynchronously, so it is
+# asked for up to five seconds. Until then both files are in place, both point
+# org.freedesktop.policykit.exec.path at the same helper, and pkexec works
+# whichever action polkit has loaded -- no code here names an action id. Not
+# retired is a warning, never a failure: the next install-system tries again.
+# Appends to $warnings, so call it after `warnings` exists.
+retire_old_policy() { # retire_old_policy <snapshot dir>
+  [[ -e $OLD_POLICY ]] || return 0
+  local tries=0
+  if cmp -s -- "$1/${POLICY##*/}" "$POLICY"; then
+    while ((tries < 10)); do
+      if pkaction --action-id no.kalinewb.face.owner >/dev/null 2>&1; then
+        rm -f -- "$OLD_POLICY" && return 0
+        break
+      fi
+      tries=$((tries + 1))
+      sleep 0.5
+    done
+  fi
+  warnings+=("old_policy_kept")
 }
 
 # Appends to the global $warnings. systemd is not always reachable -- an install
@@ -2324,6 +2352,7 @@ case $verb in
     fi
 
     install_from_snapshot "$tmp"
+    retire_old_policy "$tmp"
     cleanup_snapshot
 
     if ((first_install)); then
@@ -2652,7 +2681,7 @@ case $verb in
     # 5. The policy first, then the helpers, this file last: bash holds an open
     #    descriptor on the script it is running, so unlinking the name is safe,
     #    but only once nothing else still needs to be run.
-    rm -f "$POLICY"
+    rm -f "$POLICY" "$OLD_POLICY"
     for entry in "${SYSTEM_FILES[@]}"; do
       dest=${entry#*:}; dest=${dest%:*}
       [[ $dest == /usr/local/bin/omarchy-face-admin ]] && continue
@@ -2666,6 +2695,7 @@ case $verb in
       dest=${entry#*:}; dest=${dest%:*}
       [[ -e $dest ]] && incomplete+=("$dest")
     done
+    [[ -e $OLD_POLICY ]] && incomplete+=("$OLD_POLICY")
     for leftover in "$STORE_DIR" "$RUN_DIR" "$CONFIG_DIR" "$BUILD_STATE"; do
       [[ -e $leftover ]] && incomplete+=("$leftover")
     done
@@ -2717,11 +2747,11 @@ case $verb in
       rm -f "$dest" && removed+=("$dest")
     done
 
-    # The old polkit action lived in the same file name as ours, so the marker
-    # check above catches it; this catches a file that carries the marker but
-    # still declares the old action id.
-    if [[ -f $POLICY ]] && grep -q 'no.graveklar.face.admin' "$POLICY"; then
-      rm -f "$POLICY" && removed+=("$POLICY")
+    # v1's polkit action lived in the file name 2.x used, which the marker
+    # check above no longer covers now that 3.0.0's file has its own name; this
+    # catches it whether or not it carries the marker.
+    if [[ -f $OLD_POLICY ]] && grep -q 'no.graveklar.face.admin' "$OLD_POLICY"; then
+      rm -f "$OLD_POLICY" && removed+=("$OLD_POLICY")
     fi
 
     # PAM: the old lock stack, the old backups, and face lines anywhere they do

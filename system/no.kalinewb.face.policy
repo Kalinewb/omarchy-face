@@ -3,7 +3,7 @@
  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 <!--
   omarchy-face v2
-  omarchy-face-version: 2.0.4
+  omarchy-face-version: 3.0.0
 
   One action for the whole write surface (plan-engine.md §8.2). Everything that
   changes who can unlock this machine goes through omarchy-face-admin under it.
@@ -23,7 +23,7 @@
   <vendor>omarchy-face</vendor>
   <vendor_url>https://github.com/Kalinewb/omarchy-face</vendor_url>
 
-  <action id="no.graveklar.face.owner">
+  <action id="no.kalinewb.face.owner">
     <description>Manage Face ID</description>
     <message>Authentication is required to change who can unlock with a face</message>
     <defaults>

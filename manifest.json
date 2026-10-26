@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "id": "graveklar.face",
+  "id": "kalinewb.face",
   "name": "Face ID",
-  "version": "2.2.0",
+  "version": "3.0.0",
   "author": "kalinewb",
   "license": "MIT",
   "description": "Look at your laptop instead of typing your password into sudo — for you, and for the people you choose.",

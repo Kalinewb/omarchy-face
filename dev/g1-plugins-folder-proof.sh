@@ -33,7 +33,7 @@ THROWAWAY="zz.face-proof"
 DIR="$PLUGINS/$THROWAWAY"
 failures=0
 
-face_state() { omarchy-shell graveklar.face state 2>/dev/null; }
+face_state() { omarchy-shell kalinewb.face state 2>/dev/null; }
 field() { jq -r "$2" <<<"$1" 2>/dev/null; }
 shell_pid() { pgrep -f 'quickshell -n -p' | head -n 1; }
 
@@ -56,7 +56,7 @@ trap cleanup EXIT
 command -v jq >/dev/null || { echo "g1-proof: jq is required" >&2; exit 1; }
 omarchy-shell shell ping >/dev/null 2>&1 || { echo "g1-proof: the shell does not answer" >&2; exit 1; }
 [[ -n "$(face_state)" ]] || {
-  echo "g1-proof: graveklar.face does not answer IPC — install and enable it first" >&2
+  echo "g1-proof: kalinewb.face does not answer IPC — install and enable it first" >&2
   exit 1
 }
 
@@ -97,7 +97,7 @@ sleep 2
 # Not the root view, deliberately: a reload rebuilds the panel from scratch, so
 # the view stack resetting to ["setup"] is how a DESTROYED popup is told apart
 # from one merely closed (an outside click closes it with the stack intact).
-omarchy-shell graveklar.face open people "" >/dev/null 2>&1
+omarchy-shell kalinewb.face open people "" >/dev/null 2>&1
 sleep 1
 STATE=$(face_state)
 if [[ $(field "$STATE" .open) == true && $(field "$STATE" .view) == people ]]; then
@@ -147,7 +147,7 @@ AFTER_TOUCH=$(face_state)
 RELOADED=$(journalctl --user -t omarchy-shell --since "$T1" --no-pager 2>/dev/null |
            grep -c "Local plugin changed")
 CLOSED=$(journalctl --user -t omarchy-shell --since "$T1" --no-pager 2>/dev/null |
-         grep -c "graveklar.face popup closed")
+         grep -c "kalinewb.face popup closed")
 
 if [[ $(field "$AFTER_TOUCH" .open) == false && $(field "$AFTER_TOUCH" .view) == setup && $RELOADED -gt 0 ]]; then
   pass "a touch inside the folder reloaded the plugins and took the popup with it (E13)"

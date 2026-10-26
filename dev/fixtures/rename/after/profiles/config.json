@@ -1,0 +1,8 @@
+{
+  "master": "work",
+  "pinned_plugins": [
+    "kalinewb.face",
+    "kalinewb.profiles"
+  ],
+  "workspace_span": 10
+}

@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "bar": {
+    "id": "kalinewb.notch",
+    "layout": {
+      "left": ["x.workspaces"],
+      "center": [{"id": "kalinewb.notch-menu"}],
+      "right": [{"id": "x.clock"}, {"id": "graveklar.face", "size": 2}, "kalinewb.face", {"id": "x.battery"}]
+    },
+    "notch": {
+      "hostedPanels": ["x.wifi", "graveklar.face", "x.audio"],
+      "hiddenPlugins": ["graveklar.face"],
+      "hoverPlugins": ["graveklar.face", "kalinewb.face"],
+      "openPlugin": "graveklar.face",
+      "panelOptions": {"graveklar.face": {"width": 420}, "kalinewb.face": {"width": 480}, "x.wifi": {"width": 300}}
+    }
+  },
+  "plugins": [
+    {"id": "graveklar.face-lock"},
+    {"id": "kalinewb.face", "renamedFrom": "graveklar.face"},
+    {"id": "x.service", "note": "graveklar.face is mentioned here, but not as an id"}
+  ],
+  "disabledPlugins": ["omarchy.lock", "omarchy.menu"],
+  "cloneSourceRestores": ["kalinewb.notch-menu", "graveklar.face-lock"],
+  "idle": {"lock": 300, "graveklar.face": "outside the four places ids live, so left alone"}
+}

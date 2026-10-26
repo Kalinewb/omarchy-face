@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 2.0.4
+# omarchy-face-version: 3.0.0
 #
 # The lock-screen clone's verbs (plan-merged.md §2.5, plan-engine.md §9.4).
 # Unprivileged, run as the owner, and the only thing in this plugin that is
@@ -62,7 +62,7 @@ TEMPLATE=$PLUGIN_DIR/lock
 # under lock/ made this repo look like two. The staged copy is a real plugin
 # with a real manifest.json; the thing in the repo is a template for it.
 TEMPLATE_MANIFEST=manifest.json.in
-CLONE_ID=graveklar.face-lock
+CLONE_ID=kalinewb.face-lock
 SOURCE_ID=omarchy.lock
 
 CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}

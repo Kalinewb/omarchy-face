@@ -21,8 +21,8 @@ import "common"
 // (plan-gui.md §1); none of them is a routine action, and none of them is here.
 Panel {
   id: root
-  moduleName: "graveklar.face"
-  ipcTarget: "graveklar.face"
+  moduleName: "kalinewb.face"
+  ipcTarget: "kalinewb.face"
   // The base class would install its own handler on that target; this file adds
   // open(view, name) and state(), so it registers the target itself.
   manageIpc: false
@@ -99,7 +99,7 @@ Panel {
         // Keep the last good document rather than blanking the views: a status
         // helper that fails once should not empty a popup someone is reading.
         if (result.outcome === "missing") root.status = null
-        console.warn("graveklar.face", "status read failed:", result.outcome, result.code)
+        console.warn("kalinewb.face", "status read failed:", result.outcome, result.code)
       }
       // Somebody asked while this one was out, and what they knew has not been
       // read yet. Ask again -- including after a failure, which is exactly when
@@ -384,7 +384,7 @@ Panel {
       if (raw !== root.peopleRaw) {
         root.peopleRaw = raw
         try { root.people = JSON.parse(raw) } catch (e) {
-          console.warn("graveklar.face", "ignoring bad people.json", root.peoplePath, e)
+          console.warn("kalinewb.face", "ignoring bad people.json", root.peoplePath, e)
         }
       }
       // A view waiting for this read is shown now, and only now: this is the
@@ -412,7 +412,7 @@ Panel {
       if (raw === root.installRaw) return
       root.installRaw = raw
       try { root.install = JSON.parse(raw) } catch (e) {
-        console.warn("graveklar.face", "ignoring bad install.json", root.installPath, e)
+        console.warn("kalinewb.face", "ignoring bad install.json", root.installPath, e)
       }
     }
     onLoadFailed: { root.installRaw = ""; root.install = null }
@@ -449,10 +449,10 @@ Panel {
   onOpenedChanged: if (opened) {
     root.refresh()
     root.reloadWatched()
-    console.log("graveklar.face", "popup opened on view", root.view)
+    console.log("kalinewb.face", "popup opened on view", root.view)
     Qt.callLater(function () { keyCatcher.forceActiveFocus() })
   } else {
-    console.log("graveklar.face", "popup closed")
+    console.log("kalinewb.face", "popup closed")
     // A word is for the view the popup reopens on. One nobody took by the time
     // the popup closes is about a switch that has already been read back
     // through the status document, and must not surface on some later visit.
@@ -471,7 +471,7 @@ Panel {
     // session commits (plan-gui.md §1).
     //
     // BOTH arguments must be passed. Quickshell enforces arity strictly, so
-    // `omarchy-shell graveklar.face open people` is an error, not a call with a
+    // `omarchy-shell kalinewb.face open people` is an error, not a call with a
     // defaulted second argument; the form is `open people ""`. Empty strings are
     // accepted *values* -- an empty view means "just open, wherever you were" --
     // which is what a keybind or a menu entry sends.

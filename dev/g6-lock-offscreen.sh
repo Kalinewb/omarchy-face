@@ -497,16 +497,16 @@ check "…which still reads unlocked, and nothing was locked" "false|false" \
 # =============================================================================
 
 # The views now hand the clone to the Face service with `omarchy-shell
-# graveklar.face.card switchLock …`. On this PATH that must NEVER be the real
+# kalinewb.face.card switchLock …`. On this PATH that must NEVER be the real
 # omarchy-shell: it would reach the live shell's Face service and switch this
 # machine's real lock screen. The stand-in logs the call next to the verbs and
 # answers the way the service does. FACE_HARNESS_NO_SERVICE plays a shell with
 # no Face service loaded.
 cat >"$root/bin/omarchy-shell" <<'CARD'
 #!/bin/bash
-if [[ $1 == graveklar.face.card ]]; then
+if [[ $1 == kalinewb.face.card ]]; then
   [[ -n ${OMARCHY_FACE_DEV_STATE:-} ]] && printf 'card:%s\n' "${*:2}" >>"$OMARCHY_FACE_DEV_STATE/verbs.log"
-  [[ ${FACE_HARNESS_NO_SERVICE:-} == 1 ]] && { echo "no target graveklar.face.card" >&2; exit 1; }
+  [[ ${FACE_HARNESS_NO_SERVICE:-} == 1 ]] && { echo "no target kalinewb.face.card" >&2; exit 1; }
   echo ok
   exit 0
 fi
@@ -684,7 +684,7 @@ out=$(run_view service-switch OMARCHY_FACE_DEV_LOCK_ENABLED=1)
 echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
 check "it takes the job" "ok" "$(field switchAnswer "$out")"
 check "it enables the clone, then reopens Settings with the word" \
-  "lock:enable shell:graveklar.face resume settings settings:ok" \
+  "lock:enable shell:kalinewb.face resume settings settings:ok" \
   "$(grep -E '^(lock:enable|shell:)' "$state/verbs.log" | tr -s ' \n' ' ' | sed 's/ *$//')"
 check "…and checks the lock screen it just enabled, without disabling it" "settled|0" \
   "$(field phase "$out")|$(grep -c 'lock:disable' "$state/verbs.log")"

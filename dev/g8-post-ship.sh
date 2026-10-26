@@ -64,8 +64,14 @@ trap 'rm -rf "$root"' EXIT
 mkdir -p "$state" "$bin" "$fixtures"
 ln -s "$SHELL_PATH/shell/Commons" "$root/Commons"
 ln -s "$SHELL_PATH/shell/Ui" "$root/Ui"
-ln -s "$REPO" "$root/face"
-cp "$REPO/dev/qml-harness/post-ship.qml" "$root/shell.qml"
+# The panel is loaded from a folder named after its id, as an installed copy is:
+# the terminal command names the folder Face runs from (common/Ask.qml,
+# pluginFolder), and case 4b compares that command with README.md's.
+face_id=$(jq -r .id "$REPO/manifest.json")
+mkdir -p "$root/plugins"
+ln -s "$REPO" "$root/plugins/$face_id"
+sed "s#^import \"face\" as Face#import \"plugins/$face_id\" as Face#" \
+  "$REPO/dev/qml-harness/post-ship.qml" >"$root/shell.qml"
 
 # The stubs, with the status helper replaced by one that is SLOW and that
 # changes its answer. The repo's own stub is instant, and a fix about two reads
