@@ -3,7 +3,7 @@
   "id": "graveklar.face-lock",
   "name": "Lock Screen (Face ID)",
   "version": "1.0.0",
-  "author": "graveklar",
+  "author": "kalinewb",
   "license": "MIT",
   "description": "Omarchy's own lock screen, with a face check alongside password and fingerprint. Draws nothing of its own.",
   "kinds": ["service"],
