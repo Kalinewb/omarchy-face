@@ -20,7 +20,7 @@
 #         re-stages when it does not, and restarts only when the clone is enabled
 #   §9.5  every verb that writes refuses for a live locker AND for the
 #         compositor's flag -- and `disable --stranded` refuses only for the first
-#   §9.3  enable's 10 s health check, and the recovery when nothing answers
+#   §9.3  enable's 30 s health check, and the recovery when nothing answers
 #   §10.1 status reports `failed` whether or not the clone is still enabled,
 #         which is what makes the Setup row visible on the paths that need it
 #   §6.3  one notification per new reason, and never one per check
@@ -350,7 +350,7 @@ start=$SECONDS
 out=$(run enable)
 elapsed=$((SECONDS - start))
 check "enable gives up and says so" "enable_failed" "$(jq -r '.error' <<<"$out")"
-check "…inside its ten seconds" "true" "$([[ $elapsed -ge 9 && $elapsed -le 16 ]] && echo true || echo false)"
+check "…inside its thirty seconds" "true" "$([[ $elapsed -ge 29 && $elapsed -le 36 ]] && echo true || echo false)"
 note "took ${elapsed}s"
 check "…having put Omarchy's own lock screen back, whatever the compositor says" "1" \
   "$(calls | grep -c 'omarchy plugin disable graveklar.face-lock')"

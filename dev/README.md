@@ -603,6 +603,11 @@ and a lock that is still up, are left alone. Against the **real** stock lock it
 proves the wrapper finds the session lock, that its repair is a no-op on a healthy
 lock, and that the real C++ signal sent from QML reaches Omarchy's own handler.
 
+`g11-lock-enable.sh` is D6, the cold-start `enable_failed`, in f6's sandbox: the
+registry answers "not known" for 4 s and the lock answers at 12 s, which is `ok`.
+Silence for 31 s is `enable_failed` after the full 30 s, and a current staged
+folder makes `sync` write nothing.
+
 `g9-enter-live.sh` is the part a suite cannot do: virtual keyboards do not fire
 Hyprland bindings, so it registers the same binding unlocked and asks a person to
 press Enter once.

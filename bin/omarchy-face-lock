@@ -463,25 +463,33 @@ case $verb in
     # staged a moment ago, and `omarchy plugin enable` answers "is not known"
     # for one it has not scanned. Ask it to rescan and try again -- an old
     # lesson, and cheap.
+    #
+    # Backing off to about 12 s in all, not 1.5 s. Right after a shell start
+    # the rescan is still running behind everything else the shell loads, and
+    # three quick tries gave up before it finished: `enable_failed` at every
+    # cold start, with the clone enabled a moment later anyway.
     enabled=false
     plugin_enabled "$CLONE_ID" && enabled=true
-    for _ in 1 2 3; do
+    for pause in 0 0.25 0.5 1 2 4 4; do
       [[ $enabled == true ]] && break
+      sleep "$pause"
       if omarchy plugin enable "$CLONE_ID" >/dev/null 2>&1; then
         enabled=true
         break
       fi
       omarchy-shell shell rescanPlugins >/dev/null 2>&1
-      sleep 0.5
     done
     [[ $enabled == true ]] || die enable_failed reason '"the shell would not enable the clone"'
 
     # A wrapper that does not compile gets no error from inside itself:
     # `ensureService` logs a warning (shell.qml:916-918) and there is simply no
     # lock service, so no `lock` IPC target either. The registry offers no
-    # earlier signal for services, so the timeout IS the signal. Ten seconds is
-    # plenty here -- unlike a shell start, the plugin scan has already finished.
-    deadline=$((SECONDS + 10))
+    # earlier signal for services, so the timeout IS the signal. 30 s, the same
+    # window as the Face service's own health check (Service.qml:434): on a
+    # cold start the scan that creates the service has not finished either, and
+    # ten seconds gave Omarchy's lock screen back from under a wrapper that
+    # was about to answer.
+    deadline=$((SECONDS + 30))
     while ((SECONDS < deadline)); do
       # A short IPC timeout, for the same reason omarchy-restart-shell uses one
       # (:29-31): this is a poll, and a two-second wait per tick would spend the
