@@ -2142,6 +2142,407 @@ def main(argv):
 sys.exit(main(sys.argv[1:]))
 STORE_PY_END
 
+# --- the enrolment sweep (plan-face-enroll.md §2) -------------------------------
+#
+# The head-turning enrolment's program, embedded for the reason STORE_PY is: the
+# `system` row has a fixed set of files. Nothing runs it yet. This is the pure
+# half -- pose from five points, the pose bins, the per-frame gates, the
+# same-person guard, supported frames and their medoid, and `pick` -- with no
+# camera, no file and no dlib: the imports are `math` and `sys`, so
+# `python3 -I -c "$SWEEP_PY"` and dev/e0-pose.py can load it anywhere. The
+# camera, dlib and cv2 arrive with the I/O half, lazily inside main().
+#
+# Numbers marked (chosen) are placeholders for what dev/enrol-record.py measures
+# on the owner's own laptop (plan-face-enroll.md §8, Phase 0); they are not facts.
+read -r -d '' SWEEP_PY <<'SWEEP_PY_END' || true
+import math
+import sys
+
+# --- the ring: 12 pose bins of 30 degrees, read clockwise from the top ---------
+BINS = 12
+BIN_DEGREES = 30
+QUOTA = 2                    # supported frames that fill a bin
+R_MIN, R_MAX = 1.0, 2.2      # (chosen) inside R_MIN is the centre, past R_MAX is too far
+AMP_YAW = 0.11               # (chosen) index change for 15 degrees, canonical face
+AMP_PITCH = 0.06             # (chosen) the weak axis: down saturates, up is twice as steep
+NEUTRAL_FRAMES = 5
+
+# --- gates, per frame (all (chosen)) -------------------------------------------
+EYE_MIN, EYE_MAX = 40, 150   # pixels between the eye centres
+EDGE_MARGIN = 0.04          # share of the frame the face box keeps from each border
+DARK_MAX = 50                # percent, howdy's dark_threshold
+SATURATED_MAX = 6.0          # percent of pixels
+SHARP_MIN = 0.5              # Laplacian variance over the session median
+STEADY_STEP = 0.05           # largest |d(u,v)| between lit frames
+STEADY_FRAMES = 3            # consecutive steps that must all be that small
+ROLL_MAX = 25.0              # degrees
+
+# --- the same-person guard and the supported frames (all (chosen)) --------------
+CHAIN = 0.40                 # to the nearest accepted template of this appearance
+HARD = 0.55                  # to the centre; the Phase 0 table sets it, never above 0.60
+SUPPORT = 0.30               # frames of one bin must sit this close to each other
+SUPPORT_GAP = 0.2            # seconds between supported frames
+CHANGED_FRAMES = 5           # consecutive lit frames failing the guard end the lap
+MAX_CANDIDATES = 12          # per bin, so a long hold stays bounded
+DONE_BINS = 4                # bins held, besides the centre, before Done
+
+# --- what each use may take (plan-face-enroll.md 2b) ----------------------------
+LOCK_TEMPLATES, SUDO_TEMPLATES = 12, 4
+LOCK_MAXIMUM, SUDO_MAXIMUM = 36, 12
+SUDO_R_MAX = 1.5
+SUDO_CENTRE = 0.40           # a sudo template stays this close to its centre
+LAP2_FAR, LAP2_NEAR = 0.8, 1.25
+
+# Bit-reversal order over 12 bins: the four cardinals first, then the bins 30
+# degrees past them, then the ones 60 degrees past, each group alternating sides.
+BIN_ORDER = (0, 6, 3, 9, 1, 7, 4, 10, 2, 8, 5, 11)
+
+# dlib's 5-point model: two points per eye, the nose bottom last. Which pair is
+# which eye is not relied on (the eyes are told apart by x); the order is a Phase 0
+# measurement.
+EYE_POINTS = ((0, 1), (2, 3))
+NOSE_POINT = 4
+
+
+def distance(a, b):
+    return math.dist(a, b)
+
+
+def median(values):
+    ordered = sorted(values)
+    n = len(ordered)
+    if n == 0:
+        return None
+    middle = n // 2
+    if n % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+# --- pose from five points ------------------------------------------------------
+
+def pose_indices(points):
+    """Eye distance, roll and the nose's offset from the eyes, in eye distances.
+
+    `points` is five (x, y) in image pixels, y down. The nose is rotated back by
+    the roll first, so a tilted head does not read as a turned one.
+    """
+    centres = []
+    for first, second in EYE_POINTS:
+        centres.append(((points[first][0] + points[second][0]) / 2.0,
+                        (points[first][1] + points[second][1]) / 2.0))
+    left, right = sorted(centres)
+    eye = math.hypot(right[0] - left[0], right[1] - left[1])
+    if eye <= 0:
+        return None
+    roll = math.atan2(right[1] - left[1], right[0] - left[0])
+    mid_x = (left[0] + right[0]) / 2.0
+    mid_y = (left[1] + right[1]) / 2.0
+    dx = points[NOSE_POINT][0] - mid_x
+    dy = points[NOSE_POINT][1] - mid_y
+    cos, sin = math.cos(roll), math.sin(roll)
+    return {
+        "eye": eye,
+        "roll": math.degrees(roll),
+        "yaw": (dx * cos + dy * sin) / eye,
+        "pitch": (-dx * sin + dy * cos) / eye,
+    }
+
+
+def neutral_of(poses):
+    """The user's own straight-ahead: the median of the first five steady frames."""
+    first = poses[:NEUTRAL_FRAMES]
+    if len(first) < NEUTRAL_FRAMES:
+        return None
+    return {"yaw": median([p["yaw"] for p in first]),
+            "pitch": median([p["pitch"] for p in first])}
+
+
+def pose_uv(pose, neutral, amp_yaw=AMP_YAW, amp_pitch=AMP_PITCH):
+    """Screen axes: u to the right of the (mirrored) preview, v down.
+
+    The IR frame is not mirrored and the preview is, so the yaw axis is negated
+    here, once: turning to your right moves the lit ticks to the right.
+    """
+    return (-(pose["yaw"] - neutral["yaw"]) / amp_yaw,
+            (pose["pitch"] - neutral["pitch"]) / amp_pitch)
+
+
+def ring_angle(u, v):
+    """Degrees clockwise from the top of the ring, 0 up to 360."""
+    return math.degrees(math.atan2(u, -v)) % 360.0
+
+
+def locate(u, v):
+    """(bin or None, radius, angle). A bin is a 30 degree wedge centred on k x 30."""
+    r = math.hypot(u, v)
+    angle = ring_angle(u, v)
+    if r < R_MIN or r > R_MAX:
+        return None, r, angle
+    k = int(((angle + BIN_DEGREES / 2.0) % 360.0) // BIN_DEGREES) % BINS
+    return k, r, angle
+
+
+def pose_name(k):
+    return "a%03d" % (k * BIN_DEGREES)
+
+
+def bin_of_pose(name):
+    if isinstance(name, str) and len(name) == 4 and name[0] == "a" and name[1:].isdigit():
+        degrees = int(name[1:])
+        if degrees % BIN_DEGREES == 0 and degrees < 360:
+            return degrees // BIN_DEGREES
+    return None
+
+
+# --- the gates ------------------------------------------------------------------
+
+def is_steady(history):
+    """`history` is the (u, v) of the latest lit frames, oldest first."""
+    if len(history) < STEADY_FRAMES + 1:
+        return False
+    recent = history[-(STEADY_FRAMES + 1):]
+    for before, after in zip(recent, recent[1:]):
+        if math.hypot(after[0] - before[0], after[1] - before[1]) >= STEADY_STEP:
+            return False
+    return True
+
+
+def box_inside(box, size):
+    """Does the face box keep EDGE_MARGIN of the frame from every border?"""
+    left, top, right, bottom = box
+    width, height = size
+    return (left >= EDGE_MARGIN * width and top >= EDGE_MARGIN * height and
+            width - right >= EDGE_MARGIN * width and height - bottom >= EDGE_MARGIN * height)
+
+
+def frame_word(faces, eye, box, size, dark, saturated, sharp, roll, steady):
+    """The first gate a frame fails, as the word the ring shows; None when it passes.
+
+    `dark` and `saturated` are percentages, `sharp` is relative to the session
+    median. Too bright and too dark are both "dark": the fix is the room's light.
+    """
+    if faces == 0:
+        return "searching"
+    if faces > 1:
+        return "multiple"
+    if eye < EYE_MIN:
+        return "closer"
+    if eye > EYE_MAX:
+        return "farther"
+    if not box_inside(box, size):
+        return "edge"
+    if dark > DARK_MAX or saturated > SATURATED_MAX:
+        return "dark"
+    if sharp < SHARP_MIN:
+        return "blurry"
+    if abs(roll) > ROLL_MAX or not steady:
+        return "hold"
+    return None
+
+
+def lap2_want(reference_eye):
+    """Which way lap 2 asks the user to move, or None when neither fits the gate."""
+    if reference_eye * LAP2_FAR >= EYE_MIN:
+        return "far"
+    if reference_eye * LAP2_NEAR <= EYE_MAX:
+        return "near"
+    return None
+
+
+def lap2_word(eye, reference_eye, want):
+    """"farther" / "closer" until the eye distance is where lap 2 asked, then None."""
+    if want == "far":
+        return None if eye <= reference_eye * LAP2_FAR else "farther"
+    if want == "near":
+        return None if eye >= reference_eye * LAP2_NEAR else "closer"
+    return None
+
+
+# --- the same-person guard ------------------------------------------------------
+
+def guard_ok(encoding, accepted, centre, chain=CHAIN, hard=HARD):
+    """Per frame, never an error: close enough to the chain and to the centre.
+
+    `accepted` holds this appearance's templates so far (the centre among them);
+    a chain, so a slow genuine drift from frontal is followed. Without a centre
+    yet this frame is the centre.
+    """
+    if centre is None:
+        return True
+    if distance(encoding, centre) > hard:
+        return False
+    if accepted and min(distance(encoding, other) for other in accepted) > chain:
+        return False
+    return True
+
+
+def changed_step(run, failed):
+    """The run of consecutive lit frames that failed the guard, and whether it ends the lap.
+
+    Called only for frames that reached an encoding: a frame the gates turned away
+    neither extends the run nor breaks it.
+    """
+    run = run + 1 if failed else 0
+    return run, run >= CHANGED_FRAMES
+
+
+# --- supported frames and the medoid --------------------------------------------
+
+def add_candidate(candidates, candidate):
+    """Keep the newest MAX_CANDIDATES steady frames of a bin."""
+    candidates = candidates + [candidate]
+    return candidates[-MAX_CANDIDATES:]
+
+
+def supported(candidates):
+    """The largest set of frames at least SUPPORT_GAP apart whose encodings are all
+    within SUPPORT of each other. Each frame is tried as the anchor; the earliest
+    anchor wins a tie. A frame is {"t", "r", "encoding"}.
+    """
+    ordered = sorted(candidates, key=lambda c: (c["t"], c["r"]))
+    best = []
+    for anchor in ordered:
+        kept = [anchor]
+        for other in ordered:
+            if other is anchor:
+                continue
+            if all(abs(other["t"] - k["t"]) >= SUPPORT_GAP and
+                   distance(other["encoding"], k["encoding"]) <= SUPPORT for k in kept):
+                kept.append(other)
+        if len(kept) > len(best):
+            best = kept
+    return sorted(best, key=lambda c: (c["t"], c["r"]))
+
+
+def medoid(frames):
+    """The frame with the least summed distance to the others; never an extremum.
+    A tie (always the case with two) goes to the lower r, then the earlier frame.
+    """
+    def key(frame):
+        total = sum(distance(frame["encoding"], other["encoding"]) for other in frames)
+        return (round(total, 9), frame["r"], frame["t"])
+    return min(frames, key=key) if frames else None
+
+
+def bin_fraction(count):
+    """Progress toward the quota, 0 to 1: what the ring's ticks are drawn from."""
+    return min(1.0, count / float(QUOTA))
+
+
+def bin_template(k, candidates):
+    """The template a bin yields, or None until QUOTA supported frames hold."""
+    frames = supported(candidates)
+    if len(frames) < QUOTA:
+        return None
+    chosen = medoid(frames)
+    return {"pose": pose_name(k), "r": chosen["r"], "support": len(frames),
+            "time": chosen["t"], "encoding": chosen["encoding"]}
+
+
+def coverage(by_bin):
+    """(12 fractions, count of bins held). `by_bin` maps a bin k to its frames."""
+    fractions = []
+    held = 0
+    for k in range(BINS):
+        count = len(supported(by_bin.get(k, [])))
+        fractions.append(bin_fraction(count))
+        if count >= QUOTA:
+            held += 1
+    return fractions, held
+
+
+def done_ready(centre_held, held, minimum=DONE_BINS):
+    return bool(centre_held) and held >= minimum
+
+
+# --- which templates a use may take ---------------------------------------------
+
+def _template_key(appearance, extra):
+    return (-extra["support"], extra["r"], extra["time"], appearance["label"],
+            tuple(extra["encoding"]))
+
+
+def pick(person, kind, cap):
+    """The templates a person contributes to one use, as (appearance, extra) indices.
+
+    `extra` is None for an appearance's centre. Deterministic and independent of
+    the order the lists are stored in. The centres come first (a glasses look is
+    never dropped from Sudo), then the "usual" templates (lock
+    only), then the pose bins in BIN_ORDER, alternating the near and far band, each
+    slot from the best-supported candidate, until the cap. The caps are clamped to
+    the compiled maxima. Sudo never takes a "usual" template, nor r past SUDO_R_MAX,
+    nor one further than SUDO_CENTRE from its own centre. Lock takes r up to R_MAX
+    within HARD of the centre; a "usual" one was checked against the nearest
+    template when it was captured, so it is exempt from the HARD test.
+    """
+    maximum = SUDO_MAXIMUM if kind == "sudo" else LOCK_MAXIMUM
+    cap = min(int(cap), maximum)
+    if cap <= 0:
+        return []
+    appearances = person.get("appearances") or []
+
+    chosen = []
+    centres = sorted(range(len(appearances)),
+                     key=lambda ai: (appearances[ai]["time"], appearances[ai]["label"]))
+    for ai in centres:
+        chosen.append((ai, None))
+
+    usual, slots = [], {}
+    for ai, appearance in enumerate(appearances):
+        centre = appearance["encoding"]
+        for ei, extra in enumerate(appearance.get("extra") or []):
+            if extra["band"] == "usual":
+                if kind != "sudo":
+                    usual.append((ai, ei))
+                continue
+            if extra["r"] > (SUDO_R_MAX if kind == "sudo" else R_MAX):
+                continue
+            far = distance(extra["encoding"], centre)
+            if far > (SUDO_CENTRE if kind == "sudo" else HARD):
+                continue
+            k = bin_of_pose(extra["pose"])
+            if k is None:
+                continue
+            slots.setdefault((k, extra["band"]), []).append((ai, ei))
+
+    def best_of(options):
+        return min(options, key=lambda ref: _template_key(
+            appearances[ref[0]], appearances[ref[0]]["extra"][ref[1]]))
+
+    for ref in sorted(usual, key=lambda ref: _template_key(
+            appearances[ref[0]], appearances[ref[0]]["extra"][ref[1]])):
+        chosen.append(ref)
+
+    taken = set()
+    for first_band, second_band in (("near", "far"), ("far", "near")):
+        for order, k in enumerate(BIN_ORDER):
+            band = first_band if order % 2 == 0 else second_band
+            options = [ref for ref in slots.get((k, band), []) if ref not in taken]
+            if options:
+                ref = best_of(options)
+                taken.add(ref)
+                chosen.append(ref)
+    # Several appearances can offer the same slot: what is left, in the same order.
+    for k in BIN_ORDER:
+        for band in ("near", "far"):
+            for ref in sorted((r for r in slots.get((k, band), []) if r not in taken),
+                              key=lambda ref: _template_key(
+                                  appearances[ref[0]], appearances[ref[0]]["extra"][ref[1]])):
+                taken.add(ref)
+                chosen.append(ref)
+    return chosen[:cap]
+
+
+def main(argv):
+    sys.stderr.write("sweep: the capture half is not wired in yet\n")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
+SWEEP_PY_END
+
 # python3 is the engine's own language, but this helper installs and removes
 # Face on machines that have no engine yet, so the dependency is asserted where
 # it is needed rather than at the top of the file.

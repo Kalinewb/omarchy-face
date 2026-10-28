@@ -767,3 +767,16 @@ imports no network module, and refuses to run as root.
 
 `--ir` and `--rgb` take a file or an image sequence (`dir/%04d.png`) instead of
 a device, which is how its own plumbing is checked without a camera.
+
+### E0 — the sweep's pure functions
+
+`./dev/e0-pose.py` pulls `SWEEP_PY` out of `system/omarchy-face-admin` (the text
+root will run, not a copy) and tests it with landmarks drawn from a canonical 3D
+face turned by known angles: pose from five points, the 12 bins and the mirror,
+every gate at its boundary, the same-person guard and the 5-frame counter,
+supported frames and the medoid, and `pick`. It needs only the standard library,
+and proves `python3 -I` loads the module with dlib, cv2 and numpy made
+unimportable. It ends with the synthetic model's own coupling and noise as
+"findings"; they are not measurements, and Phase 0's recordings replace them.
+Mutating a boundary in `SWEEP_PY` makes it fail, which is the evidence it tests
+anything.
