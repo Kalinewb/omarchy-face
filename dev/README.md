@@ -750,3 +750,20 @@ That extra glob is not pedantry. On this machine §2's own list passed while
 `.kalinewb.face.bak.20260912221457` still held the entire old plugin — the
 backup `omarchy plugin remove` leaves behind for a plugin that is not a git
 checkout (`omarchy-plugin-remove:105-115`).
+
+## Enrolment fixtures — `enrol-record.py` (plan-face-enroll.md Phase 0)
+
+`dev/enrol-record.py` is the one tool in `dev/` that opens a real camera, so it
+is run by a person and never from a suite: `./dev/enrol-record.py --list` prints
+the recordings to make (desk, in the lap, tilted, far, a concurrent RGB+IR lap,
+and optionally `--stranger` frames, which asks for the other person's typed
+consent). It writes under `~/.cache/omarchy-face-enrol/` (mode 0700, outside the
+repository): each infrared frame as a lossless PNG, one JSON line per frame with
+timing, brightness and dlib's HOG faces and five landmarks, and a `meta.json`.
+The concurrent lap keeps **no RGB picture**, only per-frame face boxes as
+fractions of the frame (the crop fit needs where the face is, not who it is).
+It releases each camera on every way out (end, Ctrl-C, SIGTERM, an error),
+imports no network module, and refuses to run as root.
+
+`--ir` and `--rgb` take a file or an image sequence (`dir/%04d.png`) instead of
+a device, which is how its own plumbing is checked without a camera.
