@@ -97,6 +97,36 @@ if [[ ${OMARCHY_FACE_F1_IN_NS:-0} == 1 ]]; then
   # the modes a real machine has.
   mount -t tmpfs tmpfs /run || exit 1
   chmod 0755 /run
+  # This suite installs onto a machine Face has never touched, and says so at the
+  # end. Where Face IS installed on the host, the sandbox has to show the install
+  # the machine as it was before: no config directory (the link above would hand
+  # the run a root-owned one it cannot write), no sudo block in the PAM stacks
+  # (the byte-identity check compares against /mnt/pam.d, which is copied from
+  # there), no store, and a package database that does not know howdy or dlib.
+  rm -f /etc/omarchy-face
+  mkdir -p /run/pristine-pam.d
+  cp -rp /mnt/pam.d/. /run/pristine-pam.d/ 2>/dev/null
+  for stack in /run/pristine-pam.d/*; do
+    [[ -f $stack ]] && sed -i '/^# omarchy-face begin$/,/^# omarchy-face end$/d' "$stack"
+  done
+  mount --bind /run/pristine-pam.d /mnt/pam.d || exit 1
+  rm -rf /etc/pam.d
+  cp -rp /mnt/pam.d /etc/pam.d 2>/dev/null
+  chown -R root:root /etc/pam.d
+  mkdir -p /run/host-var-lib
+  mount --bind /var/lib /run/host-var-lib || exit 1
+  mount -t tmpfs tmpfs /var/lib || exit 1
+  chmod 0755 /var/lib
+  for real in /run/host-var-lib/*; do
+    case ${real##*/} in omarchy-face*|pacman) continue ;; esac
+    ln -s "$real" "/var/lib/${real#/run/host-var-lib/}"
+  done
+  mkdir -p /var/lib/pacman
+  for real in /run/host-var-lib/pacman/*; do
+    [[ ${real##*/} == local ]] || ln -s "$real" "/var/lib/pacman/${real#/run/host-var-lib/pacman/}"
+  done
+  cp -a /run/host-var-lib/pacman/local /var/lib/pacman/local 2>/dev/null
+  rm -rf /var/lib/pacman/local/howdy-[0-9]* /var/lib/pacman/local/python-dlib-[0-9]*
   mount -t tmpfs tmpfs /usr/local || exit 1
   chmod 0755 /usr/local
   mkdir -p /usr/local/bin
@@ -335,9 +365,12 @@ if true; then
   echo "  ${DIM}correctly pinned installer for an older release version${RESET}  $refuse_out"
   check "an older release version is version_mismatch, not a downgrade" \
     bash -c "[[ \$(jq -r '.error' <<<'$refuse_out') == version_mismatch ]]"
+  # The installed helper is still the release this checkout carries, not the
+  # 1.0.0 the downgrade attempt offered.
+  released=$(head -40 "$REPO/system/omarchy-face-admin" | sed -n 's/.*omarchy-face-version: //p')
   check "the refused installs changed nothing" \
     bash -c "diff -q '$REPO/system/omarchy-face-camera' /usr/local/bin/omarchy-face-camera >/dev/null &&
-             [[ \$(head -40 /usr/local/bin/omarchy-face-admin | sed -n 's/.*omarchy-face-version: //p') == '2.0.4' ]]"
+             [[ -n '$released' && \$(head -40 /usr/local/bin/omarchy-face-admin | sed -n 's/.*omarchy-face-version: //p') == '$released' ]]"
   rm -rf "$evil" "$older" "$swapped"
 else
   note "refusal tests on the plugin folder skipped: it is not this checkout"
@@ -543,6 +576,7 @@ check "howdy and python-dlib are not installed" \
 SHELL_JSON=/home/$ACCOUNT/.config/omarchy/shell.json
 if [[ -e $PLUGINS/kalinewb.face || -e $PLUGINS/kalinewb.face-lock ]] ||
    compgen -G "$PLUGINS/.kalinewb.face*" >/dev/null ||
+   compgen -G "$PLUGINS/*.face" >/dev/null || compgen -G "$PLUGINS/*.face-lock" >/dev/null ||
    grep -q 'kalinewb.face' "$SHELL_JSON" 2>/dev/null; then
   note "the plugin is still installed in $PLUGINS and named in shell.json"
   note "  -- removed by the Remove view's final step (phase 8), never by purge"
