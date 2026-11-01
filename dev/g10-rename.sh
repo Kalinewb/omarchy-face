@@ -510,7 +510,7 @@ check "…nothing written" "true|0|false|true" \
 world install
 rsync -a "$FACE22/" "$P/graveklar.face/"
 install_out=$(sandbox "$REPO/install.sh" --no-restart 2>&1); rc=$?
-check "install.sh with only graveklar.face installed syncs into it" "0|kalinewb.face 3.0.0|graveklar.face " \
+check "install.sh with only graveklar.face installed syncs into it" "0|kalinewb.face $(jq -r .version "$REPO/manifest.json")|graveklar.face " \
   "$rc|$(jq -r '.id + " " + .version' "$P/graveklar.face/manifest.json")|$(listing)"
 rsync -a "$FACE30/" "$P/kalinewb.face/"
 before=$(find "$P" -type f -printf '%P %s %T@\n' | sort | sha256sum)

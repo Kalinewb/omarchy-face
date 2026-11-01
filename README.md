@@ -195,7 +195,7 @@ sudo /usr/bin/bash -c 'PATH=/usr/bin; set -o pipefail; t=$(mktemp -d) || exit 1
     bash "$t/install.sh" "$1" "$2"
   }
   run "$@"; s=$?; rm -rf -- "$t"; exit $s' \
-  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.0.0
+  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.1.0
 ```
 
 What it does, from the button or from a terminal: root copies the installer out of the
@@ -284,6 +284,14 @@ command puts it back byte for byte, moves the folders back and restarts the shel
 A git checkout goes back to the commit it came from (`v2.2.0` when the system files are
 already 3.0.0). A copy installed with `./install.sh` has no commit to go back to: run
 `git checkout v2.2.0 && ./install.sh` in your checkout afterwards.
+
+### Updating from 3.0.0
+
+Face ID 3.1.0 changes the system files (the enrolment helper learns the head-turning sweep
+that a later release's view will use, and `set-limits`), so Setup shows *the plugin (3.1.0) is
+newer than the installed system files*: **Update Face's system files**, one password. Nothing
+about who can unlock changes: Sudo still uses one straight-on picture per look, and a stored
+person is not touched.
 
 ## The views
 
