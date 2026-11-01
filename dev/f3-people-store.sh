@@ -108,7 +108,13 @@ mkdir -p /run/real-var-lib
 mount --bind /var/lib /run/real-var-lib || exit 1
 mount -t tmpfs tmpfs /var/lib || exit 1
 chmod 0755 /var/lib
-for real in /run/real-var-lib/*; do ln -s "$real" "/var/lib/${real#/run/real-var-lib/}"; done
+# Face's own directory is not carried over: where Face is installed on the host,
+# the link would hand the run the live store -- root-owned by a root this uid 0
+# is not, so every chmod on it fails (and a real root would write to it).
+for real in /run/real-var-lib/*; do
+  [[ ${real##*/} == omarchy-face* ]] && continue
+  ln -s "$real" "/var/lib/${real#/run/real-var-lib/}"
+done
 
 # howdy's directory. Real or stubbed, it is a tmpfs either way, so no model
 # file ever lands in the installed engine's own folder.
