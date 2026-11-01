@@ -585,14 +585,16 @@ fp1=$(sha256sum "$MODELS"/omarchy-face.*.dat "$PEOPLE" | sort)
 "$ADMIN" regenerate >/dev/null 2>&1
 same "regenerate is byte-identical (the derived sets and people.json)" "$fp1" "$(sha256sum "$MODELS"/omarchy-face.*.dat "$PEOPLE" | sort)"
 
-step "the session bound: a sweep outlives 300 s to 600 and no further (scaled by OMARCHY_FACE_SESSION_SECONDS)"
+step "the session bound: a sweep does not lengthen the session (scaled by OMARCHY_FACE_SESSION_SECONDS)"
 reset_store
 scenario hold-first
-start=$(date +%s)
-out=$(OMARCHY_FACE_SESSION_SECONDS=4 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "sleep 5.5" 'send {"cmd":"abort"}' "await aborted 30" "eof")
-same "a session of 4 s lives on past 4 s once a sweep runs (it answered abort at 5.5 s)" 'true' "$(q "$out" 'first("aborted") is not None')"
-out=$(OMARCHY_FACE_SESSION_SECONDS=4 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "sleep 9.5" 'send {"cmd":"abort"}' "await discarded 30")
-same "...and is over at twice that: the abort at 9.5 s finds a discarded session" 'false' "$(q "$out" 'first("aborted") is not None')"
+out=$(OMARCHY_FACE_SESSION_SECONDS=4 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "sleep 5.5" 'send {"cmd":"abort"}' "await discarded 30")
+same "a session of 4 s is over at 4 s with a sweep running: the abort at 5.5 s finds it discarded" 'false' "$(q "$out" 'first("aborted") is not None')"
+out=$(OMARCHY_FACE_SESSION_SECONDS=4 session emil "await ready 30" "sleep 3" "send $CREATE" "send $SIMPLE" "sleep 2.5" 'send {"cmd":"abort"}' "await discarded 30")
+same "...also when the sweep is sent late (at 3 s): it buys no extra time" 'false' "$(q "$out" 'first("aborted") is not None')"
+same "...and the transcript ends discarded" '"discarded"' "$(q "$out" 'evs[-1]["event"]')"
+out=$(OMARCHY_FACE_SESSION_SECONDS=4 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "sleep 2" 'send {"cmd":"abort"}' "await aborted 30" "eof")
+same "...but an abort inside the 4 s still works" 'true' "$(q "$out" 'first("aborted") is not None')"
 sleep 1
 check "...with the child gone" no_child
 

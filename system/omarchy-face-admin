@@ -1202,9 +1202,12 @@ STORE_LOCK_WAIT = 5.0
 # why), and long enough that a person reading the card is not cut off.
 IDLE_SECONDS = 120
 SESSION_SECONDS = 300
-# Once the first sweep arrives the whole-session bound is this one, measured from
-# `ready`: two laps, a try and an adopt do not fit in 300 s (plan-face-enroll.md 6).
-SESSION_SCAN_SECONDS = 600
+# A sweep does NOT lengthen the session. It used to (600 s from `ready`, triggered by the
+# client's first valid sweep line), which let one trivial sweep at 299 s double a standing
+# authorisation. Two Advanced laps are at most 180 s inside 300. When `trial` and `usual`
+# exist and need more, credit the camera time actually used instead:
+# ends_at = began + SESSION_SECONDS + min(camera seconds used, 300), so a sweep that fails
+# at once buys nothing (SR1 S2, dev/SR1-notes.md).
 # A command line is a small JSON object. Anything past this is not a protocol
 # this file speaks, and buffering it would be a way to make root allocate.
 MAX_LINE = 65536
@@ -1990,16 +1993,14 @@ def session_bounds():
     downwards on purpose: an environment variable that could LENGTHEN a standing
     authorisation would be the very thing these deadlines bound. (It cannot
     arrive through the GUI either -- pkexec drops the caller's environment.)"""
-    idle, whole, scan = float(IDLE_SECONDS), float(SESSION_SECONDS), float(SESSION_SCAN_SECONDS)
+    idle, whole = float(IDLE_SECONDS), float(SESSION_SECONDS)
     try:
         asked = float(os.environ.get("OMARCHY_FACE_SESSION_SECONDS", ""))
     except ValueError:
-        return idle, whole, scan
+        return idle, whole
     if asked > 0:
-        # The scan bound is twice the plain one under the override, so a test can
-        # watch a sweep outlive the one and stop at the other.
-        return min(idle, asked), min(whole, asked), min(scan, asked * 2)
-    return idle, whole, scan
+        return min(idle, asked), min(whole, asked)
+    return idle, whole
 
 
 def real_root():
@@ -2384,7 +2385,7 @@ def cmd_enroll_session(name):
     # forty seconds, so the clock measures a person who has gone away rather
     # than an engine that is busy.
     reader = line_reader(sys.stdin.fileno())
-    idle_seconds, whole_seconds, scan_seconds = session_bounds()
+    idle_seconds, whole_seconds = session_bounds()
     began = time.monotonic()
     idle_until = began + idle_seconds
     ends_at = began + whole_seconds
@@ -2482,7 +2483,6 @@ def cmd_enroll_session(name):
                 refuse("the usual position is not in this release")
                 continue
             swept_before = True
-            ends_at = began + scan_seconds
             if lap == 1:
                 # the retake: the whole pending set of this appearance goes first
                 captured.pop(label, None)
