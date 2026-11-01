@@ -117,6 +117,10 @@ SCENARIOS = {
     "simple-changed": lambda: build([dict(n=40), dict(at=9, n=20), dict(at=9, n=40, who=1.0)]),
     "simple-stray": lambda: build([dict(n=40), dict(at=9, n=12), dict(at=9, n=1, who=1.0, travel=0), dict(at=9, n=18, travel=0)]
                                   + visit((3, 0, 6))),
+    # the centre is the owner's, then a stranger holds all four Simple targets: with the
+    # child's guard working this is `changed`; with it disabled (SR1 S1's test) the parent
+    # has to refuse the lap itself
+    "simple-stranger": lambda: build([dict(n=40)] + visit(SIMPLE, who=1.0)),
     # Advanced: each bin held under a different fault, the rest held cleanly
     "advanced-faults": lambda: build(
         [dict(n=40)]

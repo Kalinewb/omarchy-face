@@ -477,6 +477,50 @@ scenario simple-stray
 out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 60" "eof")
 same "one stray frame of somebody else does not end the lap" '[0,3,6,9]' "$(q "$out" 'first("swept")["filled"]')"
 
+step "rule F: root re-checks the guard and the pose ring itself, whatever the child says"
+# A copy of the helper whose child has a broken guard (guard_ok always passes) and, in the
+# other copy, a broken pose ring (every template claims r 3.9). The parent must still refuse.
+patch_admin() { # patch_admin <out> <old> <new>
+  python3 - "$ADMIN" "$1" "$2" "$3" <<'PY'
+import sys
+src, out, old, new = sys.argv[1:]
+text = open(src).read()
+assert text.count(old) == 1, "patch target not found exactly once"
+open(out, "w").write(text.replace(old, new))
+PY
+  chmod 0755 "$1"
+}
+patch_admin "$LAB/admin-noguard" '    if centre is None:
+        return True
+    if distance(encoding, centre) > hard:' '    return True
+    if distance(encoding, centre) > hard:'
+patch_admin "$LAB/admin-wide" '"templates": [{"bin": k, "r": round(t["r"], 3),' '"templates": [{"bin": k, "r": 3.9,'
+REAL_ADMIN=$ADMIN
+reset_store
+scenario simple-stranger
+ADMIN=$LAB/admin-noguard
+out=$(OMARCHY_FACE_SWEEP_SECONDS=30 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 90" "send $DONE" "eof")
+same "a child whose guard passes everything: four stranger templates, and the parent drops the lap (lap 1)" '[["timeout","bad_sweep"],false]' "$(q "$out" '[[c["code"] for c in evs if c.get("event") == "capture_failed"], first("swept") is not None]')"
+check "...and nothing is stored" bash -c "[[ ! -e $STORE/people/emil.json ]]"
+reset_store
+scenario advanced lap2-other
+out=$(OMARCHY_FACE_SWEEP_SECONDS=90 session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 120" "send $ADV2" "awaitwhere {\"event\":\"capture_failed\"} 120" "send $DONE" "await saved 30")
+same "...and lap 2 by somebody else with that guard: dropped by the parent with lap 1 kept (13 saved)" '["timeout",1,13]' "$(python3 -c '
+import json, sys
+evs = [json.loads(l[3:]) for l in sys.stdin.read().splitlines() if l.startswith("EV ")]
+print(json.dumps([[e["code"] for e in evs if e.get("event") == "capture_failed"][0], len([e for e in evs if e.get("event") == "swept"]), 13 if any(e.get("event") == "saved" for e in evs) else 0], separators=(",", ":")))' <<<"$out")"
+reset_store
+scenario simple
+ADMIN=$LAB/admin-wide
+out=$(OMARCHY_FACE_SWEEP_SECONDS=30 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 90" "send $DONE" "eof")
+same "a child that reports r 3.9 (inside 0..4, outside R_MIN..R_MAX): dropped by the parent" '["timeout","bad_sweep"]' "$(q "$out" '[c["code"] for c in evs if c.get("event") == "capture_failed"]')"
+check "...and nothing is stored" bash -c "[[ ! -e $STORE/people/emil.json ]]"
+ADMIN=$REAL_ADMIN
+reset_store
+scenario simple-stranger
+out=$(OMARCHY_FACE_SWEEP_SECONDS=30 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 90" "eof")
+same "control: the same stranger with the real guard is changed, as before" '"changed"' "$(q "$out" 'last("capture_failed")["code"]')"
+
 step "frames that must yield no template"
 reset_store
 scenario advanced-faults

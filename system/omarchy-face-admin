@@ -2165,9 +2165,19 @@ def refuse(reason):
     emit_checked({"event": "capture_failed", "code": "bad_sweep"})
 
 
-def judge(mode, lap, targets, result):
+def _encoding_ok(encoding):
+    return isinstance(encoding, list) and len(encoding) == 128 and all(finite_number(x) for x in encoding)
+
+
+def judge(mode, lap, targets, result, held_centre=None):
     """Rule F: the parent decides Done from what it actually received, with the same pure
-    functions the child ran. -> {"code": C} to drop the lap, or the templates to keep."""
+    functions the child ran. -> {"code": C} to drop the lap, or the templates to keep.
+
+    It re-checks what the sweep exists to guarantee, not only the shape: every template
+    inside the pose ring (R_MIN..R_MAX) and within HARD of the appearance's centre, so a
+    child whose own guard silently passes (a bug, a NaN, a descriptor that was never
+    compared) still cannot get a stranger's template stored. The centre is the child's
+    own for lap 1 and `held_centre` (the pending centre root already holds) for lap 2."""
     sw = pure()
     if not isinstance(result, dict):
         return {"code": "timeout"}
@@ -2182,9 +2192,9 @@ def judge(mode, lap, targets, result):
         if not isinstance(item, dict):
             return {"code": "timeout"}
         k, r, support, encoding = item.get("bin"), item.get("r"), item.get("support"), item.get("encoding")
-        if (type(k) is not int or k not in targets or k in bins or not finite_number(r) or not 0 <= r <= 4
-                or type(support) is not int or not 2 <= support <= 99 or not isinstance(encoding, list)
-                or len(encoding) != 128 or not all(finite_number(x) for x in encoding)):
+        if (type(k) is not int or k not in targets or k in bins or not finite_number(r)
+                or not sw["R_MIN"] <= r <= sw["R_MAX"]
+                or type(support) is not int or not 2 <= support <= 99 or not _encoding_ok(encoding)):
             return {"code": "timeout"}
         bins.add(k)
         kept.append({"bin": k, "r": r, "support": support, "encoding": encoding})
@@ -2192,9 +2202,17 @@ def judge(mode, lap, targets, result):
     centre_encoding = None
     if lap == 1:
         encoding = centre.get("encoding") if isinstance(centre, dict) else None
-        if isinstance(encoding, list) and len(encoding) == 128 and all(finite_number(x) for x in encoding):
+        if _encoding_ok(encoding):
             centre_encoding = encoding
-    centre_held = lap == 2 or centre_encoding is not None
+    elif _encoding_ok(held_centre):
+        centre_encoding = held_centre
+    else:
+        return {"code": "timeout"}
+    if centre_encoding is not None:
+        for t in kept:
+            if sw["distance"](t["encoding"], centre_encoding) > sw["HARD"]:
+                return {"code": "timeout"}
+    centre_held = centre_encoding is not None
     outcome = sw["lap_result"](mode, centre_held, bins)
     if outcome != "swept":
         refine = result.get("refine")
@@ -2202,7 +2220,7 @@ def judge(mode, lap, targets, result):
             return {"code": refine}
         return {"code": outcome}
     eye = result.get("eye")
-    return {"code": None, "templates": kept, "centre": centre_encoding,
+    return {"code": None, "templates": kept, "centre": centre_encoding if lap == 1 else None,
             "skipped": sorted(set(targets) - bins) if mode == "simple" else [],
             "eye": float(eye) if finite_number(eye) and eye > 0 else None}
 
@@ -2494,7 +2512,8 @@ def cmd_enroll_session(name):
                 drop = outcome[1]
                 emit_checked({"event": "capture_failed", "code": drop})
             else:
-                judged = judge(mode, lap, targets, outcome[1])
+                judged = judge(mode, lap, targets, outcome[1],
+                               captured[label]["encoding"] if lap == 2 and label in captured else None)
                 if judged["code"] is not None:
                     drop = judged["code"]
                     emit_checked({"event": "capture_failed", "code": drop})
