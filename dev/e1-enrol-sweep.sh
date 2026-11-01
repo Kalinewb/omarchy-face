@@ -458,14 +458,19 @@ bad=(
   '{"cmd":"sweep","appearance":"No glasses","mode":"usual","lap":1,"targets":[3]}'
   '{"cmd":"sweep","appearance":"No glasses","mode":"usual","lap":1}'
   '{"cmd":"trial","appearance":"No glasses"}'
+  '{"cmd":"sweep","appearance":"","mode":"simple","lap":1,"targets":[9,3,0,6]}'
+  '{"cmd":"sweep","appearance":"No\u0001glasses","mode":"simple","lap":1,"targets":[9,3,0,6]}'
+  '{"cmd":"sweep","appearance":7,"mode":"simple","lap":1,"targets":[9,3,0,6]}'
+  '{"cmd":"sweep","mode":"simple","lap":1,"targets":[9,3,0,6]}'
 )
-script=("await ready 30" "send $CREATE")
+script=("await ready 30" "send $CREATE" "send $(python3 -c 'print("[" * 60000)')")
 for line in "${bad[@]}"; do script+=("send $line"); done
 script+=("send $SIMPLE" "send $SIMPLE" "await swept 120" "send {\"cmd\":\"capture\",\"appearance\":\"No glasses\"}" "send {\"cmd\":\"sweep\",\"appearance\":\"No glasses\",\"mode\":\"simple\",\"lap\":2,\"targets\":[9,3,0,6]}" "send {\"cmd\":\"trial\",\"appearance\":\"No glasses\"}" "send $FINISH" "send {\"cmd\":\"abort\"}" "send $DONE" "await saved 30")
 out=$(session emil "${script[@]}")
 same "${#bad[@]} refused sweeps, the capture after a sweep, a sweep while one runs, a lap 2 and a trial after a Simple set: all bad_sweep" "$(( ${#bad[@]} + 4 ))" "$(q "$out" 'len([e for e in evs if e.get("event") == "capture_failed" and e.get("code") == "bad_sweep"])')"
 same "...and the sweep that follows them all runs: exactly one sweeping, one swept, saved" '[1,1,1]' "$(q "$out" '[len([e for e in evs if e.get("event") == n]) for n in ("sweeping", "swept", "saved")]')"
 check "a bad sweep starts no child (no sweeping before the valid one; nothing left running)" no_child
+same "...four bad labels count as bad_sweep above, and a 60,000-bracket line is ignored: no Traceback, the session lived to save" 'false' "$(grep -q Traceback <<<"$out" && echo true || echo false)"
 
 step "a second identity: changed, and nothing from that lap is stored"
 reset_store
@@ -597,6 +602,45 @@ out=$(OMARCHY_FACE_SESSION_SECONDS=4 session emil "await ready 30" "send $CREATE
 same "...but an abort inside the 4 s still works" 'true' "$(q "$out" 'first("aborted") is not None')"
 sleep 1
 check "...with the child gone" no_child
+
+step "what the child says on stderr never reaches the client; the child holds the camera lock; a deep line is ignored"
+patch_admin "$LAB/admin-noisy" 'def say(obj):
+    import json
+' 'def say(obj):
+    import json
+    sys.stderr.write("LEAK /dev/video9 Traceback (most recent call last)\n")
+'
+reset_store
+scenario simple
+ADMIN=$LAB/admin-noisy
+out=$(OMARCHY_FACE_SWEEP_SECONDS=30 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 90" "eof")
+ADMIN=$REAL_ADMIN
+same "a child that writes a path and a traceback to stderr: the sweep still completes" 'true' "$(q "$out" 'first("swept") is not None')"
+same "...and none of it reaches the client (no ERR line mentions it)" 'false' "$(grep -qE 'LEAK|/dev/video9|Traceback' <<<"$out" && echo true || echo false)"
+reset_store
+scenario hold-first
+CAMLOCK=/run/omarchy-face/camera.lock
+( session emil "await ready 30" "send $CREATE" "send $SIMPLE" "sleep 3" "send $(python3 -c 'print("[" * 60000)')" "sleep 1" 'send {"cmd":"abort"}' "await aborted 30" "eof" >"$LAB/hold.out" 2>&1 ) &
+holder=$!
+sleep 2
+held=0
+for pid in $(pgrep -f 'def parse_args'); do
+  for fd in /proc/$pid/fd/*; do [[ $(readlink "$fd" 2>/dev/null) == "$CAMLOCK" ]] && held=$((held + 1)) && break; done
+done
+same "the sweep child (and its timeout) holds the camera lock's file, as the daemon's compare.py does" 'true' "$([[ $held -ge 2 ]] && echo true || echo false)"
+wait "$holder"
+same "a 60,000-bracket line during a running scan is ignored: the abort after it is answered" 'true' "$(q "$(cat "$LAB/hold.out")" 'first("aborted") is not None')"
+check "...with no traceback" bash -c "! grep -q Traceback '$LAB/hold.out'"
+sleep 1
+check "...and the lock is free again once the child is gone" flock -n "$CAMLOCK" true
+reset_store
+mkdir -p "$STORE/people"
+printf 'not json' >"$STORE/people/emil.json"
+out=$(session emil "await error 20")
+same "a corrupt record: the session's error event is store_corrupt" '"store_corrupt"' "$(q "$out" 'first("error")["error"]')"
+same "...and it carries no record path (the code and nothing else)" '["error","event"]' "$(q "$out" 'sorted(first("error"))')"
+same "...and no path appears in the transcript" 'false' "$(grep -qE '/var/lib|people/' <<<"$out" && echo true || echo false)"
+reset_store
 
 step "the typed allow-list and the test override, as code (STORE_PY loaded without its main)"
 cat >"$LAB/unit.py" <<'PY'

@@ -2237,6 +2237,19 @@ def kill_group(proc):
         pass
 
 
+def sweep_stderr():
+    """Where the child's stderr goes: the journal, tagged, through its own `logger`, and
+    never the helper's stderr (which is the GUI's pipe: a traceback or a library warning
+    could name a device node). -> (file for Popen's stderr, the logger process or None)."""
+    try:
+        logger = subprocess.Popen(["logger", "-t", "omarchy-face-sweep", "-p", "auth.notice"],
+                                  env={"PATH": "/usr/local/bin:/usr/bin"}, stdin=subprocess.PIPE,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        return subprocess.DEVNULL, None
+    return logger.stdin, logger
+
+
 def run_sweep(reader, mode, lap, targets, bounds, reference, eye, ends_at):
     """One lap in a child. -> ("result", dict) | ("aborted",) | ("eof",) | ("expired",)
     | ("failed", code). The child is in its own session and process group under
@@ -2251,19 +2264,25 @@ def run_sweep(reader, mode, lap, targets, bounds, reference, eye, ends_at):
         lock.__enter__()
     except Busy:
         return ("failed", "camera_busy")
-    proc, rfd, wfd = None, None, None
+    proc, rfd, wfd, logger = None, None, None, None
     try:
         rfd, wfd = os.pipe()
         argv = ["timeout", "-k", "2", str(int(ceiling) + 15), "python3", "-I", "-c", text,
                 mode, str(lap), ",".join(str(k) for k in targets), repr(float(ceiling)),
                 repr(float(bounds["patience"])), repr(float(bounds["lead"])),
                 repr(float(bounds["stall"])), str(rfd)]
+        err, logger = sweep_stderr()
+        # The camera lock goes down with the reference pipe, as the daemon hands its lock
+        # fd to compare.py (omarchy-faced:484-499): the lock then lives as long as the
+        # sensor is open, even if this process is killed or the child cannot be reaped.
         try:
             proc = subprocess.Popen(argv, env=engine_env(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                    pass_fds=(rfd,), start_new_session=True,
+                                    stderr=err, pass_fds=(rfd, lock.fd), start_new_session=True,
                                     preexec_fn=lambda: os.umask(0o077))
         except OSError:
             return ("failed", "timeout")
+        if logger is not None:
+            logger.stdin.close()        # the child's copy is the only writer left
         os.close(rfd)
         rfd = None
         os.write(wfd, payload)          # at most about 40 KB: inside the pipe's 64 KB
@@ -2286,7 +2305,7 @@ def run_sweep(reader, mode, lap, targets, bounds, reference, eye, ends_at):
                     raw, buffer = buffer.split(b"\n", 1)
                     try:
                         doc = json.loads(raw.decode("utf-8", "replace"))
-                    except ValueError:
+                    except (ValueError, RecursionError):
                         prose("dropped a line from the sweep that is not JSON")
                         continue
                     if isinstance(doc, dict) and list(doc) == ["result"]:
@@ -2301,7 +2320,7 @@ def run_sweep(reader, mode, lap, targets, bounds, reference, eye, ends_at):
                     return ("eof",)
                 try:
                     message = json.loads(line)
-                except ValueError:
+                except (ValueError, RecursionError):
                     prose("ignoring a line that is not JSON")
                     continue
                 command = message.get("cmd") if isinstance(message, dict) else None
@@ -2332,7 +2351,15 @@ def run_sweep(reader, mode, lap, targets, bounds, reference, eye, ends_at):
                     pass
         if proc is not None:
             kill_group(proc)
-        lock.__exit__(None, None, None)
+        if logger is not None:
+            try:
+                logger.stdin.close()    # a no-op once the child has it; ends `logger` if Popen failed
+            except OSError:
+                pass
+            logger.poll()
+        # Close, never unlock: LOCK_UN would release the lock for the child's copy of the
+        # same open file too. Closing only drops this process's hold.
+        os.close(lock.fd)
 
 
 def reader_next(reader):
@@ -2408,7 +2435,9 @@ def cmd_enroll_session(name):
             continue
         try:
             message = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):
+            # RecursionError: a line of 60,000 `[` is under MAX_LINE and nests too deep
+            # for the parser. It is a line that is not JSON, not the end of the session.
             prose("ignoring a line that is not JSON")
             continue
         if not isinstance(message, dict):
@@ -2463,7 +2492,13 @@ def cmd_enroll_session(name):
             target = person if person is not None else created
             if target is None:
                 raise Fatal("invalid_name")
-            label = check_label(message.get("appearance"))
+            try:
+                label = check_label(message.get("appearance"))
+            except Fatal:
+                # Every sweep failure is bad_sweep (plan-face-enroll.md section 6); `capture`
+                # keeps ending the session on a bad label, as it always did.
+                refuse("label")
+                continue
             labels = set(a["label"] for a in target["appearances"]) | set(captured)
             if label not in labels and len(labels) >= MAX_APPEARANCES:
                 raise Fatal("appearance_limit")
@@ -2681,7 +2716,11 @@ def main(argv):
             # One error shape per verb: a session reports on the stream, because
             # the GUI is parsing events and never a second document (§2.4).
             document = {"event": "error", "error": fatal.code}
-            document.update(fatal.extra)
+            # The code only: the record path in `extra` is a root-side detail, so it goes
+            # to the journal and not to the GUI's pipe (SR1 S4). Other verbs keep `file`.
+            if "file" in fatal.extra:
+                audit("enroll-session for %s: %s in %s" % (argv[1] if len(argv) > 1 else "?",
+                                                           fatal.code, fatal.extra["file"]))
         emit(document)
         return 1
     except Busy:
@@ -2770,8 +2809,18 @@ CODES = ("black_frames", "too_dark", "multiple_faces", "no_face", "timeout", "ca
          "changed", "sweep_stalled", "lap_timeout", "bad_sweep", "not_enough", "too_few")
 
 # --- what each use may take (plan-face-enroll.md 2b) ----------------------------
+# STORE_PY holds its own copy of the four numbers on the next two lines (it validates
+# records and clamps `set-limits` with them); dev/e1-enrol-sweep.sh asserts the two
+# copies are equal, so changing one without the other fails a test (SR1 m8).
 LOCK_TEMPLATES, SUDO_TEMPLATES = 12, 4
 LOCK_MAXIMUM, SUDO_MAXIMUM = 36, 12
+# Which stored templates Sudo may use. "centre": the centre of every appearance and
+# nothing else, which is Sudo's exposure before the sweep existed. "full": the pose
+# templates too, up to the Sudo cap and inside the Sudo band. Enrolment stores the whole
+# pose set whichever this says, so changing it needs no re-enrolment, only a new release
+# (pins and version) and a security re-review of the exposure with stranger data
+# (dev/README.md, "How to widen Sudo later"). Anything else counts as "centre".
+SUDO_POLICY = "centre"
 SUDO_R_MAX = 1.5
 SUDO_CENTRE = 0.40           # a sudo template stays this close to its centre
 LAP2_FAR, LAP2_NEAR = 0.8, 1.25
