@@ -12,6 +12,9 @@ The script is one directive per line:
 
     await <event> [seconds]   block until that event arrives (default 30 s)
     awaitany <a,b> [seconds]  block until any one of them arrives
+    awaitwhere <json> [seconds]  block until an event arrives that carries every
+                              key and value of that JSON object, e.g.
+                              {"event":"track","target":3}
     send <json>               one command line
     eof                       close stdin -- the only cancel (§2 rule 7)
     sleep <seconds>           wait, without sending anything
@@ -101,6 +104,23 @@ def main(argv):
                 print("EXIT timeout", flush=True)
                 proc.kill()
                 return 1
+        elif verb == "awaitwhere":
+            text, _, tail = rest.rpartition("}")
+            pattern = json.loads(text + "}")
+            seconds = float(tail.split()[0]) if tail.split() else 30.0
+            started = time.time()
+            ok = False
+            with seen:
+                while True:
+                    ok = any(all(event.get(k) == v for k, v in pattern.items()) for event in events)
+                    if ok or time.time() >= started + seconds:
+                        break
+                    seen.wait(0.05)
+            print("AWAIT %s %d" % (json.dumps(pattern, separators=(",", ":")), round((time.time() - started) * 1000)), flush=True)
+            if not ok:
+                print("EXIT timeout", flush=True)
+                proc.kill()
+                return 1
         elif verb == "send":
             try:
                 proc.stdin.write(rest.encode("utf-8") + b"\n")
@@ -119,6 +139,10 @@ def main(argv):
             proc.kill()
             return 2
 
+    try:
+        proc.stdin.close()      # a session that ended first has nothing to read it: say nothing
+    except (BrokenPipeError, ValueError, OSError):
+        pass
     try:
         code = proc.wait(timeout=60)
     except subprocess.TimeoutExpired:

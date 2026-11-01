@@ -1,0 +1,681 @@
+#!/bin/bash
+
+# E1's gate: the enrolment sweep through the REAL parent (`enroll-session`), with a fake
+# camera and a fake dlib (plan-face-enroll.md section 7, item 2).
+#
+#   ./dev/e1-enrol-sweep.sh
+#
+# In the same private user namespace the other suites use (tmpfs over /etc, /run,
+# /var/lib and /usr/lib/security, a uid 0 that owns nothing), howdy's directory gets a
+# stub recorders/video_capture.py that plays a SCRIPTED lap (dev/e1-frames.py: 400x400
+# numpy images, the landmarks, the face box and whose face it is) and a fake `dlib` is
+# bind-mounted over site-packages, as f3 --real does for the real one. cv2 and numpy are
+# the real ones, so the engine's own gates (darkness, saturation, sharpness, CLAHE) run on
+# real pixels. The camera also keeps a VIRTUAL clock (it patches time.monotonic in the
+# child, one 1/15 s step per frame), so a 60 s lap takes a second or two and every dwell,
+# grace, patience and ceiling is exact. Nothing but the sandbox is written: no person
+# is recorded on this machine, the camera is never opened, nothing is installed.
+#
+# What this cannot say: whether five landmarks measure a real head (dev/e0-pose.py has the
+# synthetic findings; Phase 0's recordings the real ones) or that real dlib behaves like
+# the fake. The protocol, the rules (L, P, F, table V), the allow-list and the bounds are
+# the real code.
+
+set -uo pipefail
+
+GREEN=$'\e[32m'; RED=$'\e[31m'; YELLOW=$'\e[33m'; DIM=$'\e[2m'; RESET=$'\e[0m'
+REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+ACCOUNT=${SUDO_USER:-${USER:-$(id -un)}}
+failures=0
+checks=0
+
+check() { # check <description> <command…>
+  local description=$1
+  shift
+  checks=$((checks + 1))
+  if "$@" >/dev/null 2>&1; then
+    echo "  ${GREEN}pass${RESET}  $description"
+  else
+    echo "  ${RED}FAIL${RESET}  $description"
+    failures=$((failures + 1))
+  fi
+}
+
+same() { # same <description> <expected> <actual>
+  checks=$((checks + 1))
+  if [[ $2 == "$3" ]]; then
+    echo "  ${GREEN}pass${RESET}  $1"
+  else
+    echo "  ${RED}FAIL${RESET}  $1 ${DIM}(expected '$2', got '$3')${RESET}"
+    failures=$((failures + 1))
+  fi
+}
+
+step() { echo; echo "${DIM}== $*${RESET}"; }
+
+# --- the sandbox ---------------------------------------------------------------
+
+if [[ ${OMARCHY_FACE_E1_IN_NS:-0} != 1 ]]; then
+  command -v unshare >/dev/null || { echo "unshare is not installed" >&2; exit 1; }
+  exec env OMARCHY_FACE_E1_IN_NS=1 OMARCHY_FACE_E1_ACCOUNT="$ACCOUNT" \
+    unshare --map-root-user --mount --pid --fork "$BASH" "$0"
+fi
+ACCOUNT=${OMARCHY_FACE_E1_ACCOUNT:-$ACCOUNT}
+
+mount --bind /etc /mnt || exit 1
+mount -t tmpfs tmpfs /etc || exit 1
+chmod 0755 /etc
+for real in /mnt/*; do ln -s "$real" "/etc/${real#/mnt/}"; done
+rm -f /etc/omarchy-face 2>/dev/null
+mkdir -p /etc/omarchy-face
+printf 'account=%s\nsudo=false\nlock=false\n' "$ACCOUNT" >/etc/omarchy-face/config
+mount -t tmpfs tmpfs /run || exit 1
+chmod 0755 /run
+mount -t proc proc /proc 2>/dev/null
+mkdir -p /run/real-var-lib
+mount --bind /var/lib /run/real-var-lib || exit 1
+mount -t tmpfs tmpfs /var/lib || exit 1
+chmod 0755 /var/lib
+for real in /run/real-var-lib/*; do
+  [[ ${real##*/} == omarchy-face* ]] && continue
+  ln -s "$real" "/var/lib/${real#/run/real-var-lib/}"
+done
+mount -t tmpfs tmpfs /usr/lib/security || exit 1
+chmod 0755 /usr/lib/security
+HOWDY=/usr/lib/security/howdy
+mkdir -p $HOWDY/models $HOWDY/recorders $HOWDY/dlib-data
+chmod 0755 $HOWDY
+chmod 0700 $HOWDY/models
+
+ADMIN=$REPO/system/omarchy-face-admin
+STUB=/run/omarchy-face-stub
+mkdir -p "$STUB"
+LAB=$(mktemp -d /run/e1.XXXXXX)
+STORE=/var/lib/omarchy-face
+PEOPLE=$STORE/people.json
+MODELS=$HOWDY/models
+
+echo "E1 — the enrolment sweep (plan-face-enroll.md section 7, item 2)"
+echo "${DIM}sandbox: uid $(id -u) in a user namespace; /etc /run /var/lib and /usr/lib/security are private to this run${RESET}"
+
+# howdy's config as the engine reads it, and the legacy `add`/`compare` stubs `capture` still uses
+cat >$HOWDY/config.ini <<'INI'
+[video]
+certainty = 3.5
+timeout = 5
+dark_threshold = 50
+max_height = 320
+device_path = /run/omarchy-face-stub/ir
+recording_plugin = opencv
+[core]
+use_cnn = false
+[debug]
+end_report = true
+INI
+: >"$STUB/ir"
+cat >$HOWDY/cli.py <<'PY'
+import json, os, sys
+args = sys.argv[1:]
+model = args[args.index("-U") + 1]
+encoding = [round(0.01 + index * 0.001, 6) for index in range(128)]
+path = os.path.abspath(__file__ + "/../models/" + model + ".dat")
+json.dump([{"time": 1789400000, "label": "Initial model", "id": 0, "data": [encoding]}], open(path, "w"))
+os.chmod(path, 0o600)
+PY
+cat >$HOWDY/compare.py <<'PY'
+import json, os, sys
+path = os.path.abspath(__file__ + "/../models/" + sys.argv[1] + ".dat")
+models = json.load(open(path))
+print("Certainty of winning frame: 2.800")
+print('Winning model: 0 ("%s")' % models[0]["label"])
+PY
+
+# The camera: plays $STUB/frames.json, one entry per read, on a virtual clock.
+cat >$HOWDY/recorders/video_capture.py <<'PY'
+import json, os, select, sys, time
+import cv2
+import numpy as np
+import dlib
+
+CONTROL = "/run/omarchy-face-stub"
+_now = [5000.0]
+time.monotonic = lambda: _now[0]          # the engine's clock is this camera's
+
+
+class _Internal:
+    def get(self, prop):
+        return 400
+
+
+class VideoCapture:
+    def __init__(self, config):
+        # Only the path the code under test hands over is opened; nothing is logged about it.
+        open(config.get("video", "device_path"), "rb").close()
+        launches = CONTROL + "/launches"
+        n = int(open(launches).read()) + 1 if os.path.exists(launches) else 1
+        open(launches, "w").write(str(n))
+        numbered = CONTROL + "/frames.%d.json" % n
+        self.frames = json.load(open(numbered if os.path.exists(numbered) else CONTROL + "/frames.json"))
+        self.index = 0
+        self.internal = _Internal()
+        self.fw = self.fh = 400
+
+    def release(self):
+        pass
+
+    def read_frame(self):
+        spec = self.frames[min(self.index, len(self.frames) - 1)]
+        if spec.get("hold") and self.index < len(self.frames):
+            select.select([0], [], [], 20)          # wait until a line is waiting on stdin
+        self.index += 1
+        _now[0] += spec["dt"]
+        time.sleep(0.001)
+        dlib.CURRENT = spec
+        rng = np.random.RandomState(self.index)
+        kind = spec["kind"]
+        gray = np.clip(rng.normal(110, 40, (400, 400)), 1, 253).astype(np.uint8)
+        if kind == "dark":
+            gray = rng.randint(0, 8, (400, 400)).astype(np.uint8)
+        elif kind == "sat":
+            gray[rng.random_sample((400, 400)) < 0.3] = 255
+        elif kind == "blur":
+            gray = cv2.GaussianBlur(gray, (0, 0), 25)
+        elif kind == "black":
+            gray = np.zeros((400, 400), np.uint8)
+        frame = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        return frame, gray
+PY
+
+# The fake dlib, bind-mounted over site-packages as f3 --real does for the real one.
+site=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+mkdir -p /run/real-site "$LAB/site"
+mount --bind "$site" /run/real-site || exit 1
+# A real dlib on this machine would win over the fake (a package beats a module), so
+# its entries are not linked.
+for entry in /run/real-site/*; do
+  case ${entry##*/} in dlib|dlib-*|dlib.*|_dlib*) continue ;; esac
+  ln -s "$entry" "$LAB/site/${entry##*/}"
+done
+cat >"$LAB/site/dlib.py" <<'PY'
+FAKE = True
+CURRENT = {}
+
+
+class _Rect:
+    def __init__(self, l, t, r, b):
+        self._v = (int(l), int(t), int(r), int(b))
+    def left(self): return self._v[0]
+    def top(self): return self._v[1]
+    def right(self): return self._v[2]
+    def bottom(self): return self._v[3]
+
+
+class _Part:
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+
+
+class _Shape:
+    def __init__(self, points):
+        self._p = points
+    def parts(self):
+        return [_Part(x, y) for x, y in self._p]
+
+
+def get_frontal_face_detector():
+    def detect(image, upsample):
+        f = image.shape[0] / 400.0
+        spec = CURRENT
+        boxes = [_Rect(*(v * f for v in spec["box"]))]
+        if spec["faces"] > 1:
+            boxes.append(_Rect(*((v + 30) * f for v in spec["box"])))
+        return boxes if spec["faces"] else []
+    return detect
+
+
+def shape_predictor(path):
+    return lambda image, rect: _Shape([(x * image.shape[0] / 400.0, y * image.shape[0] / 400.0)
+                                       for x, y in CURRENT["pts"]])
+
+
+class face_recognition_model_v1:
+    def __init__(self, path):
+        pass
+    def compute_face_descriptor(self, image, shape, jitter):
+        vector = [0.0] * 128
+        # one axis carries whose face it is; a hair of per-frame difference rides on another
+        vector[0] = CURRENT["who"]
+        vector[1] = 0.004 * (int(CURRENT["pts"][4][0] * 10) % 7)
+        return vector
+PY
+mount --bind "$LAB/site" "$site" || exit 1
+python3 -c 'import dlib; assert dlib.FAKE' || { echo "  ${RED}FAIL${RESET}  the fake dlib is not what imports"; exit 1; }
+
+# --- driving a session ---------------------------------------------------------
+
+scenario() { # scenario <name…>: one per launch of the engine (a second lap plays the second)
+  local n=0 name
+  rm -f "$STUB"/frames.*.json "$STUB/launches"
+  python3 "$REPO/dev/e1-frames.py" "$1" >"$STUB/frames.json"
+  for name in "$@"; do
+    n=$((n + 1))
+    python3 "$REPO/dev/e1-frames.py" "$name" >"$STUB/frames.$n.json"
+  done
+}
+
+session() { # session <name> <directive…>  -> the client's transcript
+  local name=$1
+  shift
+  printf '%s\n' "$@" >"$LAB/script"
+  python3 "$REPO/dev/enroll-client.py" "$LAB/script" -- "$ADMIN" enroll-session "$name" 2>&1 | tee -a "$LAB/all.log"
+}
+
+q() { # q <transcript> <python expression over evs, tracks, names>  -> JSON
+  python3 -c '
+import itertools, json, sys
+evs = [json.loads(l[3:]) for l in sys.stdin.read().splitlines() if l.startswith("EV ")]
+tracks = [e for e in evs if e.get("event") == "track"]
+def first(n): return next((e for e in evs if e.get("event") == n), None)
+def last(n): return next((e for e in reversed(evs) if e.get("event") == n), None)
+names = [k for k, _ in itertools.groupby(e.get("event") or "error:" + e.get("error", "") for e in evs)]
+print(json.dumps(eval(sys.argv[1]), separators=(",", ":")))' "$2" <<<"$1"
+}
+
+json_field() { python3 -c '
+import json, sys
+doc = json.load(open(sys.argv[1]))
+for key in sys.argv[2].split("."):
+    doc = doc[int(key)] if key.isdigit() else doc[key]
+print(json.dumps(doc))' "$@"; }
+
+SIMPLE='{"cmd":"sweep","appearance":"No glasses","mode":"simple","lap":1,"targets":[9,3,0,6]}'
+ALL12='[0,1,2,3,4,5,6,7,8,9,10,11]'
+ADV1='{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":1,"targets":'$ALL12'}'
+ADV2='{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":2,"targets":'$ALL12'}'
+CREATE='{"cmd":"create","label":"Emil"}'
+FINISH='{"cmd":"finish"}'
+DONE='{"cmd":"done"}'
+
+reset_store() { rm -rf "$STORE"/people "$STORE"/people.json "$MODELS"/omarchy-face.*.dat; }
+
+# E1_SHELL='command' runs one command in the sandbox with the helpers above, for debugging.
+if [[ -n ${E1_SHELL:-} ]]; then eval "$E1_SHELL"; exit; fi
+
+# =============================================================================
+
+step "ready names the verbs and the limits"
+reset_store
+scenario simple
+out=$(session emil "await ready 30" "eof")
+same "ready lists the verbs that exist (trial arrives with its phase)" '["capture","sweep","abort","finish"]' "$(q "$out" 'first("ready")["verbs"]')"
+same "ready carries the default limits" '{"lock":12,"sudo":4}' "$(q "$out" 'first("ready")["limits"]')"
+
+step "a full Simple run: centre, then 9, 3, 0, 6 in that order"
+reset_store
+scenario simple
+out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 90" "send $DONE" "await saved 30")
+echo "${DIM}$(grep -v '"event":"track"' <<<"$out" | head -8 | cut -c1-200)${RESET}"
+same "the events: ready, sweeping, track…, swept, saved" '["ready","sweeping","track","swept","saved"]' "$(q "$out" 'names')"
+same "sweeping echoes the targets and the quota, and carries no bins" '{"event":"sweeping","mode":"simple","lap":1,"targets":[9,3,0,6],"quota":2}' "$(q "$out" 'first("sweeping")')"
+same "the current target goes centre, 9, 3, 0, 6" '["centre",9,3,0,6]' "$(q "$out" '[k for k, _ in itertools.groupby(t["target"] for t in tracks) if k is not None]')"
+same "bins are non-zero only at 9, 3, 0, 6" '[0,3,6,9]' "$(q "$out" 'sorted({i for t in tracks for i, x in enumerate(t["bins"]) if x})')"
+same "swept: filled all four, none skipped, centre held, five kept" '{"event":"swept","mode":"simple","lap":1,"filled":[0,3,6,9],"skipped":[],"centreHeld":true,"kept":5}' "$(q "$out" 'first("swept")')"
+same "canFinish is in every track and turns true once the floor is met" 'true' "$(q "$out" 'any(t["canFinish"] for t in tracks) and not tracks[0]["canFinish"]')"
+same "the stored appearance is the centre plus four near templates a000 a090 a180 a270" '["a000","a090","a180","a270"]' "$(python3 -c '
+import json,sys
+print(json.dumps([e["pose"] for e in json.load(open(sys.argv[1]))["appearances"][0]["extra"]], separators=(",", ":")))' "$STORE/people/emil.json")"
+same "...all band near, support 2 or more, r in 0..4, 128 numbers" 'true' "$(python3 -c '
+import json,sys
+a = json.load(open(sys.argv[1]))["appearances"][0]
+print(json.dumps(all(e["band"] == "near" and e["support"] >= 2 and 0 <= e["r"] <= 4 and len(e["encoding"]) == 128 for e in a["extra"])))' "$STORE/people/emil.json")"
+same "people.json counts the templates: 5 in the appearance" '5' "$(json_field "$PEOPLE" people.0.appearances.0.templates)"
+check "people.json carries no encoding" bash -c "! grep -q encoding $PEOPLE"
+
+count_templates() { python3 -c '
+import json, sys
+a = json.load(open(sys.argv[1]))["appearances"][int(sys.argv[2])]
+print(1 + len(a.get("extra") or []))' "$@"; }
+no_child() { ! pgrep -f 'python3 -I -c' >/dev/null; }
+
+step "a full Advanced lap: all twelve, in clock order, ends by itself"
+reset_store
+scenario advanced
+out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 120" "send $DONE" "await saved 30")
+same "sweeping echoes all twelve targets ascending" '[0,1,2,3,4,5,6,7,8,9,10,11]' "$(q "$out" 'first("sweeping")["targets"]')"
+same "swept has twelve filled bins, no skipped list, thirteen templates kept" '{"event":"swept","mode":"advanced","lap":1,"filled":[0,1,2,3,4,5,6,7,8,9,10,11],"skipped":[],"centreHeld":true,"kept":13}' "$(q "$out" 'first("swept")')"
+same "the first track asks for the centre and canFinish is false" '["centre",false]' "$(q "$out" '[tracks[0]["target"], tracks[0]["canFinish"]]')"
+same "the record holds the centre and twelve near templates" '13' "$(count_templates "$STORE/people/emil.json" 0)"
+same "the lock set is capped at 12, labelled emil/No glasses for every template" '[12,["emil/No glasses"]]' "$(python3 -c '
+import json, sys
+m = json.load(open(sys.argv[1]))
+print(json.dumps([len(m), sorted({e["label"] for e in m})], separators=(",", ":")))' "$MODELS/omarchy-face.person.emil.dat")"
+check "each model entry holds exactly one encoding of 128 numbers (E8 attribution holds)" python3 -c '
+import json, sys
+m = json.load(open(sys.argv[1]))
+assert all(len(e["data"]) == 1 and len(e["data"][0]) == 128 for e in m)' "$MODELS/omarchy-face.person.emil.dat"
+same "the sudo set holds the centre only (r 1.6 is past the Sudo band)" '1' "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$MODELS/omarchy-face.sudo.$ACCOUNT.dat" 2>/dev/null || echo 1)"
+
+step "lap 2 at another distance, and a lap 2 by somebody else"
+reset_store
+scenario advanced lap2
+out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 120" "send $ADV2" "awaitwhere {\"event\":\"swept\",\"lap\":2} 120" "send $DONE" "await saved 30")
+same "lap 2 is swept with twelve bins and 25 templates kept, centre held" '{"event":"swept","mode":"advanced","lap":2,"filled":[0,1,2,3,4,5,6,7,8,9,10,11],"skipped":[],"centreHeld":true,"kept":25}' "$(q "$out" 'last("swept")')"
+same "lap 2 starts with the centre reported held" '[true,1.0]' "$(q "$out" '[t["centre"] == 1.0 for t in tracks[-1:]] + [tracks[-1]["centre"]]' | sed 's/\[true,/[true,/')"
+same "the record holds both bands: 12 near and 12 far" '[12,12]' "$(python3 -c '
+import json, sys
+a = json.load(open(sys.argv[1]))["appearances"][0]["extra"]
+print(json.dumps([sum(e["band"] == "near" for e in a), sum(e["band"] == "far" for e in a)], separators=(",", ":")))' "$STORE/people/emil.json")"
+reset_store
+scenario advanced lap2-other
+out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 120" "send $ADV2" "awaitwhere {\"event\":\"capture_failed\",\"code\":\"changed\"} 120" "send $DONE" "eof")
+same "a second identity in lap 2 is 'changed', which takes the whole appearance's set with it" '["changed","bad_sweep"]' "$(q "$out" '[c["code"] for c in evs if c.get("event") == "capture_failed"]')"
+check "...so nothing is stored, and done in the ready state is refused" bash -c "[[ ! -e $STORE/people/emil.json ]]"
+reset_store
+scenario advanced hold-first
+out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 120" "send $ADV2" "awaitwhere {\"event\":\"sweeping\",\"lap\":2} 30" "send {\"cmd\":\"abort\"}" "await aborted 30" "send $DONE" "await saved 30")
+same "an aborted lap 2 keeps lap 1 (table V): the session is in swept and done saves its thirteen" '13' "$(count_templates "$STORE/people/emil.json" 0)"
+
+step "Simple's order is the engine's"
+reset_store
+scenario simple-wrong
+out=$(OMARCHY_FACE_SWEEP_SECONDS=20 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
+same "a steady head in the wrong wedge (6) fills nothing while 9 is current" 'true' "$(q "$out" 'all(t["bins"][6] == 0 for t in tracks if t["target"] == 9)')"
+same "the target stays 9 until the engine skips it, and the skip is announced in track.skipped" 'true' "$(q "$out" 'any(9 in t["skipped"] for t in tracks) and tracks[-1]["target"] in (9, 3)')"
+same "nothing held at the ceiling is too_few" '"too_few"' "$(q "$out" 'last("capture_failed")["code"]')"
+reset_store
+scenario simple-sweep-through
+out=$(OMARCHY_FACE_SWEEP_SECONDS=20 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
+same "a head sweeping through the wedges without a hold fills nothing" '[true,"too_few"]' "$(q "$out" '[all(max(t["bins"]) < 1.0 for t in tracks), last("capture_failed")["code"]]')"
+scenario simple-grace
+out=$(OMARCHY_FACE_SWEEP_SECONDS=20 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
+same "0.5 s out of the wedge resets the dwell: progress rises, falls to 0, rises again" 'true' "$(q "$out" '(lambda v: (lambda d: len(d) >= 1 and any(v[i] > v[i - 1] for i in range(d[0] + 1, len(v))))([i for i in range(1, len(v)) if v[i] == 0 and v[i - 1] > 0]))([t["bins"][9] for t in tracks if t["target"] == 9])')"
+
+step "patience, resolved targets, and the ceiling (rules P and L)"
+reset_store
+scenario simple-two
+out=$(OMARCHY_FACE_SWEEP_SECONDS=60 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
+same "two skipped plus two filled ends swept, the skipped listed, three templates kept" '{"event":"swept","mode":"simple","lap":1,"filled":[3,9],"skipped":[0,6],"centreHeld":true,"kept":3}' "$(q "$out" 'first("swept")')"
+same "...and the saved appearance has three templates" '3' "$(count_templates "$STORE/people/emil.json" 0)"
+reset_store
+scenario simple-one
+out=$(OMARCHY_FACE_SWEEP_SECONDS=60 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\",\"code\":\"too_few\"} 120" "send $DONE" "eof")
+same "three skipped plus one filled ends too_few" '["too_few","bad_sweep"]' "$(q "$out" '[c["code"] for c in evs if c.get("event") == "capture_failed"][:2]')"
+check "...and nothing is stored, and done after a dropped lap is refused" bash -c "[[ ! -e $STORE/people/emil.json ]]"
+reset_store
+scenario simple-three
+out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
+same "at the ceiling with three filled and one unresolved the lap saves, listing the unresolved as skipped" '{"event":"swept","mode":"simple","lap":1,"filled":[0,3,9],"skipped":[6],"centreHeld":true,"kept":4}' "$(q "$out" 'first("swept")')"
+reset_store
+scenario simple-one
+out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
+same "at the ceiling with one filled it is too_few" '"too_few"' "$(q "$out" 'last("capture_failed")["code"]')"
+reset_store
+scenario no-centre
+out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
+same "a centre that is never held is lap_timeout" '"lap_timeout"' "$(q "$out" 'last("capture_failed")["code"]')"
+reset_store
+scenario black
+out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
+same "...and all-black frames are named black_frames" '"black_frames"' "$(q "$out" 'last("capture_failed")["code"]')"
+
+step "finish: below the floor it is not_enough and the lap goes on; at it the lap ends"
+reset_store
+scenario fin-before
+out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"track\",\"target\":9} 60" "sleep 1.5" "send $FINISH" "awaitwhere {\"event\":\"capture_failed\",\"code\":\"not_enough\"} 60" "awaitwhere {\"event\":\"track\",\"canFinish\":true} 60" "send $FINISH" "await swept 60" "send $DONE" "await saved 30")
+same "a finish read one frame before the fill gives not_enough, and the lap continues" '["not_enough",true]' "$(q "$out" '[[c["code"] for c in evs if c.get("event") == "capture_failed"][0], any(t["canFinish"] for t in tracks)]')"
+same "...then a finish at the floor ends the lap keeping what is held: four bins" '[0,3,6,9]' "$(q "$out" 'first("swept")["filled"]')"
+reset_store
+scenario fin-after
+out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"track\",\"target\":9} 60" "sleep 1.5" "send $FINISH" "await swept 60" "send $DONE" "await saved 30")
+same "a finish read after the frame that filled the fourth bin counts it (frame order): swept at once, no not_enough" '[[0,3,6,9],false]' "$(q "$out" '[first("swept")["filled"], any(c.get("code") == "not_enough" for c in evs)]')"
+same "a finish in ready, in swept, and after a failed sweep validation is ignored (no event)" '0' "$(out=$(session emil "await ready 30" "send $FINISH" "send {\"cmd\":\"abort\"}" "send {\"cmd\":\"sweep\",\"mode\":\"x\"}" "send $FINISH" "await capture_failed 20" "eof"); q "$out" 'len([e for e in evs if e.get("code") == "not_enough"])')"
+
+step "bad_sweep: every refusal comes through the real parent and the session carries on"
+reset_store
+scenario simple
+bad=(
+  '{"cmd":"sweep","appearance":"No glasses","mode":"simple","lap":1,"targets":[3,9,0,6]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"simple","lap":1,"targets":[9,3,0]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"simple","lap":2,"targets":[9,3,0,6]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":1,"targets":[0,1,2,3]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":1,"targets":[]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":1,"targets":[0,0,0,0,0,0,0,0,0,0,0,0]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":1,"targets":[true,1,2,3,4,5,6,7,8,9,10,11]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":1,"targets":[0.0,1,2,3,4,5,6,7,8,9,10,11]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":1,"targets":["0",1,2,3,4,5,6,7,8,9,10,11]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":1,"targets":[null,1,2,3,4,5,6,7,8,9,10,11]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":1,"targets":[0,1,2,3,4,5,6,7,8,9,10,12]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":1,"targets":[0,1,2,3,4,5,6,7,8,9,10,-1]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":2,"targets":[0,1,2,3,4,5,6,7,8,9,10,11]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":0,"targets":[0,1,2,3,4,5,6,7,8,9,10,11]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":true,"targets":[0,1,2,3,4,5,6,7,8,9,10,11]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":NaN,"targets":[0,1,2,3,4,5,6,7,8,9,10,11]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":1e400,"targets":[0,1,2,3,4,5,6,7,8,9,10,11]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"lap","lap":1,"targets":[0,1,2,3,4,5,6,7,8,9,10,11]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"","lap":1,"targets":[]}'
+  '{"cmd":"sweep","appearance":"No glasses","lap":1,"targets":[9,3,0,6]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"simple","lap":1,"targets":[9,3,0,Infinity]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"usual","lap":1,"targets":[3]}'
+  '{"cmd":"sweep","appearance":"No glasses","mode":"usual","lap":1}'
+  '{"cmd":"trial","appearance":"No glasses"}'
+)
+script=("await ready 30" "send $CREATE")
+for line in "${bad[@]}"; do script+=("send $line"); done
+script+=("send $SIMPLE" "send $SIMPLE" "await swept 120" "send {\"cmd\":\"capture\",\"appearance\":\"No glasses\"}" "send {\"cmd\":\"sweep\",\"appearance\":\"No glasses\",\"mode\":\"simple\",\"lap\":2,\"targets\":[9,3,0,6]}" "send {\"cmd\":\"trial\",\"appearance\":\"No glasses\"}" "send $FINISH" "send {\"cmd\":\"abort\"}" "send $DONE" "await saved 30")
+out=$(session emil "${script[@]}")
+same "${#bad[@]} refused sweeps, the capture after a sweep, a sweep while one runs, a lap 2 and a trial after a Simple set: all bad_sweep" "$(( ${#bad[@]} + 4 ))" "$(q "$out" 'len([e for e in evs if e.get("event") == "capture_failed" and e.get("code") == "bad_sweep"])')"
+same "...and the sweep that follows them all runs: exactly one sweeping, one swept, saved" '[1,1,1]' "$(q "$out" '[len([e for e in evs if e.get("event") == n]) for n in ("sweeping", "swept", "saved")]')"
+check "a bad sweep starts no child (no sweeping before the valid one; nothing left running)" no_child
+
+step "a second identity: changed, and nothing from that lap is stored"
+reset_store
+scenario simple-changed
+out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\",\"code\":\"changed\"} 120" "send $DONE" "eof")
+same "five consecutive other-person frames give changed (and the done that follows is refused)" '["changed","bad_sweep"]' "$(q "$out" '[c["code"] for c in evs if c.get("event") == "capture_failed"]')"
+check "...nothing is stored" bash -c "[[ ! -e $STORE/people/emil.json ]]"
+scenario simple-stray
+out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 60" "eof")
+same "one stray frame of somebody else does not end the lap" '[0,3,6,9]' "$(q "$out" 'first("swept")["filled"]')"
+
+step "frames that must yield no template"
+reset_store
+scenario advanced-faults
+out=$(OMARCHY_FACE_SWEEP_SECONDS=60 session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"track\",\"canFinish\":true} 120" "send $FINISH" "await swept 60" "send $DONE" "await saved 30")
+same "dark, saturated, blurry, tiny, huge, two-face, moving and one-off frames fill nothing; the clean four do" '[0,3,6,9]' "$(q "$out" 'first("swept")["filled"]')"
+same "the engine named the faults (dark, blurry, closer, farther, multiple, hold, over/edge words are the gates')" 'true' "$(q "$out" '{"dark", "blurry", "closer", "farther", "multiple"} <= {t["state"] for t in tracks}')"
+
+step "Advanced stall, abort, and nothing left running"
+reset_store
+scenario advanced-idle
+out=$(OMARCHY_FACE_SWEEP_SECONDS=30 session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"capture_failed\",\"code\":\"sweep_stalled\"} 120" "send {\"cmd\":\"abort\"}" "await aborted 30" "send $ADV1" "awaitwhere {\"event\":\"capture_failed\",\"code\":\"sweep_stalled\"} 60" "eof")
+same "20 s without a new supported frame is sweep_stalled and the lap continues until abort" '["sweep_stalled","aborted"]' "$(q "$out" '[c["code"] for c in evs if c.get("code") == "sweep_stalled"][:1] + ["aborted" if first("aborted") else "no"]')"
+same "after aborted the session is usable: a second sweep ran (two sweeping events)" '2' "$(q "$out" 'len([e for e in evs if e.get("event") == "sweeping"])')"
+same "...and the transcript ends discarded (nothing was written)" '"discarded"' "$(q "$out" 'evs[-1]["event"]')"
+sleep 2
+check "no engine child outlives an abort or an EOF" no_child
+scenario simple-wrong-long
+out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"track\",\"target\":9} 60" "eof")
+sleep 2
+check "EOF in the middle of a lap kills the child within 2 s" no_child
+same "...and writes nothing" '"discarded"' "$(q "$out" 'evs[-1]["event"]')"
+check "...no person is stored" bash -c "[[ ! -e $STORE/people/emil.json ]]"
+
+step "Start over replaces the pending set; a legacy capture works until the first sweep"
+reset_store
+scenario simple advanced
+out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $ADV1" "awaitwhere {\"event\":\"swept\",\"kept\":13} 120" "send $DONE" "await saved 30")
+same "a Simple lap 1 followed by an Advanced lap 1 leaves one set of 13 (replaced, not 18)" '13' "$(count_templates "$STORE/people/emil.json" 0)"
+reset_store
+out=$(session emil "await ready 30" "send $CREATE" 'send {"cmd":"capture","appearance":"No glasses"}' "await captured 60" "send $DONE" "await saved 30")
+same "capture is still the old single frame: ready capturing captured saved" '["ready","capturing","captured","saved"]' "$(q "$out" 'names')"
+same "...and the stored appearance has no extra" '1' "$(count_templates "$STORE/people/emil.json" 0)"
+
+step "Rule R: Simple may not replace a larger stored set"
+reset_store
+scenario simple
+session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30" >/dev/null
+out=$(session emil "await ready 30" "send $SIMPLE" "await swept 60" "eof")
+same "five stored templates: a Simple re-scan is accepted" 'true' "$(q "$out" 'first("swept") is not None')"
+scenario advanced
+session emil "await ready 30" "send $ADV1" "await swept 120" "send $DONE" "await saved 30" >/dev/null
+scenario simple
+out=$(session emil "await ready 30" "send $SIMPLE" "await capture_failed 30" "eof")
+same "thirteen stored templates: Simple is bad_sweep" '"bad_sweep"' "$(q "$out" 'first("capture_failed")["code"]')"
+same "...and the person's record is untouched (13)" '13' "$(count_templates "$STORE/people/emil.json" 0)"
+
+step "limits: set-limits changes what is used, without re-enrolment"
+out=$("$ADMIN" set-limits emil 3 3 2>&1)
+same "set-limits answers ok with the new counts" '[3,1]' "$(python3 -c '
+import json, sys
+p = json.loads(sys.argv[1])["person"]
+print(json.dumps([p["lockTemplates"], p["sudoTemplates"]], separators=(",", ":")))' "$out")"
+same "...and the person's model holds three templates, from the same record" '3' "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$MODELS/omarchy-face.person.emil.dat")"
+"$ADMIN" set-limits emil 12 4 >/dev/null 2>&1
+same "back to 12 and 4: thirteen stored, twelve in the lock set" '12' "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$MODELS/omarchy-face.person.emil.dat")"
+for bad in "2 4" "12 13" "37 4" "a 4" "12" ""; do
+  out=$("$ADMIN" set-limits emil $bad 2>&1)
+  same "set-limits emil $bad is refused" '{"error":"bad_arguments"}' "$out"
+done
+same "limits are in the record, and no encoding in people.json" '{"lock": 12, "sudo": 4}' "$(json_field "$STORE/people/emil.json" limits)"
+fp1=$(sha256sum "$MODELS"/omarchy-face.*.dat "$PEOPLE" | sort)
+"$ADMIN" regenerate >/dev/null 2>&1
+same "regenerate is byte-identical (the derived sets and people.json)" "$fp1" "$(sha256sum "$MODELS"/omarchy-face.*.dat "$PEOPLE" | sort)"
+
+step "the session bound: a sweep outlives 300 s to 600 and no further (scaled by OMARCHY_FACE_SESSION_SECONDS)"
+reset_store
+scenario hold-first
+start=$(date +%s)
+out=$(OMARCHY_FACE_SESSION_SECONDS=4 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "sleep 5.5" 'send {"cmd":"abort"}' "await aborted 30" "eof")
+same "a session of 4 s lives on past 4 s once a sweep runs (it answered abort at 5.5 s)" 'true' "$(q "$out" 'first("aborted") is not None')"
+out=$(OMARCHY_FACE_SESSION_SECONDS=4 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "sleep 9.5" 'send {"cmd":"abort"}' "await discarded 30")
+same "...and is over at twice that: the abort at 9.5 s finds a discarded session" 'false' "$(q "$out" 'first("aborted") is not None')"
+sleep 1
+check "...with the child gone" no_child
+
+step "the typed allow-list and the test override, as code (STORE_PY loaded without its main)"
+cat >"$LAB/unit.py" <<'PY'
+import json, os, re, sys
+text = open(sys.argv[1]).read()
+store = re.search(r"read -r -d '' STORE_PY <<'STORE_PY_END' \|\| true\n(.*?)\nSTORE_PY_END\n", text, re.S).group(1)
+sweep = re.search(r"read -r -d '' SWEEP_PY <<'SWEEP_PY_END' \|\| true\n(.*?)\nSWEEP_PY_END\n", text, re.S).group(1)
+os.environ["OMARCHY_FACE_SWEEP_PY"] = sweep + "\n"
+ns = {"__name__": "store_unit"}
+exec(compile(store.rsplit("\nsys.exit(main", 1)[0], "STORE_PY", "exec"), ns)
+bad = []
+def check(name, ok):
+    if not ok:
+        bad.append(name)
+t = ns["typed_event"]
+good_track = {"event": "track", "state": "hold", "u": 0.1, "v": -1.2, "target": 9, "centre": 1.0,
+              "bins": [0.0] * 12, "skipped": [], "canFinish": False}
+check("a good track passes", t(good_track) == good_track)
+check("sweeping passes", t({"event": "sweeping", "mode": "simple", "lap": 1, "targets": [9, 3, 0, 6], "quota": 2}) is not None)
+check("swept passes", t({"event": "swept", "mode": "advanced", "lap": 2, "filled": [0, 1], "skipped": [], "centreHeld": True, "kept": 3}) is not None)
+check("capture_failed with each of the twelve codes passes",
+      all(t({"event": "capture_failed", "code": c}) for c in ns["pure"]()["CODES"]))
+for name, doc in [
+    ("a planted key", dict(good_track, encoding=[0.0] * 128)),
+    ("a path", dict(good_track, path="/dev/video2")),
+    ("a bool where a number belongs", dict(good_track, u=True)),
+    ("NaN", dict(good_track, v=float("nan"))),
+    ("Infinity", dict(good_track, centre=float("inf"))),
+    ("1e400", dict(good_track, u=json.loads("1e400"))),
+    ("a huge int", dict(good_track, u=10 ** 400)),
+    ("u out of range", dict(good_track, u=4.1)),
+    ("bins of 13", dict(good_track, bins=[0.0] * 13)),
+    ("a bin out of range", dict(good_track, bins=[0.0] * 11 + [1.5])),
+    ("a string for canFinish", dict(good_track, canFinish="true")),
+    ("target 12", dict(good_track, target=12)),
+    ("target True", dict(good_track, target=True)),
+    ("an unknown state", dict(good_track, state="ok")),
+    ("a repeat in filled", {"event": "swept", "mode": "simple", "lap": 1, "filled": [1, 1], "skipped": [], "centreHeld": True, "kept": 3}),
+    ("lap True", {"event": "sweeping", "mode": "simple", "lap": True, "targets": [9], "quota": 2}),
+    ("a code that is not one of the twelve", {"event": "capture_failed", "code": "ok"}),
+    ("an event name that is not a sweep event", {"event": "saved"}),
+    ("no event", {"state": "hold"}),
+]:
+    check(name + " is dropped", t(doc) is None)
+check("dumping NaN is refused outright (allow_nan=False)", not any(
+    "NaN" in json.dumps(g, allow_nan=False) for g in [good_track]))
+# the override: only lowers, ignores junk, and is never read by root of the machine
+base = ns["sweep_bounds"]()
+check("no override: the plan's bounds", base == {"simple": 60.0, "advanced": 90.0, "patience": 10.0, "lead": 3.0, "stall": 20.0})
+for asked in ("1e9", "NaN", "inf", "-1", "-inf", "0", "abc", ""):
+    os.environ["OMARCHY_FACE_SWEEP_SECONDS"] = asked
+    check("OMARCHY_FACE_SWEEP_SECONDS=%r lengthens nothing" % asked, ns["sweep_bounds"]() == base)
+os.environ["OMARCHY_FACE_SWEEP_SECONDS"] = "5"
+check("5 lowers every bound to at most 5", all(v <= 5 for v in ns["sweep_bounds"]().values()) and ns["sweep_bounds"]()["lead"] == 3.0)
+ns["real_root"] = lambda: True
+check("root of the machine never reads it", ns["sweep_bounds"]() == base)
+# warning_for is per person
+pure = ns["pure"]()
+def person(count, cap):
+    extra = [{"pose": "a%03d" % (30 * k), "band": "near", "time": 1, "r": 1.0, "support": 2, "encoding": [0.0] * 128} for k in range(count)]
+    return {"sudo": True, "limits": {"lock": 12, "sudo": cap}, "appearances": [{"label": "A", "time": 1, "encoding": [0.0] * 128, "extra": extra}]}
+check("default four: no warning for six templates a person holds", ns["warning_for"]([person(6, 4)]) is None)
+check("a deliberate cap of 8 with eight in effect warns", ns["warning_for"]([person(9, 8)]) is not None)
+check("five people with Sudo and one template each: no warning", ns["warning_for"]([person(0, 4)] * 5) is None)
+# the stored shapes
+def record(extra=None, limits=None):
+    a = {"label": "A", "time": 1, "encoding": [0.0] * 128}
+    if extra is not None:
+        a["extra"] = extra
+    doc = {"name": "emil", "label": "E", "owner": True, "sudo": True, "lock": False, "created": 1, "appearances": [a]}
+    if limits is not None:
+        doc["limits"] = limits
+    return doc
+def ok(doc):
+    try:
+        ns["validate_record"]("/x/emil.json", doc)
+        return True
+    except ns["Fatal"]:
+        return False
+one = {"pose": "a090", "band": "near", "time": 1, "r": 1.3, "support": 2, "encoding": [0.0] * 128}
+check("an old record (no extra, no limits) is valid", ok(record()))
+check("a good extra and good limits are valid", ok(record([one], {"lock": 12, "sudo": 4})))
+for name, doc in [
+    ("27 extras", record([dict(one, pose="a%03d" % (30 * (i % 12)), band=("near", "far", "usual")[i // 12 % 3]) for i in range(27)])),
+    ("a pose that is not a bin", record([dict(one, pose="a095")])),
+    ("a pose from client text", record([dict(one, pose="../../etc")])),
+    ("a bad band", record([dict(one, band="usual2")])),
+    ("usual with a bin pose", record([dict(one, band="usual")])),
+    ("support 1", record([dict(one, support=1)])),
+    ("support True", record([dict(one, support=True)])),
+    ("r 5", record([dict(one, r=5)])),
+    ("r NaN", record([dict(one, r=float("nan"))])),
+    ("an encoding of 127", record([dict(one, encoding=[0.0] * 127)])),
+    ("an encoding with a string", record([dict(one, encoding=["x"] + [0.0] * 127)])),
+    ("a repeated slot", record([one, one])),
+    ("limits {lock:2}", record(limits={"lock": 2, "sudo": 4})),
+    ("limits sudo 13", record(limits={"lock": 12, "sudo": 13})),
+    ("limits lock 37", record(limits={"lock": 37, "sudo": 4})),
+    ("limits with a third key", record(limits={"lock": 12, "sudo": 4, "x": 1})),
+    ("limits as floats", record(limits={"lock": 12.0, "sudo": 4})),
+    ("limits True", record(limits={"lock": True, "sudo": 4})),
+]:
+    check(name + " is refused by validate_record", not ok(doc))
+print("\n".join(bad) if bad else "ALL OK")
+sys.exit(1 if bad else 0)
+PY
+unit=$(python3 -I "$LAB/unit.py" "$ADMIN" 2>&1)
+same "typed_event, sweep_bounds, warning_for and validate_record: every case in the unit" "ALL OK" "$unit"
+
+step "nothing that is an encoding, a frame or a path reached any client"
+check "no list of 100 or more numbers appears in any transcript of this run" bash -c "! grep -qE '\[(-?[0-9.e-]+,){100,}' '$LAB/all.log'"
+grep -B3 -A8 'Traceback' "$LAB/all.log" | head -24 | cut -c1-200
+check "no /dev path appears in any transcript" bash -c "! grep -q '/dev/' '$LAB/all.log'"
+check "every event line of every transcript is one of the plan's event names" python3 - "$LAB/all.log" <<'PY'
+import json, sys
+allowed = {"ready", "capturing", "captured", "capture_failed", "sweeping", "track", "swept", "aborted", "saved", "discarded", "error"}
+for line in open(sys.argv[1]):
+    if line.startswith("EV "):
+        assert json.loads(line[3:]).get("event") in allowed, line
+PY
+
+echo
+if ((failures == 0)); then
+  echo "${GREEN}e1: $checks checks, all passed${RESET}"
+else
+  echo "${RED}e1: $checks checks, $failures failed${RESET}"
+fi
+exit $((failures > 0))

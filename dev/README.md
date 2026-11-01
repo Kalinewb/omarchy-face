@@ -780,3 +780,34 @@ unimportable. It ends with the synthetic model's own coupling and noise as
 "findings"; they are not measurements, and Phase 0's recordings replace them.
 Mutating a boundary in `SWEEP_PY` makes it fail, which is the evidence it tests
 anything.
+
+The sequencer joined it in Phase 2: `valid_sweep` and table V's `verb_allowed`, the wedge, dwell
+and grace, rule P's patience with its high-water mark, rule L's `can_finish`, `lap_ended` and
+`lap_result`, plain physical turns (the finding that a yaw-only 20 degree turn reads bin 4 is
+asserted, and the synthetic `pose_decouple` fixes it), `over`, and the smoothed steadiness of rule J
+(the smallest `STEADY_STEP` that reaches 80% at 0.25 and 0.5 px of jitter is printed as a finding).
+The text splits at `# ==== THE CAPTURE HALF`: the part above is pure (math and sys, no I/O) and is
+all the store program ever executes; the part below is the camera child, importing dlib, cv2 and
+numpy only inside `run()`.
+
+### E1 — the sweep through the real parent
+
+```sh
+./dev/e1-enrol-sweep.sh
+```
+
+The real `enroll-session` and the real child, in the usual private namespace, with a fake camera
+and a fake dlib. `dev/e1-frames.py` writes scripted laps (a head moving to each bin, held, with a
+second identity, faults, a second distance); the stub `video_capture.py` plays them as real numpy
+images, so the engine's own darkness, saturation and sharpness gates run, and keeps a **virtual
+clock** (it patches `time.monotonic` in the child), so a 60 s lap is a second or two and every
+dwell, grace, patience and ceiling is exact. A real dlib on the machine is not linked into the
+sandbox (the fake would lose to it). `OMARCHY_FACE_SWEEP_SECONDS` lowers the ceilings for the
+ceiling and patience cases; the helper ignores it as root of the machine. Cases: both modes end to
+end, order and patience, rule L's ends and the ceiling, `finish` and its race, table V and every
+`bad_sweep`, `changed`, abort and EOF killing the child, Start over, rule R, `set-limits`, the
+session bound, and the typed allow-list and the stored shapes as code.
+
+It cannot say that five landmarks measure a real head, or that real dlib behaves like the fake;
+that is `dev/enrol-record.py` and Phase 0. Do not edit the script while it runs: bash reads it as it goes.
+`E1_SHELL='command' ./dev/e1-enrol-sweep.sh` runs one command in the sandbox with the helpers loaded.

@@ -2538,6 +2538,9 @@ def cmd_enroll_session(name):
                 else:
                     state = "swept"
 
+        elif command == "trial":
+            refuse("trial is not in this release")
+
         elif command in ("finish", "abort"):
             # nothing is running: ignored (table V)
             prose("ignoring %s: nothing is running" % command)
@@ -3565,7 +3568,7 @@ def run(mode, lap, targets, bounds, reference, ref_eye):
             clamp = lambda x: round(max(-4.0, min(4.0, x)), 3)
             say({"event": "track", "state": word or ACCEPTED_WORD, "u": clamp(u_out), "v": clamp(v_out),
                  "target": target, "centre": round(centre_prog, 2),
-                 "bins": track_bins(targets, dict(prog, **{k: 1.0 for k in filled})),
+                 "bins": track_bins(targets, {**prog, **{k: 1.0 for k in filled}}),
                  "skipped": sorted(skipped), "canFinish": can_finish(mode, centre_held, filled)})
             last_emit, last_key = now, key
 
