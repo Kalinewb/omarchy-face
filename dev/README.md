@@ -849,3 +849,38 @@ session bound, and the typed allow-list and the stored shapes as code.
 It cannot say that five landmarks measure a real head, or that real dlib behaves like the fake;
 that is `dev/enrol-record.py` and Phase 0. Do not edit the script while it runs: bash reads it as it goes.
 `E1_SHELL='command' ./dev/e1-enrol-sweep.sh` runs one command in the sandbox with the helpers loaded.
+
+The SR1 fixes (3.1.0) are in it too: the parent refusing a stranger's template or an out-of-range
+`r` from a child whose guard has been broken on purpose (patched copies of the helper), the
+child's stderr never reaching the client, the child holding the camera lock, a 60,000-bracket
+line, a bad label, a corrupt record's error carrying no path, the session bound no longer
+lengthened by a sweep, and the two copies of the template caps being equal.
+
+### How to widen Sudo later
+
+Sudo uses the **centre** of every appearance and nothing else (`SUDO_POLICY = "centre"` in the
+constants block of `SWEEP_PY`, `system/omarchy-face-admin`). Enrolment stores the whole pose set
+whichever word is set, so widening needs **no re-enrolment**: the records, `validate_record`, the
+caps, `set-limits` and Lock do not change. `ready` and `people.json` carry `sudoPolicy` (a plain
+word) so a view can say which is active.
+
+To widen it:
+
+1. **SR1 re-reviews the exposure first**, with the Phase 0 stranger data
+   (`dev/enrol-record.py --stranger`; plan-face-enroll.md 2b: N = 12 within twice the N = 3
+   rate, no stranger frame under 0.35 in the Sudo set). `CHAIN` 0.40, `HARD` 0.55 and
+   `SUDO_CENTRE` 0.40 are all above the 0.35 threshold and uncalibrated until then. Do not flip
+   it on the strength of this file.
+2. Change the one line: `SUDO_POLICY = "full"`. `pick` then gives Sudo the plan's rule: the
+   centres, then pose templates in bit-reversal order, `r <= 1.5`, within `SUDO_CENTRE` of the
+   centre, up to the Sudo cap (default 4). `warning_for` then counts those and can fire again.
+3. That edits `system/omarchy-face-admin`, a pinned file: bump the version in the ten pinned
+   files and `common/Ask.qml`, run `dev/update-pins.sh`, make `dev/check-pins.sh` exit 0, tag.
+   (The version bump is what makes Setup offer "Update Face's system files"; nothing else
+   changes the installed helper.) The new helper rewrites the derived sets on the next
+   `regenerate`, so run it (or any store change) after the update.
+4. Re-test: `dev/e0-pose.py`, `dev/e1-enrol-sweep.sh` (its unit step runs `pick` under both
+   words on the same record and checks that both validate), `dev/f3-people-store.sh`,
+   `dev/f4-sudo-pam.sh`, `dev/f5-daemon.sh`, then a real sudo with a head turned.
+
+Going back is the same one line.

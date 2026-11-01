@@ -309,6 +309,7 @@ scenario simple
 out=$(session emil "await ready 30" "eof")
 same "ready lists the verbs that exist (trial arrives with its phase)" '["capture","sweep","abort","finish"]' "$(q "$out" 'first("ready")["verbs"]')"
 same "ready carries the default limits" '{"lock":12,"sudo":4}' "$(q "$out" 'first("ready")["limits"]')"
+same "ready says which stored templates Sudo may use (the policy, a plain word)" '"centre"' "$(q "$out" 'first("ready")["sudoPolicy"]')"
 
 step "a full Simple run: centre, then 9, 3, 0, 6 in that order"
 reset_store
@@ -330,6 +331,11 @@ a = json.load(open(sys.argv[1]))["appearances"][0]
 print(json.dumps(all(e["band"] == "near" and e["support"] >= 2 and 0 <= e["r"] <= 4 and len(e["encoding"]) == 128 for e in a["extra"])))' "$STORE/people/emil.json")"
 same "people.json counts the templates: 5 in the appearance" '5' "$(json_field "$PEOPLE" people.0.appearances.0.templates)"
 check "people.json carries no encoding" bash -c "! grep -q encoding $PEOPLE"
+same "people.json names the Sudo policy" '"centre"' "$(json_field "$PEOPLE" sudoPolicy)"
+same "...and Sudo uses one template of the five (the centre), Lock all five" '[1,5]' "$(python3 -c '
+import json, sys
+p = json.load(open(sys.argv[1]))["people"][0]
+print(json.dumps([p["sudoTemplates"], p["lockTemplates"]], separators=(",", ":")))' "$PEOPLE")"
 
 count_templates() { python3 -c '
 import json, sys
@@ -353,7 +359,7 @@ check "each model entry holds exactly one encoding of 128 numbers (E8 attributio
 import json, sys
 m = json.load(open(sys.argv[1]))
 assert all(len(e["data"]) == 1 and len(e["data"][0]) == 128 for e in m)' "$MODELS/omarchy-face.person.emil.dat"
-same "the sudo set holds the centre only (r 1.6 is past the Sudo band)" '1' "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$MODELS/omarchy-face.sudo.$ACCOUNT.dat" 2>/dev/null || echo 1)"
+same "the sudo set holds the centre only (SUDO_POLICY centre; r 1.6 is also past the Sudo band)" '1' "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$MODELS/omarchy-face.sudo.$ACCOUNT.dat" 2>/dev/null || echo 1)"
 
 step "lap 2 at another distance, and a lap 2 by somebody else"
 reset_store
@@ -703,8 +709,85 @@ def person(count, cap):
     extra = [{"pose": "a%03d" % (30 * k), "band": "near", "time": 1, "r": 1.0, "support": 2, "encoding": [0.0] * 128} for k in range(count)]
     return {"sudo": True, "limits": {"lock": 12, "sudo": cap}, "appearances": [{"label": "A", "time": 1, "encoding": [0.0] * 128, "extra": extra}]}
 check("default four: no warning for six templates a person holds", ns["warning_for"]([person(6, 4)]) is None)
-check("a deliberate cap of 8 with eight in effect warns", ns["warning_for"]([person(9, 8)]) is not None)
+pure["SUDO_POLICY"] = "full"
+check("under the full policy a deliberate cap of 8 with eight in effect warns", ns["warning_for"]([person(9, 8)]) is not None)
+pure["SUDO_POLICY"] = "centre"
 check("five people with Sudo and one template each: no warning", ns["warning_for"]([person(0, 4)] * 5) is None)
+# rule F: judge() re-checks the pose ring and HARD against the centre, whatever the child says
+judge = ns["judge"]
+ZERO = [0.0] * 128
+def away(d):
+    return [d] + [0.0] * 127
+def tpl(k, d=0.3, r=1.6, support=3, encoding=None):
+    return {"bin": k, "r": r, "support": support, "encoding": encoding if encoding is not None else away(d)}
+def res(templates, centre=ZERO):
+    return {"changed": False, "ended": "finish", "refine": None, "centreHeld": True,
+            "centre": {"encoding": centre} if centre is not None else None, "templates": templates,
+            "filled": [], "skipped": [], "eye": 80.0}
+SIMPLE4 = [9, 3, 0, 6]
+ALL12 = list(range(12))
+good4 = [tpl(k) for k in SIMPLE4]
+check("judge keeps a good Simple lap", judge("simple", 1, SIMPLE4, res(good4))["code"] is None)
+check("judge keeps a template exactly at HARD (0.55)", judge("simple", 1, SIMPLE4, res([tpl(9, 0.55)] + good4[1:]))["code"] is None)
+check("judge refuses a template just past HARD (0.5501)", judge("simple", 1, SIMPLE4, res([tpl(9, 0.5501)] + good4[1:]))["code"] == "timeout")
+check("judge refuses a template of somebody else (distance 1.0)", judge("simple", 1, SIMPLE4, res([tpl(9, 1.0)] + good4[1:]))["code"] == "timeout")
+for r, expect in ((1.0, True), (2.2, True), (0.99, False), (2.21, False), (3.9, False), (4, False), (0, False), (-1, False)):
+    check("judge r=%s %s" % (r, "kept" if expect else "refused"),
+          (judge("simple", 1, SIMPLE4, res([tpl(9, r=r)] + good4[1:]))["code"] is None) == expect)
+nan_enc = [float("nan")] + [0.0] * 127
+check("judge refuses a NaN encoding", judge("simple", 1, SIMPLE4, res([tpl(9, encoding=nan_enc)] + good4[1:]))["code"] == "timeout")
+check("judge ignores a far lap-1 centre claim that does not exist (no centre: not swept)", judge("simple", 1, SIMPLE4, res(good4, centre=None))["code"] in ("lap_timeout", "too_few"))
+adv = [tpl(k) for k in ALL12]
+check("judge keeps a good lap 2 against the held centre", judge("advanced", 2, ALL12, res(adv), ZERO)["code"] is None)
+check("judge returns no centre for lap 2", judge("advanced", 2, ALL12, res(adv), ZERO)["centre"] is None)
+check("judge refuses lap 2 without the held centre", judge("advanced", 2, ALL12, res(adv), None)["code"] == "timeout")
+check("judge refuses lap 2 templates far from the HELD centre, whatever centre the child names",
+      judge("advanced", 2, ALL12, res(adv, centre=ZERO), away(0.9))["code"] == "timeout" and
+      judge("advanced", 2, ALL12, res(adv, centre=away(0.9)), ZERO)["code"] is None)
+check("judge refuses a 127-number held centre", judge("advanced", 2, ALL12, res(adv), [0.0] * 127)["code"] == "timeout")
+# m8: the security constants STORE_PY and SWEEP_PY each hold are the same numbers
+sweep_ns = ns["pure"]()
+for name in ("LOCK_TEMPLATES", "SUDO_TEMPLATES", "LOCK_MAXIMUM", "SUDO_MAXIMUM"):
+    check("%s is the same in STORE_PY (%r) and SWEEP_PY (%r)" % (name, ns[name], sweep_ns[name]), ns[name] == sweep_ns[name])
+check("MAX_APPEARANCES in STORE_PY is the 3 the Sudo-centre bound assumes", ns["MAX_APPEARANCES"] == 3)
+# the Sudo policy: one line decides, the stored data is the same under both words
+def wide(count_appearances=2, count=12):
+    appearances = []
+    for a in range(count_appearances):
+        extra = [{"pose": "a%03d" % (30 * k), "band": "near", "time": 1, "r": 1.2, "support": 3, "encoding": [0.0] * 128}
+                 for k in range(count)]
+        appearances.append({"label": "A%d" % a, "time": 1 + a, "encoding": [0.0] * 128, "extra": extra})
+    return {"name": "emil", "label": "E", "owner": True, "sudo": True, "lock": True, "created": 1, "appearances": appearances}
+rich = wide()
+pick = sweep_ns["pick"]
+check("the shipped policy is centre", sweep_ns["SUDO_POLICY"] == "centre" and ns["sudo_policy"]() == "centre")
+under_centre = {kind: pick(rich, kind, cap) for kind, cap in (("sudo", 4), ("lock", 12))}
+check("centre policy: Sudo gets the centre of each appearance and nothing else", under_centre["sudo"] == [(0, None), (1, None)])
+check("centre policy: a glasses look is never dropped (3 appearances, Sudo cap 3)", pick(wide(3), "sudo", 3) == [(0, None), (1, None), (2, None)])
+check("centre policy: Lock still takes the pose ring, up to its cap of 12", len(under_centre["lock"]) == 12 and under_centre["lock"][:2] == [(0, None), (1, None)])
+sweep_ns["SUDO_POLICY"] = "full"
+check("sudo_policy() says full", ns["sudo_policy"]() == "full")
+under_full = {kind: pick(rich, kind, cap) for kind, cap in (("sudo", 4), ("lock", 12))}
+check("full policy: Sudo gets the plan's four (both centres, then two bins)", len(under_full["sudo"]) == 4 and under_full["sudo"][:2] == [(0, None), (1, None)] and all(e is not None for _, e in under_full["sudo"][2:]))
+check("flipping the policy leaves Lock exactly as it was", under_full["lock"] == under_centre["lock"])
+def valid(doc):
+    try:
+        ns["validate_record"]("/x/emil.json", doc)
+        return True
+    except ns["Fatal"]:
+        return False
+check("the same record validates under both words (the stored data does not change)", valid(rich))
+for word, expect in (("bogus", "centre"), ("", "centre"), (None, "centre")):
+    sweep_ns["SUDO_POLICY"] = word
+    check("an unknown policy %r fails closed to centre" % (word,), pick(rich, "sudo", 4) == [(0, None), (1, None)] and ns["sudo_policy"]() == expect)
+sweep_ns["SUDO_POLICY"] = "full"
+check("full policy: a cap of 8 on 12 near templates warns (the plan's warning)", ns["warning_for"]([rich | {"limits": {"lock": 12, "sudo": 8}}]) is not None)
+check("full policy: the default four does not warn", ns["warning_for"]([rich]) is None)
+check("full policy: the Sudo set of a person holds four entries", len([e for e in ns["model_entries"]([rich], "sudo")]) == 4)
+sweep_ns["SUDO_POLICY"] = "centre"
+check("centre policy: the cap of 8 cannot warn (only centres are usable)", ns["warning_for"]([rich | {"limits": {"lock": 12, "sudo": 8}}]) is None)
+check("centre policy: the Sudo set holds the two centres", len(ns["model_entries"]([rich], "sudo")) == 2)
+check("centre policy: the Lock set still holds 12", len(ns["model_entries"]([rich], "lock")) == 12)
 # the stored shapes
 def record(extra=None, limits=None):
     a = {"label": "A", "time": 1, "encoding": [0.0] * 128}

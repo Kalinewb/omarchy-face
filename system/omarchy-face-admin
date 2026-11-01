@@ -1484,11 +1484,19 @@ def sweep_text():
 
 
 def pure():
+    # The namespace the functions run in, not a copy of it: what a test sets there
+    # (SUDO_POLICY) is what `pick` reads.
+    global _PURE
     if not _PURE:
         namespace = {"__name__": "sweep_pure"}
         exec(compile(sweep_text().split(SWEEP_MARKER)[0], "SWEEP_PY", "exec"), namespace)
-        _PURE.update(namespace)
+        _PURE = namespace
     return _PURE
+
+
+def sudo_policy():
+    """The word for what Sudo may use, as `pick` reads it: "centre" or "full"."""
+    return "full" if pure()["SUDO_POLICY"] == "full" else "centre"
 
 
 def caps(person):
@@ -1610,7 +1618,10 @@ def warning_for(people):
     # is not search time, it is that each template is another chance of landing
     # inside the threshold. Per person now (plan-face-enroll.md 6): one person with
     # the default four is the design, so it warns only when somebody's templates in
-    # the Sudo set pass SUDO_TEMPLATES, which takes a deliberate `set-limits`.
+    # the Sudo set pass SUDO_TEMPLATES, which takes a deliberate `set-limits`. It counts
+    # what `pick` gives Sudo under the active SUDO_POLICY: with "centre" (the default)
+    # that is at most one per appearance, so it cannot fire; with "full" it is the
+    # plan's warning.
     pick = pure()["pick"]
     worst = max([len(pick(p, "sudo", caps(p)[1])) for p in people if p["sudo"]] or [0])
     if worst <= SUDO_TEMPLATES:
@@ -1681,6 +1692,7 @@ def regenerate(people=None):
         "nameRule": NAME_RULE,
         "labelRule": LABEL_RULE,
         "appearanceLabels": STANDARD_APPEARANCES,
+        "sudoPolicy": sudo_policy(),
         "warning": warning_for(people),
         "updated": newest_time(people),
     }
@@ -2397,7 +2409,7 @@ def cmd_enroll_session(name):
     lock_cap, sudo_cap = caps(person) if person else (LOCK_TEMPLATES, SUDO_TEMPLATES)
     emit({"event": "ready", "person": public(person) if person else None,
           "verbs": ["capture", "sweep", "abort", "finish"],
-          "limits": {"lock": lock_cap, "sudo": sudo_cap}})
+          "limits": {"lock": lock_cap, "sudo": sudo_cap}, "sudoPolicy": sudo_policy()})
 
     created = None          # the record a `create` proposed, not yet written
     captured = {}           # appearance label -> appearance, this session only
@@ -3117,8 +3129,9 @@ def pick(person, kind, cap):
     never dropped from Sudo), then the "usual" templates (lock
     only), then the pose bins in BIN_ORDER, alternating the near and far band, each
     slot from the best-supported candidate, until the cap. The caps are clamped to
-    the compiled maxima. Sudo never takes a "usual" template, nor r past SUDO_R_MAX,
-    nor one further than SUDO_CENTRE from its own centre. Lock takes r up to R_MAX
+    the compiled maxima. Under SUDO_POLICY "centre" (the default) Sudo gets the centres
+    and nothing else. Under "full", Sudo never takes a "usual" template, nor r past
+    SUDO_R_MAX, nor one further than SUDO_CENTRE from its own centre. Lock takes r up to R_MAX
     within HARD of the centre; a "usual" one was checked against the nearest
     template when it was captured, so it is exempt from the HARD test.
     """
@@ -3133,6 +3146,8 @@ def pick(person, kind, cap):
                      key=lambda ai: (appearances[ai]["time"], appearances[ai]["label"]))
     for ai in centres:
         chosen.append((ai, None))
+    if kind == "sudo" and SUDO_POLICY != "full":
+        return chosen[:cap]
 
     usual, slots = [], {}
     for ai, appearance in enumerate(appearances):

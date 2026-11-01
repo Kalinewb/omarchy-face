@@ -507,6 +507,9 @@ def shuffled(person, seed):
 
 def test_pick():
     print("pick")
+    # The rules below are the plan's pick for Sudo, which SUDO_POLICY "full" selects; the
+    # shipped "centre" policy is asserted at the end of this function.
+    MODULE["SUDO_POLICY"] = "full"
     person = make_person()
     centres = {(a["label"], "centre", None, a["time"]) for a in person["appearances"]}
 
@@ -590,6 +593,25 @@ def test_pick():
     check("a person with no extras yields just their centres", len(sw.pick({"appearances": [
         {"label": "A", "time": 1, "encoding": enc(0.0)}]}, "lock", 12)) == 1)
     check("no appearances yield nothing", sw.pick({}, "lock", 12) == [])
+
+    # SUDO_POLICY "centre", the shipped value: Sudo takes the centres and nothing else.
+    MODULE["SUDO_POLICY"] = "centre"
+    check("SUDO_POLICY ships as centre", MODULE["SUDO_POLICY"] == "centre" and sw.SUDO_POLICY == "centre")
+    for cap in (1, 2, 3, 4, 12, 100):
+        got = sw.pick(person, "sudo", cap)
+        check("centre policy, Sudo cap %d: centres only, as many as fit" % cap,
+              all(ref[1] is None for ref in got) and len(got) == min(cap, len(person["appearances"])), str(got))
+    check("centre policy: all three appearances' centres are kept at the cap of 3 (a look is never dropped)",
+          {key_of(person, ref) for ref in sw.pick(person, "sudo", 3)} == centres)
+    lock_centre = [key_of(person, ref) for ref in sw.pick(person, "lock", 12)]
+    MODULE["SUDO_POLICY"] = "full"
+    lock_full = [key_of(person, ref) for ref in sw.pick(person, "lock", 12)]
+    check("centre policy: Lock is not affected (the same picks under both words)", lock_centre == lock_full)
+    for word in ("bogus", "", None):
+        MODULE["SUDO_POLICY"] = word
+        check("an unknown policy %r fails closed to centres" % (word,),
+              all(ref[1] is None for ref in sw.pick(person, "sudo", 12)))
+    MODULE["SUDO_POLICY"] = "centre"
 
 
 # --- 6. plain turns, as a person turns (rules D, O, J) -------------------------------
@@ -806,6 +828,7 @@ def test_sequencer():
           len(bins) == 12 and [k for k, x in enumerate(bins) if x] == [3, 9] and bins[3] == 0.46 and bins[5] == 0.0)
     person = {"appearances": [{"label": "A", "time": 1, "encoding": enc(0.0), "extra": [
         make_extra(sw.pose_name(k), "near", 1.3, 2, 0.1, 10 + k) for k in (9, 3, 0, 6)]}]}
+    MODULE["SUDO_POLICY"] = "full"
     sudo = [key_of(person, r)[1] for r in sw.pick(person, "sudo", 4)]
     lock = [key_of(person, r)[1] for r in sw.pick(person, "lock", 12)]
     flipped = {"appearances": [dict(person["appearances"][0], extra=list(reversed(person["appearances"][0]["extra"])))]}
@@ -813,6 +836,10 @@ def test_sequencer():
           sudo == ["centre", "a000", "a090", "a180"] and lock == ["centre", "a000", "a090", "a180", "a270"]
           and [key_of(flipped, r)[1] for r in sw.pick(flipped, "sudo", 4)] == sudo
           and [key_of(flipped, r)[1] for r in sw.pick(flipped, "lock", 12)] == lock, str((sudo, lock)))
+    MODULE["SUDO_POLICY"] = "centre"
+    check("pick under the shipped centre policy: Sudo gets the centre alone, Lock all five",
+          [key_of(person, r)[1] for r in sw.pick(person, "sudo", 4)] == ["centre"]
+          and [key_of(person, r)[1] for r in sw.pick(person, "lock", 12)] == lock)
     check("the code and word enums are the plan's twelve and ten",
           len(sw.CODES) == 12 and len(set(sw.CODES)) == 12 and len(sw.GATE_WORDS) == 10)
     check("finite() rejects bools, NaN, Infinity and 1e400 and accepts ints and floats",
