@@ -96,6 +96,22 @@ chmod 0644 /etc/omarchy-face/config
 mount -t tmpfs tmpfs /run || exit 1
 chmod 0755 /run
 
+# "The machine's own stack" is what every check below compares against, and
+# /mnt/pam.d is where it is read from. Where Face's sudo wiring is switched on
+# on the host, that stack already carries our block, and the suite would be
+# asserting against a file that is not the machine's own. So /mnt/pam.d becomes
+# a copy with the block taken out (a view private to this namespace), and the
+# sandbox's pam.d is copied again from it.
+mkdir -p /run/pristine-pam.d
+cp -rp /mnt/pam.d/. /run/pristine-pam.d/ 2>/dev/null
+for stack in /run/pristine-pam.d/*; do
+  [[ -f $stack ]] && sed -i '/^# omarchy-face begin$/,/^# omarchy-face end$/d' "$stack"
+done
+mount --bind /run/pristine-pam.d /mnt/pam.d || exit 1
+rm -rf /etc/pam.d
+cp -rp /mnt/pam.d /etc/pam.d 2>/dev/null
+chown -R root:root /etc/pam.d
+
 # A PID namespace with the host's /proc is one where a process cannot read its
 # own parent -- which is the whole of the attribution test.
 mount -t proc proc /proc 2>/dev/null
