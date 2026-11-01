@@ -476,10 +476,11 @@ same "…and the sudo set grew to the owner's face plus hers" "2" "$(json_field 
 same "…with no warning at two faces" "null" "$(json_field "$PEOPLE" warning)"
 out=$("$ADMIN" set-permission anna sudo on 2>&1)
 same "Anna's three appearances take it to five" "5" "$(json_field "$PEOPLE" sudo_faces)"
-same "…so the summary carries a warning (§7: more faces, more false accepts)" "True" \
-  "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["warning"] is not None)' "$PEOPLE")"
-check "…naming the count, so the GUI invents nothing" \
-  grep -q 'matches against 5 faces' "$PEOPLE"
+# Phase 2 of the enrolment plan made the warning per person: it speaks only when one
+# person's templates in the Sudo set pass the default four (a deliberate set-limits,
+# which dev/e1-enrol-sweep.sh drives). Five faces across three people is no longer one.
+same "…and the summary carries no warning: no one person has more than four templates" "null" \
+  "$(json_field "$PEOPLE" warning)"
 out=$("$ADMIN" set-permission anna sudo off 2>&1)
 out=$("$ADMIN" set-permission anna lock on 2>&1)
 check "a lock set appears when somebody has Lock" test -f "$MODELS/omarchy-face.lock.$ACCOUNT.dat"

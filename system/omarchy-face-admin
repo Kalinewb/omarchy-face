@@ -1130,6 +1130,7 @@ import errno
 import fcntl
 import glob
 import json
+import math
 import os
 import re
 import secrets
@@ -1201,9 +1202,21 @@ STORE_LOCK_WAIT = 5.0
 # why), and long enough that a person reading the card is not cut off.
 IDLE_SECONDS = 120
 SESSION_SECONDS = 300
+# Once the first sweep arrives the whole-session bound is this one, measured from
+# `ready`: two laps, a try and an adopt do not fit in 300 s (plan-face-enroll.md 6).
+SESSION_SCAN_SECONDS = 600
 # A command line is a small JSON object. Anything past this is not a protocol
 # this file speaks, and buffering it would be a way to make root allocate.
 MAX_LINE = 65536
+
+# Templates per use (plan-face-enroll.md 2b): the defaults, the least a cap may be
+# (every appearance's centre must fit) and the compiled maxima.
+LOCK_TEMPLATES, SUDO_TEMPLATES = 12, 4
+LOCK_MAXIMUM, SUDO_MAXIMUM = 36, 12
+MIN_TEMPLATES = MAX_APPEARANCES
+MAX_EXTRA = 26                  # 12 per band x 2 + 2 `usual`
+EXTRA_BANDS = {"near": 12, "far": 12, "usual": 2}
+POSE_RULE = r"^[a-z0-9-]{1,16}$"
 
 # Debris from a session that was killed between taking a frame and committing
 # (plan-engine.md §3.3).
@@ -1344,6 +1357,61 @@ def rule_ok(rule, value):
     return isinstance(value, str) and re.fullmatch(rule, value) is not None
 
 
+def finite_number(value):
+    if not is_number(value):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def validate_appearance(appearance, bad):
+    """The fields of one appearance. `extra` only ever ADDS stored templates and is
+    held to a stricter rule than the centre: finite numbers, a pose that is a bin's
+    name (or `usual`), bounded counts per band."""
+    if not is_number(appearance.get("time")):
+        bad()
+    encoding = appearance.get("encoding")
+    if not isinstance(encoding, list) or len(encoding) != 128:
+        bad()
+    for value in encoding:
+        if not is_number(value):
+            bad()
+    extra = appearance.get("extra")
+    if extra is None:
+        return
+    if not isinstance(extra, list) or len(extra) > MAX_EXTRA:
+        bad()
+    counts, slots = {"near": 0, "far": 0, "usual": 0}, set()
+    for item in extra:
+        if not isinstance(item, dict):
+            bad()
+        band, pose = item.get("band"), item.get("pose")
+        if band not in counts or not rule_ok(POSE_RULE, pose):
+            bad()
+        if band == "usual":
+            if pose != "usual":
+                bad()
+        else:
+            degrees = re.fullmatch(r"a([0-9]{3})", pose)
+            if not degrees or int(degrees.group(1)) % 30 or int(degrees.group(1)) >= 360 or (pose, band) in slots:
+                bad()
+            slots.add((pose, band))
+        counts[band] += 1
+        if counts[band] > EXTRA_BANDS[band]:
+            bad()
+        if not finite_number(item.get("time")):
+            bad()
+        if not finite_number(item.get("r")) or not 0 <= item["r"] <= 4:
+            bad()
+        if type(item.get("support")) is not int or not 2 <= item["support"] <= 99:
+            bad()
+        encoded = item.get("encoding")
+        if not isinstance(encoded, list) or len(encoded) != 128 or not all(finite_number(x) for x in encoded):
+            bad()
+
+
 def validate_record(path, doc):
     """Every rule of plan-engine.md §3.2, or store_corrupt naming the file."""
 
@@ -1380,15 +1448,57 @@ def validate_record(path, doc):
         if label in seen:
             bad()
         seen.add(label)
-        if not is_number(appearance.get("time")):
+        validate_appearance(appearance, bad)
+    limits = doc.get("limits")
+    if limits is not None:
+        # Absent means the defaults. Present, it is exactly two ints no lower than
+        # the appearance limit (every centre has to fit) and no higher than the
+        # compiled maxima, so a record cannot ask for more than this file allows.
+        if not isinstance(limits, dict) or set(limits) != {"lock", "sudo"}:
             bad()
-        encoding = appearance.get("encoding")
-        if not isinstance(encoding, list) or len(encoding) != 128:
-            bad()
-        for value in encoding:
-            if not is_number(value):
+        for key, maximum in (("lock", LOCK_MAXIMUM), ("sudo", SUDO_MAXIMUM)):
+            if type(limits[key]) is not int or not MIN_TEMPLATES <= limits[key] <= maximum:
                 bad()
     return doc
+
+
+# --- the pure half of SWEEP_PY ---------------------------------------------------
+#
+# `pick`, the sequencer's rules and the pose names live in SWEEP_PY once. This program
+# gets that text from the wrapper (bash sets OMARCHY_FACE_SWEEP_PY itself, from its own
+# copy, every time; nothing inherited survives the assignment) and executes ONLY what
+# comes before the marker: definitions, no import beyond math and sys, no I/O (dev/e0
+# asserts both). The rest of the text is for the child, which is run with `-c`.
+SWEEP_MARKER = "# ==== THE CAPTURE HALF"
+_PURE = {}
+
+
+def sweep_text():
+    text = os.environ.get("OMARCHY_FACE_SWEEP_PY", "")
+    if text.count(SWEEP_MARKER) != 1:
+        raise Fatal("engine_missing")
+    return text
+
+
+def pure():
+    if not _PURE:
+        namespace = {"__name__": "sweep_pure"}
+        exec(compile(sweep_text().split(SWEEP_MARKER)[0], "SWEEP_PY", "exec"), namespace)
+        _PURE.update(namespace)
+    return _PURE
+
+
+def caps(person):
+    limits = person.get("limits") or {}
+    return limits.get("lock", LOCK_TEMPLATES), limits.get("sudo", SUDO_TEMPLATES)
+
+
+def stored_count(person, label):
+    """Templates the store holds for one appearance label: the centre and its extras."""
+    for appearance in person["appearances"]:
+        if appearance["label"] == label:
+            return 1 + len(appearance.get("extra") or [])
+    return 0
 
 
 def read_all():
@@ -1420,15 +1530,20 @@ def find(people, name):
 
 
 def public(person):
-    """What leaves this file: never an encoding (plan-engine.md §3.2)."""
+    """What leaves this file: never an encoding (plan-engine.md §3.2). Counts only."""
+    lock_cap, sudo_cap = caps(person)
+    pick = pure()["pick"]
     return {
         "name": person["name"],
         "label": person["label"],
         "owner": person["owner"],
         "sudo": person["sudo"],
         "lock": person["lock"],
-        "appearances": [{"label": a["label"], "time": a["time"]}
+        "appearances": [{"label": a["label"], "time": a["time"],
+                        "templates": 1 + len(a.get("extra") or [])}
                         for a in person["appearances"]],
+        "lockTemplates": len(pick(person, "lock", lock_cap)),
+        "sudoTemplates": len(pick(person, "sudo", sudo_cap)),
     }
 
 
@@ -1450,16 +1565,28 @@ def person_path(name):
 
 
 def model_entries(people, key):
+    """One single-encoding entry per template, labelled <name>/<appearance> (so the
+    WINNING parse and the E8 attribution hold). Each person contributes what `pick`
+    gives them for the use, under their own cap; a person set (key None) is the lock
+    set. The centres come first in the order the appearances are stored, which is what
+    keeps a record with no extras regenerating byte-for-byte."""
+    pick = pure()["pick"]
     entries = []
     for person in people:
         if key is not None and not person[key]:
             continue
-        for appearance in person["appearances"]:
+        kind = "sudo" if key == "sudo" else "lock"
+        chosen = pick(person, kind, caps(person)[0 if kind == "lock" else 1])
+        refs = [(ai, None) for ai in sorted(ai for ai, ei in chosen if ei is None)]
+        refs += [ref for ref in chosen if ref[1] is not None]
+        for ai, ei in refs:
+            appearance = person["appearances"][ai]
+            template = appearance if ei is None else appearance["extra"][ei]
             entries.append({
-                "time": appearance["time"],
+                "time": appearance["time"] if ei is None else template["time"],
                 "label": person["name"] + "/" + appearance["label"],
                 "id": len(entries),
-                "data": [appearance["encoding"]],
+                "data": [template["encoding"]],
             })
     return entries
 
@@ -1475,14 +1602,18 @@ def write_set(path, entries):
     write_json(path, entries, 0o600)
 
 
-def warning_for(sudo_faces):
+def warning_for(people):
     # From the F3 measurement (plan-engine.md §7): the cost of more Sudo faces
     # is not search time, it is that each template is another chance of landing
-    # inside the threshold. Null while sudo_faces <= 3.
-    if sudo_faces <= 3:
+    # inside the threshold. Per person now (plan-face-enroll.md 6): one person with
+    # the default four is the design, so it warns only when somebody's templates in
+    # the Sudo set pass SUDO_TEMPLATES, which takes a deliberate `set-limits`.
+    pick = pure()["pick"]
+    worst = max([len(pick(p, "sudo", caps(p)[1])) for p in people if p["sudo"]] or [0])
+    if worst <= SUDO_TEMPLATES:
         return None
-    return ("Sudo now matches against %d faces. Every extra face is another "
-            "chance that the wrong one is accepted." % sudo_faces)
+    return ("Sudo now matches against %d pictures of one person. Every extra picture "
+            "is another chance that the wrong face is accepted." % worst)
 
 
 def newest_time(people):
@@ -1547,7 +1678,7 @@ def regenerate(people=None):
         "nameRule": NAME_RULE,
         "labelRule": LABEL_RULE,
         "appearanceLabels": STANDARD_APPEARANCES,
-        "warning": warning_for(len(sudo_entries)),
+        "warning": warning_for(people),
         "updated": newest_time(people),
     }
     write_json(PEOPLE_FILE, summary, 0o644)
@@ -1859,14 +1990,50 @@ def session_bounds():
     downwards on purpose: an environment variable that could LENGTHEN a standing
     authorisation would be the very thing these deadlines bound. (It cannot
     arrive through the GUI either -- pkexec drops the caller's environment.)"""
-    idle, whole = float(IDLE_SECONDS), float(SESSION_SECONDS)
+    idle, whole, scan = float(IDLE_SECONDS), float(SESSION_SECONDS), float(SESSION_SCAN_SECONDS)
     try:
         asked = float(os.environ.get("OMARCHY_FACE_SESSION_SECONDS", ""))
     except ValueError:
-        return idle, whole
+        return idle, whole, scan
     if asked > 0:
-        return min(idle, asked), min(whole, asked)
-    return idle, whole
+        # The scan bound is twice the plain one under the override, so a test can
+        # watch a sweep outlive the one and stop at the other.
+        return min(idle, asked), min(whole, asked), min(scan, asked * 2)
+    return idle, whole, scan
+
+
+def real_root():
+    """Is this root of the machine, and not root of a user namespace a test made?
+    The init namespace's map is the identity over every uid. Anything unreadable counts
+    as real root: the override below fails closed."""
+    if os.geteuid() != 0:
+        return False
+    try:
+        with open("/proc/self/uid_map", "r") as handle:
+            fields = handle.read().split()
+    except OSError:
+        return True
+    return fields[:3] == ["0", "0", "4294967295"]
+
+
+def sweep_bounds():
+    """The lap ceilings, patience, prompt lead and stall time, with a test override
+    (OMARCHY_FACE_SWEEP_SECONDS) that can only make them SHORTER, is ignored unless it
+    is a finite number above 0, and is never read at all by root of the machine. pkexec
+    drops the caller's environment, so the GUI cannot set it either. The child reads no
+    environment: it is handed these numbers as arguments."""
+    sw = pure()
+    bounds = {"simple": sw["SIMPLE_LAP_SECONDS"], "advanced": sw["ADVANCED_LAP_SECONDS"],
+              "patience": sw["TARGET_PATIENCE"], "lead": sw["PROMPT_LEAD"], "stall": sw["STALL_SECONDS"]}
+    if real_root():
+        return bounds
+    try:
+        asked = float(os.environ.get("OMARCHY_FACE_SWEEP_SECONDS", ""))
+    except ValueError:
+        return bounds
+    if math.isfinite(asked) and asked > 0:
+        bounds = dict((key, min(value, asked)) for key, value in bounds.items())
+    return bounds
 
 
 class line_reader(object):
@@ -1920,6 +2087,254 @@ class line_reader(object):
             else:
                 self.eof = True
 
+    def poll(self):
+        """The next complete line if one is waiting, "" at EOF, None otherwise. Never blocks."""
+        if b"\n" not in self.buffer and not self.eof:
+            try:
+                if select.select([self.fd], [], [], 0)[0]:
+                    chunk = os.read(self.fd, 4096)
+                    if chunk:
+                        self.buffer += chunk
+                    else:
+                        self.eof = True
+            except (OSError, ValueError):
+                self.eof = True
+        return self.line(time.monotonic() - 1.0)
+
+
+# --- the sweep, from the parent's side (plan-face-enroll.md section 6) ---------------
+
+SWEEP_EVENTS = ("sweeping", "track", "swept", "aborted", "capture_failed")
+
+
+def _in_range(low, high):
+    return lambda v: finite_number(v) and low <= v <= high
+
+
+def _bin_list(v):
+    return (isinstance(v, list) and len(v) <= 12 and all(type(k) is int and 0 <= k < 12 for k in v)
+            and len(set(v)) == len(v))
+
+
+def _allowed():
+    sw = pure()
+    return {
+        "event": lambda v: isinstance(v, str) and v in SWEEP_EVENTS,
+        "state": lambda v: isinstance(v, str) and v in sw["GATE_WORDS"],
+        "mode": lambda v: isinstance(v, str) and v in ("simple", "advanced", "usual"),
+        "lap": lambda v: type(v) is int and v in (1, 2),
+        "u": _in_range(-4, 4), "v": _in_range(-4, 4), "centre": _in_range(0, 1),
+        "bins": lambda v: isinstance(v, list) and len(v) == 12 and all(_in_range(0, 1)(x) for x in v),
+        "canFinish": lambda v: isinstance(v, bool), "centreHeld": lambda v: isinstance(v, bool),
+        "passed": lambda v: isinstance(v, bool),
+        "target": lambda v: v is None or v == "centre" or (type(v) is int and 0 <= v < 12),
+        "targets": _bin_list, "filled": _bin_list, "skipped": _bin_list,
+        "quota": lambda v: type(v) is int and 1 <= v <= 9,
+        "kept": lambda v: type(v) is int and 0 <= v <= 99,
+        "code": lambda v: isinstance(v, str) and v in sw["CODES"],
+        "best": _in_range(0, 4), "threshold": _in_range(0, 1), "margin": _in_range(-4, 1),
+    }
+
+
+def typed_event(doc):
+    """The allow-list: the event exactly as it may go to the client, or None. Every key
+    has a type and a bound; an unknown key, a wrong type, a bool where a number
+    belongs, a NaN or an out-of-range value drops the whole event. Nothing that
+    carries an encoding, a frame, a landmark or a path has a key here."""
+    if not isinstance(doc, dict) or "event" not in doc:
+        return None
+    allowed = _allowed()
+    for key, value in doc.items():
+        if key not in allowed or not allowed[key](value):
+            return None
+    return doc
+
+
+def emit_checked(doc):
+    checked = typed_event(doc)
+    if checked is None:
+        prose("dropped an event that failed the allow-list")
+        return False
+    sys.stdout.write(json.dumps(checked, separators=(",", ":"), allow_nan=False) + "\n")
+    sys.stdout.flush()
+    return True
+
+
+def refuse(reason):
+    prose("sweep refused: " + reason)
+    emit_checked({"event": "capture_failed", "code": "bad_sweep"})
+
+
+def judge(mode, lap, targets, result):
+    """Rule F: the parent decides Done from what it actually received, with the same pure
+    functions the child ran. -> {"code": C} to drop the lap, or the templates to keep."""
+    sw = pure()
+    if not isinstance(result, dict):
+        return {"code": "timeout"}
+    if result.get("changed") is True:
+        return {"code": "changed"}
+    centre = result.get("centre")
+    templates = result.get("templates")
+    if not isinstance(templates, list) or len(templates) > len(targets):
+        return {"code": "timeout"}
+    kept, bins = [], set()
+    for item in templates:
+        if not isinstance(item, dict):
+            return {"code": "timeout"}
+        k, r, support, encoding = item.get("bin"), item.get("r"), item.get("support"), item.get("encoding")
+        if (type(k) is not int or k not in targets or k in bins or not finite_number(r) or not 0 <= r <= 4
+                or type(support) is not int or not 2 <= support <= 99 or not isinstance(encoding, list)
+                or len(encoding) != 128 or not all(finite_number(x) for x in encoding)):
+            return {"code": "timeout"}
+        bins.add(k)
+        kept.append({"bin": k, "r": r, "support": support, "encoding": encoding})
+    kept.sort(key=lambda t: t["bin"])
+    centre_encoding = None
+    if lap == 1:
+        encoding = centre.get("encoding") if isinstance(centre, dict) else None
+        if isinstance(encoding, list) and len(encoding) == 128 and all(finite_number(x) for x in encoding):
+            centre_encoding = encoding
+    centre_held = lap == 2 or centre_encoding is not None
+    outcome = sw["lap_result"](mode, centre_held, bins)
+    if outcome != "swept":
+        refine = result.get("refine")
+        if outcome == "lap_timeout" and refine in ("black_frames", "too_dark", "multiple_faces", "no_face"):
+            return {"code": refine}
+        return {"code": outcome}
+    eye = result.get("eye")
+    return {"code": None, "templates": kept, "centre": centre_encoding,
+            "skipped": sorted(set(targets) - bins) if mode == "simple" else [],
+            "eye": float(eye) if finite_number(eye) and eye > 0 else None}
+
+
+def kill_group(proc):
+    try:
+        os.killpg(proc.pid, 9)
+    except (OSError, ProcessLookupError):
+        pass
+    try:
+        proc.wait(timeout=2)
+    except Exception:
+        pass
+
+
+def run_sweep(reader, mode, lap, targets, bounds, reference, eye, ends_at):
+    """One lap in a child. -> ("result", dict) | ("aborted",) | ("eof",) | ("expired",)
+    | ("failed", code). The child is in its own session and process group under
+    `timeout -k 2`, is killed in `finally` however this function ends, and exits by
+    itself when its stdin closes (the parent is gone)."""
+    text = sweep_text()
+    ceiling = bounds["simple"] if mode == "simple" else bounds["advanced"]
+    payload = json.dumps({"reference": [[round(x, 7) for x in e] for e in reference], "eye": eye},
+                         separators=(",", ":"), allow_nan=False).encode("utf-8")
+    try:
+        lock = camera_lock()
+        lock.__enter__()
+    except Busy:
+        return ("failed", "camera_busy")
+    proc, rfd, wfd = None, None, None
+    try:
+        rfd, wfd = os.pipe()
+        argv = ["timeout", "-k", "2", str(int(ceiling) + 15), "python3", "-I", "-c", text,
+                mode, str(lap), ",".join(str(k) for k in targets), repr(float(ceiling)),
+                repr(float(bounds["patience"])), repr(float(bounds["lead"])),
+                repr(float(bounds["stall"])), str(rfd)]
+        try:
+            proc = subprocess.Popen(argv, env=engine_env(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    pass_fds=(rfd,), start_new_session=True,
+                                    preexec_fn=lambda: os.umask(0o077))
+        except OSError:
+            return ("failed", "timeout")
+        os.close(rfd)
+        rfd = None
+        os.write(wfd, payload)          # at most about 40 KB: inside the pipe's 64 KB
+        os.close(wfd)
+        wfd = None
+        out_fd, buffer, result = proc.stdout.fileno(), b"", None
+        while True:
+            if time.monotonic() >= ends_at:
+                return ("expired",)
+            wait = [out_fd] + ([] if reader.eof else [reader.fd])
+            ready = select.select(wait, [], [], 0.2)[0]
+            if out_fd in ready:
+                chunk = os.read(out_fd, 65536)
+                if not chunk:
+                    break
+                buffer += chunk
+                if len(buffer) > 8000000:
+                    return ("failed", "timeout")
+                while b"\n" in buffer:
+                    raw, buffer = buffer.split(b"\n", 1)
+                    try:
+                        doc = json.loads(raw.decode("utf-8", "replace"))
+                    except ValueError:
+                        prose("dropped a line from the sweep that is not JSON")
+                        continue
+                    if isinstance(doc, dict) and list(doc) == ["result"]:
+                        result = doc["result"]
+                    else:
+                        emit_checked(doc)
+            while True:
+                line = reader_next(reader)
+                if line is None:
+                    break
+                if line == "":
+                    return ("eof",)
+                try:
+                    message = json.loads(line)
+                except ValueError:
+                    prose("ignoring a line that is not JSON")
+                    continue
+                command = message.get("cmd") if isinstance(message, dict) else None
+                if command == "finish":
+                    # judged against the state it is read in: a scan is running
+                    if result is None:
+                        try:
+                            proc.stdin.write(b"finish\n")
+                            proc.stdin.flush()
+                        except (OSError, ValueError):
+                            pass
+                elif command == "abort":
+                    return ("aborted",)
+                elif command in ("sweep", "trial", "done", "capture", "create"):
+                    refuse("%s while a scan is running" % command)
+                else:
+                    prose("ignoring an unknown command")
+        if result is None:
+            prose("the sweep ended without a result")
+            return ("failed", "timeout")
+        return ("result", result)
+    finally:
+        for fd in (rfd, wfd):
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        if proc is not None:
+            kill_group(proc)
+        lock.__exit__(None, None, None)
+
+
+def reader_next(reader):
+    return reader.poll()
+
+
+def cmd_set_limits(name, lock, sudo):
+    for value, maximum in ((lock, LOCK_MAXIMUM), (sudo, SUDO_MAXIMUM)):
+        if type(value) is not int or not MIN_TEMPLATES <= value <= maximum:
+            raise Fatal("bad_arguments")
+    with store_lock():
+        people = read_all()
+        person = find(people, name)
+        if person is None:
+            raise Fatal("no_person")
+        person["limits"] = {"lock": lock, "sudo": sudo}
+        validate_record(record_path(name), person)
+        write_json(record_path(name), person, 0o600)
+        summary = regenerate(people)
+    emit({"ok": True, "person": public(person), "sudo_faces": summary["sudo_faces"]})
+
 
 def cmd_enroll_session(name):
     """plan-merged.md §2.4. JSON lines both ways; stdin EOF is the cancel."""
@@ -1930,11 +2345,20 @@ def cmd_enroll_session(name):
     if person is None and len(people) >= MAX_PEOPLE:
         raise Fatal("person_limit")
     threshold = howdy_threshold()
+    sw = pure()
+    bounds = sweep_bounds()
 
-    emit({"event": "ready", "person": public(person) if person else None})
+    lock_cap, sudo_cap = caps(person) if person else (LOCK_TEMPLATES, SUDO_TEMPLATES)
+    emit({"event": "ready", "person": public(person) if person else None,
+          "verbs": ["capture", "sweep", "abort", "finish"],
+          "limits": {"lock": lock_cap, "sudo": sudo_cap}})
 
     created = None          # the record a `create` proposed, not yet written
     captured = {}           # appearance label -> appearance, this session only
+    committable = set()     # the labels whose set passed root's check (rule F)
+    kept = {}               # label -> {"mode", "laps", "eye"}: the kept sweep laps
+    state = "ready"         # table V
+    swept_before = False
     committed = False
 
     # The two bounds on a standing authorisation (risk 9). `idle_until` is
@@ -1942,9 +2366,10 @@ def cmd_enroll_session(name):
     # forty seconds, so the clock measures a person who has gone away rather
     # than an engine that is busy.
     reader = line_reader(sys.stdin.fileno())
-    idle_seconds, whole_seconds = session_bounds()
-    idle_until = time.monotonic() + idle_seconds
-    ends_at = time.monotonic() + whole_seconds
+    idle_seconds, whole_seconds, scan_seconds = session_bounds()
+    began = time.monotonic()
+    idle_until = began + idle_seconds
+    ends_at = began + whole_seconds
 
     while True:
         line = reader.line(min(idle_until, ends_at))
@@ -1998,6 +2423,9 @@ def cmd_enroll_session(name):
                 # A capture for a person who neither exists nor was created:
                 # the name names nobody, which is what invalid_name says.
                 raise Fatal("invalid_name")
+            if sw["verb_allowed"](state, "capture", swept_before=swept_before) != "allow":
+                refuse("capture after a sweep")
+                continue
             appearance = check_label(message.get("appearance"))
             labels = set(a["label"] for a in target["appearances"]) | set(captured)
             if appearance not in labels and len(labels) >= MAX_APPEARANCES:
@@ -2009,10 +2437,117 @@ def cmd_enroll_session(name):
                 captured[appearance] = {"label": appearance,
                                         "time": int(time.time()),
                                         "encoding": encoding}
+                committable.add(appearance)
             emit(result)
 
+        elif command == "sweep":
+            target = person if person is not None else created
+            if target is None:
+                raise Fatal("invalid_name")
+            label = check_label(message.get("appearance"))
+            labels = set(a["label"] for a in target["appearances"]) | set(captured)
+            if label not in labels and len(labels) >= MAX_APPEARANCES:
+                raise Fatal("appearance_limit")
+            mode, lap, wanted = message.get("mode"), message.get("lap"), message.get("targets")
+            held = kept.get(label) or {}
+            fresh = find(read_all(), name)
+            verdict = sw["verb_allowed"](state, "usual" if mode == "usual" else "sweep",
+                                         lap if type(lap) is int else None, held.get("mode"), swept_before)
+            targets, why = sw["valid_sweep"](mode, lap, wanted, {
+                "state": state, "kept_mode": held.get("mode"), "kept_laps": sorted(held.get("laps", ())),
+                "centre": label in captured and label in committable,
+                "stored": stored_count(fresh, label) if fresh else 0})
+            if verdict != "allow" or why:
+                refuse(why or "not allowed in this state")
+                continue
+            if mode == "usual":
+                refuse("the usual position is not in this release")
+                continue
+            swept_before = True
+            ends_at = began + scan_seconds
+            if lap == 1:
+                # the retake: the whole pending set of this appearance goes first
+                captured.pop(label, None)
+                committable.discard(label)
+                kept.pop(label, None)
+                reference, eye = [], None
+            else:
+                reference = [captured[label]["encoding"]] + [e["encoding"] for e in captured[label]["extra"]]
+                eye = held.get("eye")
+            state = "running"
+            emit_checked({"event": "sweeping", "mode": mode, "lap": lap, "targets": targets,
+                          "quota": sw["QUOTA"]})
+            outcome = run_sweep(reader, mode, lap, targets, bounds, reference, eye, ends_at)
+            if outcome[0] == "eof":
+                state = "closed"
+                break
+            if outcome[0] == "expired":
+                prose("the session expired (the session limit); nothing was written")
+                audit("enroll-session for %s expired (the session limit) during a sweep" % name)
+                state = "closed"
+                break
+            drop = None             # the code, when this lap's candidates are dropped
+            if outcome[0] == "aborted":
+                emit_checked({"event": "aborted"})
+                drop = "aborted"
+            elif outcome[0] == "failed":
+                drop = outcome[1]
+                emit_checked({"event": "capture_failed", "code": drop})
+            else:
+                judged = judge(mode, lap, targets, outcome[1])
+                if judged["code"] is not None:
+                    drop = judged["code"]
+                    emit_checked({"event": "capture_failed", "code": drop})
+                else:
+                    now = int(time.time())
+                    band = "near" if lap == 1 else "far"
+                    extras = [{"pose": sw["pose_name"](t["bin"]), "band": band, "time": now,
+                               "r": t["r"], "support": t["support"], "encoding": t["encoding"]}
+                              for t in judged["templates"]]
+                    if lap == 1:
+                        candidate = {"label": label, "time": now, "encoding": judged["centre"], "extra": extras}
+                    else:
+                        candidate = dict(captured[label])
+                        candidate["extra"] = [e for e in candidate["extra"] if e["band"] != "far"] + extras
+                    try:
+                        validate_appearance(candidate, lambda: (_ for _ in ()).throw(Fatal("store_corrupt")))
+                    except Fatal:
+                        prose("the sweep's result did not validate")
+                        drop = "timeout"
+                        emit_checked({"event": "capture_failed", "code": drop})
+                    else:
+                        captured[label] = candidate
+                        committable.add(label)
+                        entry = kept.setdefault(label, {"mode": mode, "laps": set(), "eye": None})
+                        entry["laps"].add(lap)
+                        if lap == 1:
+                            entry["eye"] = judged["eye"]
+                        emit_checked({"event": "swept", "mode": mode, "lap": lap,
+                                      "filled": sorted(t["bin"] for t in judged["templates"]),
+                                      "skipped": judged["skipped"], "centreHeld": True,
+                                      "kept": 1 + len(candidate["extra"])})
+                        state = "swept"
+            if drop is not None:
+                # Table V: a dropped lap 2 keeps lap 1; a dropped lap 1 leaves nothing,
+                # and `changed` takes the whole appearance's set with it.
+                if drop == "changed" or lap == 1:
+                    captured.pop(label, None)
+                    committable.discard(label)
+                    kept.pop(label, None)
+                    state = "ready"
+                else:
+                    state = "swept"
+
+        elif command in ("finish", "abort"):
+            # nothing is running: ignored (table V)
+            prose("ignoring %s: nothing is running" % command)
+
         elif command == "done":
-            if not captured:
+            if sw["verb_allowed"](state, "done", swept_before=swept_before) != "allow":
+                refuse("done in this state")
+                continue
+            to_commit = dict((l, a) for l, a in captured.items() if l in committable)
+            if not to_commit:
                 # Nothing was recorded, so there is nothing to save -- and a
                 # person with no appearances is exactly what "no empty people"
                 # rules out (plan-merged.md §1 row 5).
@@ -2048,12 +2583,12 @@ def cmd_enroll_session(name):
                     target["owner"] = not people
                     target["sudo"] = not people
                     people.append(target)
-                for appearance in captured.values():
-                    kept = [a for a in target["appearances"]
-                            if a["label"] != appearance["label"]]
-                    if len(kept) >= MAX_APPEARANCES:
+                for appearance in to_commit.values():
+                    kept_labels = [a for a in target["appearances"]
+                                   if a["label"] != appearance["label"]]
+                    if len(kept_labels) >= MAX_APPEARANCES:
                         raise Fatal("appearance_limit")
-                    target["appearances"] = kept + [appearance]
+                    target["appearances"] = kept_labels + [appearance]
                 # The same validation every record is read back through, applied
                 # before this one is written: a record that would not survive
                 # read_all() must not be what makes the store corrupt.
@@ -2063,7 +2598,7 @@ def cmd_enroll_session(name):
             committed = True
             audit("enrolled %s: %d appearance(s) this session, %d in all; "
                   "owner=%s sudo=%s lock=%s; sudo set now %d face(s)"
-                  % (name, len(captured), len(target["appearances"]),
+                  % (name, len(to_commit), len(target["appearances"]),
                      target["owner"], target["sudo"], target["lock"],
                      summary["sudo_faces"]))
             emit({"event": "saved", "person": public(target)})
@@ -2102,6 +2637,8 @@ def main(argv):
             cmd_set_label(check_name(argv[1]), stdin_json())
         elif verb == "set-permission":
             cmd_set_permission(check_name(argv[1]), argv[2], argv[3] == "on")
+        elif verb == "set-limits":
+            cmd_set_limits(check_name(argv[1]), int(argv[2]), int(argv[3]))
         elif verb == "remove-appearance":
             cmd_remove_appearance(check_name(argv[1]), stdin_json())
         elif verb == "remove-person":
@@ -2128,7 +2665,7 @@ def main(argv):
     except Busy:
         emit({"error": "busy"})
         return 3
-    except (IndexError, KeyError):
+    except (IndexError, KeyError, ValueError):
         emit({"error": "bad_arguments"})
         return 1
     except OSError as error:
@@ -3108,7 +3645,13 @@ require_python() {
 # The store script needs nothing but the standard library; the engine calls in
 # it are a different matter and are NOT isolated -- howdy's own code needs the
 # site-packages dlib and cv2 live in.
-store_py() { python3 -I -c "$STORE_PY" "$@"; }
+#
+# SWEEP_PY travels to the store program in the environment, set here on every call:
+# store_py cannot be handed a value by whoever ran the wrapper, because an
+# assignment in front of a command replaces whatever was inherited. The store
+# program executes only the pure half (before the marker) and gives the whole text
+# to the capture child as its own `-c` argument.
+store_py() { OMARCHY_FACE_SWEEP_PY=$SWEEP_PY python3 -I -c "$STORE_PY" "$@"; }
 
 # One or more keys added to a document the store printed.
 #
@@ -3766,7 +4309,7 @@ case $verb in
     # exec, so python owns the standard streams this process was given: the
     # session is a conversation on stdin, and a bash layer in the middle is a
     # buffer between the GUI and the engine for no reason at all.
-    exec python3 -I -c "$STORE_PY" enroll-session "$name"
+    OMARCHY_FACE_SWEEP_PY=$SWEEP_PY exec python3 -I -c "$STORE_PY" enroll-session "$name"
     ;;
 
   set-label)
@@ -3796,6 +4339,21 @@ case $verb in
     [[ $value == on || $value == off ]] || die "bad_arguments"
     audit "set-permission $which=$value for $name, by uid ${caller_uid:-0}"
     store_verb set-permission "$name" "$which" "$value"
+    ;;
+
+  set-limits)
+    # How many templates of a person each use may take (plan-face-enroll.md 2b).
+    # The numbers are checked again, with the maxima, by the store program.
+    assert_owner
+    [[ -n $account ]] || die "not_installed"
+    require_python
+    name=${1:-}
+    lock_cap=${2:-}
+    sudo_cap=${3:-}
+    name_rule_ok "$name" || die "invalid_name"
+    [[ $lock_cap =~ ^[0-9]{1,2}$ && $sudo_cap =~ ^[0-9]{1,2}$ ]] || die "bad_arguments"
+    audit "set-limits lock=$lock_cap sudo=$sudo_cap for $name, by uid ${caller_uid:-0}"
+    store_verb set-limits "$name" "$lock_cap" "$sudo_cap"
     ;;
 
   remove-appearance)
