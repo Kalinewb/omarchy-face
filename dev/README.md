@@ -755,18 +755,56 @@ checkout (`omarchy-plugin-remove:105-115`).
 
 `dev/enrol-record.py` is the one tool in `dev/` that opens a real camera, so it
 is run by a person and never from a suite: `./dev/enrol-record.py --list` prints
-the recordings to make (desk, in the lap, tilted, far, a concurrent RGB+IR lap,
-and optionally `--stranger` frames, which asks for the other person's typed
-consent). It writes under `~/.cache/omarchy-face-enrol/` (mode 0700, outside the
-repository): each infrared frame as a lossless PNG, one JSON line per frame with
-timing, brightness and dlib's HOG faces and five landmarks, and a `meta.json`.
-The concurrent lap keeps **no RGB picture**, only per-frame face boxes as
-fractions of the frame (the crop fit needs where the face is, not who it is).
+the whole ordered set to record, with plain instructions and the exact commands.
+It is a measurement tool and decides nothing: no threshold, no pass or fail.
+The kinds:
+
+| kind | what the person does | seconds |
+|---|---|---|
+| `still` | holds the head still, "hold still, look at the circle", at the desk and in the lap (`--where`); the landmark jitter, before any steadiness threshold is chosen | 10 |
+| `desk`, `inlap`, `tilt`, `far` | a slow circle, three times round, laptop on the desk / in the lap / tilted / farther away | 45 |
+| `concurrent` | the same with the RGB camera running too | 45 |
+| `guided` | prompted in the terminal, `--pace` seconds each (default 4 = `PROMPT_LEAD` 3 s + `TARGET_DWELL` 0.8 s, rounded up): the middle, right (bin 3), down (6), left (9), up (0), then the eight other bins in clock order; `--rounds` (default 3) | 156 |
+| `holds` | for right, down, left, up: turn slowly past the comfortable point (5 s), back (3 s), turn comfortably (3 s), hold perfectly still (3 s), back (2 s); a centre prompt opens each round; `--rounds` (default 2); `--pace` scales every step (4 = those lengths) | 134 |
+| `--stranger` | another person's frames, asking for their typed consent on a terminal | 20 |
+
+It writes under `~/.cache/omarchy-face-enrol/` (mode 0700, outside the
+repository, and `--out` inside the repository is refused): each infrared frame
+as a lossless PNG, one JSON line per frame with timing, brightness and dlib's
+HOG faces and five landmarks, and a `meta.json`. `guided` and `holds` also write
+`prompts.jsonl`, one line per prompt shown: `mono` (the monotonic time it was
+shown), `t` (the same moment in seconds since the first IR frame, the clock of
+`frames.jsonl`; it can be a hair below 0 for the first prompt), `target`
+(`centre`, `right`, `down`, `left`, `up` or `up-right`, `right-up`, ...), `bin`
+(clockwise from the top, `null` for the centre), `round`, `step`, `of`, `phase`
+(`target`; for holds `centre`, `past`, `back`, `settle`, `hold`, `return`), `at`
+and `len` (the plan, in seconds from the start), and `say` (the words). The
+concurrent lap keeps **no RGB picture**, only per-frame face boxes as fractions of
+the frame. Labels go to `meta.json` only and nothing reads them back: `--where
+desk|lap`, `--dark` (recorded in a dark room), `--note TEXT`, `--other-person` (a
+second person, asking for their typed consent like `--stranger`). The prompt is
+printed in the terminal in plain words with a countdown tick; there is no GUI.
 It releases each camera on every way out (end, Ctrl-C, SIGTERM, an error),
 imports no network module, and refuses to run as root.
 
 `--ir` and `--rgb` take a file or an image sequence (`dir/%04d.png`) instead of
-a device, which is how its own plumbing is checked without a camera.
+a device, read at 30 frames a second like a camera, which is how its own plumbing
+is checked without a camera.
+
+### The recorder's own test
+
+```sh
+./dev/enrol-record-test.py
+```
+
+Never opens a camera. It checks what each kind schedules (the order, bins and
+lengths of `guided`, `holds` and `still`), `--list`, the imports, and then runs
+the script as a process on synthetic picture sequences: each kind end to end, the
+files and their fields, modes 0700 and 0600, the labels, the refusals (no consent,
+`--out` inside the repository, bad options), a camera that stops early, and Ctrl-C
+in the countdown (130, no recording, the camera never opened) and during a prompt
+(130, what it has is kept). The pictures hold no face, so the HOG lists are empty:
+it cannot say anything about how real landmarks look. About a minute.
 
 ### E0 — the sweep's pure functions
 
