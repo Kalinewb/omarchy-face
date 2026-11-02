@@ -126,7 +126,7 @@ fi
 # card, which is a window, is named by the Face service alone.
 echo
 echo "${BOLD}Hosting${RESET}"
-hosted_files=(Surface.qml FaceViews.qml FaceModel.qml EnrolView.qml EnrolRing.qml RecordView.qml RecordSession.qml RecordPreview.qml
+hosted_files=(Surface.qml FaceViews.qml FaceModel.qml TestResultView.qml EnrolView.qml EnrolRing.qml RecordView.qml RecordSession.qml RecordPreview.qml
               PeopleView.qml PersonView.qml SetupView.qml SettingsView.qml RemoveView.qml common/Ask.qml common/EnrolLink.qml)
 window_type() { sed -E 's#//.*$##' | grep -nE '\b(PanelWindow|PopupWindow|FloatingWindow)\b'; }
 card_name() { sed -E 's#//.*$##' | grep -nE '\bRecordCard\b'; }

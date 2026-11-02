@@ -334,6 +334,24 @@ the harness reads `previewOn`, the fence's input, rather than loading QtMultimed
 `kalinewb.notch/platform.json` and Face's `kalinewb.face/enrol.json`), the way
 `OMARCHY_FACE_DEV_STATE` stands in for the state files.
 
+Two Phase 3 regressions, found live on the real notch and fixed after Phase 4's first push, are
+held by `e2` (xi) and (xii):
+
+- **Insets.** The notch hands an integration's panel exactly its `implicitWidth` x `implicitHeight`
+  and no margin (`ExpandedHost` in `Bar.qml`; `maxPanelWidth` is already net of the side padding).
+  The old `hostedPanels` path put the stock content in a slot with `notchSidePadding`
+  (`Style.space(14)`) on every side, and the stock popup's `KeyboardPanel` pads by
+  `Style.spacing.popupPadding` (14), so `Surface.qml`'s panel adds that margin itself, on every
+  side, inside its implicit size. (i) now compares the hosted panel, pixel for pixel, with the
+  stock content inside that same margin, and (xi) checks the four margins and the size.
+- **Test.** In the stock popup a test is the service's `TestCard` window under the camera; in the
+  notch that window is drawn over the panel and lands on the rows below. Hosted, `PersonView.test()`
+  now pushes `TestResultView.qml` (`FaceModel.showTest`), the same words
+  (`common/testverdict.js`, shared with `TestCard.qml`) in place of the person view; Close or Esc goes
+  back and stops the check (a signal, which is what frees the camera). (xii) drives it: the view
+  pushed, the verdict, the person view not drawn under it, no `testMatch` call to the service, and
+  Esc returning to a person view that is pixel-identical to before.
+
 ### What only you can try, live (Phase 3's user gate)
 
 Nothing below was run by the build; it needs your real desktop. Install this

@@ -520,6 +520,55 @@ for route in people person:anna setup; do
     "$(awk -v d="$max_other" -v m="$MAX_LEVEL" 'BEGIN { print (d + 0 > m) ? "true" : "false" }')"
 done
 
+step "(xi) the hosted panel pads its content the way the old hostedPanels slot and the stock popup do"
+# The notch gives an integration's panel its own size and no margin (ExpandedHost
+# in Bar.qml; maxWidth is already net of the notch's side padding), while the old
+# hostedPanels slot had a margin of notchSidePadding, Style.space(14), on every
+# side and KeyboardPanel pads by Style.spacing.popupPadding (14 too). So the panel
+# adds 14 on every side inside its implicit size. (i) above compares it, pixel for
+# pixel, with the stock content inside that same margin.
+for route in people person:anna setup; do
+  out=$(render hosted "$route" identity "$root/inset-${route//:/-}.png")
+  insets=$(field insets "$out")
+  # Style.space() scales with the theme's spacing: read what 14 is from the harness
+  # itself (left), then require the same on the other three sides.
+  read -r _ l _ t _ r _ b _ w <<<"$insets"
+  check "$route: content has the same margin on all four sides, not zero" "true" \
+    "$([[ $l -gt 0 && $l == "$t" && $l == "$r" && $l == "$b" ]] && echo true || echo false)"
+  check "$route: …and the implicit size is the content's 320 plus that margin twice (not the bare 320)" "true" \
+    "$(awk -v l="$l" -v w="${w%%x*}" 'BEGIN { print (w - 2 * l >= 300 && w > 320) ? "true" : "false" }')"
+done
+echo "${DIM}  margin and size, hosted: $insets${RESET}"
+
+step "(xii) Test, inside the notch: its own view in the same home, not a card over the rows"
+test_run() { # test_run <verify exit code> -> lines; PNGs at $root/testv-<code>-{a,b,c}.png
+  : >"$logs/omarchy-shell.log"
+  env "${face_env[@]}" OMARCHY_FACE_DEV_VERIFY="$1" FACE_HARNESS_CASE=test FACE_HARNESS_ROUTE=person:anna \
+    FACE_HARNESS_HOST=identity FACE_HARNESS_OUT="$root/testv-$1.png" timeout 60 quickshell -p "$panel_root" -n 2>&1 \
+    | tee -a "$logs/render.log" | sed -n 's/^.*HARNESS \([a-zA-Z0-9-]*\) \(.*\)$/\1=\2/p'
+}
+t0=$(test_run 0)
+echo "${DIM}$(sed 's/^/  /' <<<"$t0")${RESET}"
+check "before: the person view is up, and it is the hosted panel's current view" "person person-view true" "$(field before-view "$t0")"
+check "pressing Test pushes a view of its own (a second step on the stack)" "test stack 3" "$(field test-view "$t0")"
+check "…the verdict is in words, with the line that nothing was unlocked" "Recognised Anna|Nothing was unlocked — this was only a test." \
+  "$(field headline "$t0")|$(field subline "$t0")"
+check "…and the person view is NOT drawn under it (nothing to overlap)" "false" "$(field during-person-view "$t0")"
+check "…it fits the panel: no taller than the person view was" "true" \
+  "$(awk -v a="$(field size-a "$t0" | sed 's/.*x//')" -v b="$(field size-b "$t0" | sed 's/.*x//')" 'BEGIN { print (b > 0 && b <= a) ? "true" : "false" }')"
+check "…and it never asked the service for its card (no testMatch call, no window)" "0" "$(grep -c testMatch "$logs/omarchy-shell.log")"
+check "Esc goes back to the person view, and the request is dropped" "person person-view true test-request true" "$(field after-view "$t0")"
+check "…the person view draws exactly as it did before (the PNG matches within the harness's noise)" "true" \
+  "$(read -r _ n mx < <(pngdiff "$root/testv-0-a.png" "$root/testv-0-c.png"); within "$mx")"
+check "…and the result is not the person view (different pixels, fully replacing it)" "true" \
+  "$(read -r _ n mx < <(pngdiff "$root/testv-0-a.png" "$root/testv-0-b.png"); awk -v d="$n" 'BEGIN { print (d > 500) ? "true" : "false" }')"
+t1=$(test_run 1)
+check "a check that did not recognise says so" "Did not recognise Anna" "$(field headline "$t1")"
+t3=$(test_run 3)
+check "a helper that cannot check says that, not something about the person" "Face ID cannot check right now" "$(field headline "$t3")"
+check "no case drew a TestCard in the notch: the panel's files name no window, and the card's copy is shared" "1 1" \
+  "$(grep -c '^import "common/testverdict.js"' "$REPO/TestCard.qml") $(grep -c '^import "common/testverdict.js"' "$REPO/TestResultView.qml")"
+
 step "the preview camera's fence (6a.1; round-3 notes S1 and S3)"
 fence=$(env "${face_env[@]}" FACE_HARNESS_CASE=fence timeout 60 quickshell -p "$panel_root" -n 2>&1 \
   | tee -a "$logs/render.log" | sed -n 's/^.*HARNESS \([a-zA-Z0-9-]*\) \(.*\)$/\1=\2/p')

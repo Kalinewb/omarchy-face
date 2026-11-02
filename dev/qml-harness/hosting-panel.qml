@@ -52,8 +52,8 @@ ShellRoot {
   // "WxH": the size to give the hosted panel, so it can be compared with the
   // stock popup's content at the size that popup chose.
   readonly property var size: (Quickshell.env("FACE_HARNESS_SIZE") || "").split("x").map(Number)
-  readonly property real wantW: size.length === 2 && size[0] > 0 ? size[0] : 305
-  readonly property real wantH: size.length === 2 && size[1] > 0 ? size[1] : 560
+  readonly property real wantW: size.length === 2 && size[0] > 0 ? size[0] : 348
+  readonly property real wantH: size.length === 2 && size[1] > 0 ? size[1] : 588
 
   function log(key, value) { console.log("HARNESS " + key, value) }
 
@@ -159,6 +159,70 @@ ShellRoot {
     }
   }
 
+  // --- the test result, in place (plan-gui.md 5.2) ---------------------------------
+  //
+  //   FACE_HARNESS_CASE=test  the hosted panel on person:anna; Test pressed
+  //                           (PersonView.test()); the verdict read; Esc. Three
+  //                           PNGs: <out>-a (before), -b (the result), -c (after
+  //                           Esc), and what each state contains.
+  property var testPanel: null
+  property int testStep: 0
+  function findItem(root, wants) {
+    if (wants(root)) return root
+    for (var i = 0; i < root.children.length; i++) {
+      var found = findItem(root.children[i], wants)
+      if (found) return found
+    }
+    return null
+  }
+  function pngName(tag) { return shellRoot.out.replace(/\.png$/, "") + "-" + tag + ".png" }
+  function grabTo(item, tag, next) {
+    item.grabToImage(function (result) {
+      shellRoot.log("saved-" + tag, result.saveToFile(shellRoot.pngName(tag)))
+      shellRoot.log("size-" + tag, Math.round(item.width) + "x" + Math.round(item.height))
+      next()
+    })
+  }
+  function personViewIn(panel) { return findItem(panel, function (i) { return typeof i.test === "function" && i.name !== undefined }) }
+  Timer {
+    id: testTimer
+    interval: 1800
+    onTriggered: {
+      testTimer.interval = 1500
+      var panel = shellRoot.testPanel
+      var model = shellRoot.surface.model
+      if (shellRoot.testStep === 0) {
+        shellRoot.testStep = 1
+        testTimer.stop()
+        shellRoot.log("before-view", model.view + " person-view " + (shellRoot.personViewIn(panel) !== null))
+        shellRoot.grabTo(panel, "a", function () {
+          var pv = shellRoot.personViewIn(panel)
+          pv.test()
+          shellRoot.log("test-view", model.view + " stack " + model.viewStack.length)
+          testTimer.start()
+        })
+      } else if (shellRoot.testStep === 1) {
+        shellRoot.testStep = 2
+        testTimer.stop()
+        var head = shellRoot.findItem(panel, function (i) { return i.objectName === "testHeadline" })
+        var sub = shellRoot.findItem(panel, function (i) { return i.objectName === "testSubline" })
+        shellRoot.log("headline", head ? head.text : "none")
+        shellRoot.log("subline", sub ? sub.text : "none")
+        shellRoot.log("during-person-view", shellRoot.personViewIn(panel) !== null)
+        shellRoot.log("during-size", Math.round(panel.width) + "x" + Math.round(panel.height) + " implicit " + Math.round(panel.implicitWidth) + "x" + Math.round(panel.implicitHeight))
+        shellRoot.grabTo(panel, "b", function () {
+          // Esc: the panel's own key handling, which is the model's back().
+          model.back()
+          testTimer.start()
+        })
+      } else {
+        testTimer.stop()
+        shellRoot.log("after-view", model.view + " person-view " + (shellRoot.personViewIn(panel) !== null) + " test-request " + (model.testRequest === null))
+        shellRoot.grabTo(panel, "c", function () { Qt.exit(0) })
+      }
+    }
+  }
+
   function grab(item, label) {
     item.grabToImage(function (result) {
       shellRoot.log("size", Math.round(item.width) + "x" + Math.round(item.height))
@@ -173,7 +237,7 @@ ShellRoot {
     id: settle
     interval: 1800
     onTriggered: {
-      if (shellRoot.caseName === "stock") shellRoot.grab(stockViews, "stock")
+      if (shellRoot.caseName === "stock") shellRoot.grab(stockFrame, "stock")
       else if (shellRoot.caseName === "popup") shellRoot.grab(shellRoot.stockPanel.viewsItem, "popup")
       else shellRoot.grab(hostedWindow.contentItem.children[0], "hosted")
     }
@@ -197,25 +261,38 @@ ShellRoot {
     height: 900
     color: "black"
     Face.FaceModel { id: stockModel; hosted: false; bar: null; opened: true }
-    // 305 x 560: what FacePanel's KeyboardPanel gives its content here.
-    Face.FaceViews {
-      id: stockViews
-      model: stockModel
+    // The content as the stock popup lays it out, in the margin that every home
+    // gives it: KeyboardPanel pads its content by Style.spacing.popupPadding, and
+    // the notch's old hostedPanels slot by notchSidePadding, both Style.space(14).
+    // The hosted panel (Surface.qml) must add the same margin itself, because an
+    // integration's slot in the notch has none, so the frame is what it is
+    // compared with: 14 px on every side, nothing behind it.
+    Item {
+      id: stockFrame
+      readonly property real pad: Style.space(14)
       width: shellRoot.wantW
-      height: Math.min(stockViews.contentHeight, shellRoot.wantH)
+      height: Math.min(stockViews.contentHeight + 2 * pad, shellRoot.wantH)
+      Face.FaceViews {
+        id: stockViews
+        x: stockFrame.pad
+        y: stockFrame.pad
+        model: stockModel
+        width: stockFrame.width - 2 * stockFrame.pad
+        height: stockFrame.height - 2 * stockFrame.pad
+      }
     }
   }
 
   Loader {
     id: surfaceLoader
-    active: shellRoot.caseName === "hosted" || shellRoot.caseName === "fence"
+    active: shellRoot.caseName === "hosted" || shellRoot.caseName === "fence" || shellRoot.caseName === "test"
     sourceComponent: Component { Face.Surface { surfaceHost: fakeHost } }
   }
   readonly property var surface: surfaceLoader.item
 
   Window {
     id: hostedWindow
-    visible: shellRoot.caseName === "hosted" || shellRoot.caseName === "fence"
+    visible: shellRoot.caseName === "hosted" || shellRoot.caseName === "fence" || shellRoot.caseName === "test"
     width: 340
     height: 900
     color: "black"
@@ -256,6 +333,12 @@ ShellRoot {
       })
       panel.open(shellRoot.route)
       shellRoot.log("available", shellRoot.surface.available)
+      var fv = shellRoot.findItem(panel, function (i) { return i.previewLive !== undefined && i.model !== undefined })
+      if (fv) shellRoot.log("insets", "left " + Math.round(fv.x) + " top " + Math.round(fv.y)
+                            + " right " + Math.round(panel.width - fv.x - fv.width)
+                            + " bottom " + Math.round(panel.implicitHeight - fv.y - fv.height)
+                            + " implicit " + Math.round(panel.implicitWidth) + "x" + Math.round(panel.implicitHeight))
+      if (shellRoot.caseName === "test") { shellRoot.testPanel = panel; testTimer.start(); return }
       settle.start()
     }
   }
