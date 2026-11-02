@@ -3,25 +3,26 @@ import Quickshell
 import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
-import "common/spring.js" as Spring
 
-// The recording card (plan-gui.md §5.3): a scrim on the built-in screen with a
-// card at the top, under the webcam, so the person is looking at the camera
-// while they read it.
+// The recording card (plan-gui.md §5.3): the scan as an island of its own, in the
+// notch's silhouette, dropped from the top edge under the camera on the Overlay
+// layer, above whatever the real notch is showing, so the person is looking at the
+// camera while they read it.
 //
 // It belongs to the Face service and not to the popup, for two reasons that are
 // both structural: it needs exclusive keyboard focus (a popup's key catcher
 // cannot give it that), and it has to outlive the popup, which any write under
 // ~/.config/omarchy/plugins destroys (plan-engine.md E13).
 //
-// This file is the window around the enrol view. What is inside it -- the ring,
-// the line, the links, and on an old helper the single capture's picker and
-// buttons -- is EnrolView.qml. This window is where every scan lives, whichever
-// home asked for it: Start brings up polkit's password dialog, and a scan drawn
-// inside the notch's panel died with the panel when the notch lost focus to it
-// (Phase 4's live gate). The card has no focus-loss handling of its own and
-// closes only on Esc, Cancel, a click on the scrim, Done or the session ending.
-// Every decision about the session is in RecordSession.qml.
+// This file is the window; the shape, the drop and the retract are ScanIsland.qml,
+// and what is inside that -- the ring, the line, the links, and on an old helper
+// the single capture's picker and buttons -- is EnrolView.qml. This window is
+// where every scan lives, whichever home asked for it: Start brings up polkit's
+// password dialog, and a scan drawn inside the notch's panel died with the panel
+// when the notch lost focus to it (Phase 4's live gate). A window of its own is
+// not the notch's, so the dialog cannot collapse it: it has no focus-loss handling
+// and closes only on Esc, Cancel, Done or the session ending, retracting into the
+// top edge. Every decision about the session is in RecordSession.qml.
 PanelWindow {
   id: card
 
@@ -35,29 +36,37 @@ PanelWindow {
   // The three standard labels, so the picker offers the same words as the
   // person view.
   property var appearanceLabels: ["No glasses", "Everyday glasses", "Reading glasses"]
+  // The notch's own silhouette, from the user's shell.json (Service.qml).
+  property real bottomRadius: 10
+  property real filletRadius: 10
 
   // What the picker shows and says is the view's; these are the card's way of
   // being asked, which is how Service.qml's state() and the offscreen suites
   // question a card that has no window they could read.
-  property alias recordedAppearances: view.recordedAppearances
-  function isRecorded(label) { return view.isRecorded(label) }
-  function isCapturedNow(label) { return view.isCapturedNow(label) }
-  function appearanceMark(label) { return view.appearanceMark(label) }
-  function actionText() { return view.actionText() }
-  function actionNote() { return view.actionNote() }
+  property alias recordedAppearances: island.recordedAppearances
+  function isRecorded(label) { return island.isRecorded(label) }
+  function isCapturedNow(label) { return island.isCapturedNow(label) }
+  function appearanceMark(label) { return island.appearanceMark(label) }
+  function actionText() { return island.actionText() }
+  function actionNote() { return island.actionNote() }
 
   // Something asked for root while this card was up. The indicator stands down
   // for this card (it would be two cards in one place), so its line arrives here
   // instead: a person staring into the lens for a countdown must not be the one
   // person who never hears that a sudo happened (Indicator.qml).
-  property alias notice: view.notice
+  property alias notice: island.notice
 
   // Not `closed`: every Quickshell window already has a `closed` signal, and
   // declaring a second one is an invalid override -- Qt warns about it today
   // and is on its way to refusing it.
   signal dismissed()
+  // The island has retracted into the top edge: the window may be destroyed.
+  signal retracted()
 
-  // The card's palette: white on its black scrim, the theme's accent.
+  // Leave: retract into the top edge, then `retracted`.
+  function retract() { island.retract() }
+
+  // The card's palette: white on its black surface, the theme's accent.
   QtObject {
     id: cardColors
     readonly property color foreground: "white"
@@ -79,53 +88,25 @@ PanelWindow {
     session.requestClose()
   }
 
-  anchors { top: true; bottom: true; left: true; right: true }
+  // A strip along the top edge, as wide as the monitor it opens on (the
+  // compositor puts a window with no screen of its own on the focused one), so the
+  // island is centred on that monitor as the notch is. The strip is fixed and tall
+  // enough for the settled island: only the island inside it ever changes size,
+  // because resizing a layer surface makes the compositor stretch its old buffer
+  // for a few frames. Clicks anywhere outside the island go to whatever is there.
+  anchors { top: true; left: true; right: true }
+  implicitHeight: Style.space(700)
   color: "transparent"
+  mask: Region { item: island.shape }
   exclusionMode: ExclusionMode.Ignore
   WlrLayershell.namespace: "omarchy-face-record"
   WlrLayershell.layer: WlrLayer.Overlay
+  // Exclusive, as the card has always had: what lets Return and Esc work the
+  // moment it appears, and what polkit's dialog has always had to share the
+  // screen with. Nothing here reacts to the focus moving away.
   WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
 
-  Component.onCompleted: {
-    Qt.callLater(function () { keys.forceActiveFocus() })
-    enterAnim.start()
-  }
-
-  // Grown out of the top edge, on the indicator's curve (common/spring.js):
-  // height over 350 ms, width from 50 ms over 300 ms, both landing together.
-  // The window's position, opacity and scale are never animated -- only the
-  // bar's own height and width, so its top edge is on the screen's top edge
-  // at every frame including the first (post-ship revision).
-  property real heightP: 0
-  property real widthP: 0
-  readonly property var springCurve: Spring.curve(0.72, 0.6, 8)
-
-  ParallelAnimation {
-    id: enterAnim
-    NumberAnimation {
-      target: card; property: "heightP"; to: 1; duration: 350
-      easing.type: Easing.BezierSpline; easing.bezierCurve: card.springCurve
-    }
-    SequentialAnimation {
-      PauseAnimation { duration: 50 }
-      NumberAnimation {
-        target: card; property: "widthP"; to: 1; duration: 300
-        easing.type: Easing.BezierSpline; easing.bezierCurve: card.springCurve
-      }
-    }
-  }
-
-  Rectangle {
-    anchors.fill: parent
-    color: Qt.rgba(0, 0, 0, 0.78)
-
-    // Clicking the scrim is the same as Esc: it is the only other way out, and
-    // it must not be a way to abandon a session that is mid-capture.
-    MouseArea {
-      anchors.fill: parent
-      onClicked: card.requestClose()
-    }
-  }
+  Component.onCompleted: Qt.callLater(function () { keys.forceActiveFocus() })
 
   FocusScope {
     id: keys
@@ -133,80 +114,24 @@ PanelWindow {
     focus: true
 
     Keys.onEscapePressed: card.requestClose()
-    Keys.onReturnPressed: view.activate()
+    Keys.onReturnPressed: island.activate()
 
-    // The card, top-centre, roughly under the built-in camera.
-    // The card is its own surface: a click on it must not reach the scrim.
-    // A sibling of the card rather than a child of it, because Island's
-    // children live inside the bar and so would not cover the two fillets at
-    // its top corners -- and a click on one of those would fall through to the
-    // scrim and discard the session. Declared before the card, so everything
-    // inside it still takes its own clicks first.
-    MouseArea {
-      x: panel.x
-      y: panel.y
-      width: panel.width
-      height: panel.height
-      onClicked: {}
-    }
+    ScanIsland {
+      id: island
+      anchors.fill: parent
 
-    // The card, fused to the top edge under the built-in camera. The same
-    // shape as the indicator and the Test card (Island.qml): flush top, square
-    // top corners, an ordinary convex radius on the bottom two, and the two
-    // concave background fillets that carry the sides into the screen edge.
-    // This was a rounded panel floating 44px below the edge until the
-    // indicator stopped being one, and three cards in the same piece of screen
-    // looking like three programs is what that left behind (post-ship
-    // revision, found via live use).
-    Island {
-      id: panel
-      anchors.horizontalCenter: parent.horizontalCenter
-      anchors.top: parent.top
-      anchors.topMargin: 0
-
-      readonly property real fullWidth: Math.min(card.width - Style.space(40), Style.space(420))
-      readonly property real fullHeight: view.implicitHeight + Style.space(28)
-      // Fixed, never the bar's animated width: the preview, the picker and
-      // three wrapping Texts all measure against this, and a column that
-      // re-wraps mid-grow changes the very height it is being measured for.
-      readonly property real contentWidth: fullWidth - Style.space(28)
-
-      // The seed the bar grows from, as fractions of the settled size. Not
-      // zero, so the first frame is already a bar with its fillets on it.
-      readonly property real seedWidthFraction: 0.4
-      readonly property real seedHeightFraction: 0.2
-      barWidth: Math.max(0, fullWidth * (seedWidthFraction
-                  + (1 - seedWidthFraction) * card.widthP))
-      barHeight: Math.max(0, fullHeight * (seedHeightFraction
-                  + (1 - seedHeightFraction) * card.heightP))
-
-      // Absolute, not the indicator's fifth-of-the-height: this card is far
-      // taller than it is wide, and a fifth of its height would be a capsule.
-      // 25 is what the indicator's rule settles at, so the two read as the
-      // same material.
-      bottomRadius: Style.space(25)
-      filletRadius: Style.space(10) * barHeight / fullHeight
-      color: "#000000"
-
-      EnrolView {
-        id: view
-        anchors.centerIn: parent
-        width: panel.contentWidth
-
-        session: card.session
-        colors: cardColors
-        previewDevice: card.previewDevice
-        // The card is on screen from the moment it exists; the camera still
-        // waits for Start (the session says `previewWanted`).
-        live: card.visible
-        appearanceLabels: card.appearanceLabels
-        onCloseRequested: card.requestClose()
-
-        // Only once the bar is mostly grown, so the ring and the links are
-        // never seen half-clipped inside a bar still arriving. The bar itself
-        // never fades; this is what is in it.
-        opacity: Math.max(0, Math.min(1, (Math.min(card.heightP, card.widthP) - 0.7) / 0.3))
-      }
+      session: card.session
+      colors: cardColors
+      previewDevice: card.previewDevice
+      // The card is on screen from the moment it exists; the camera still
+      // waits for Start (the session says `previewWanted`).
+      live: card.visible
+      appearanceLabels: card.appearanceLabels
+      bottomRadius: card.bottomRadius
+      filletRadius: card.filletRadius
+      maxWidth: card.width
+      onCloseRequested: card.requestClose()
+      onRetracted: card.retracted()
     }
   }
 }

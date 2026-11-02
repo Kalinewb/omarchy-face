@@ -93,7 +93,46 @@ Item {
 
   Process { id: openProcess }
 
-  Timer { id: closeSoon; interval: 600; onTriggered: root.closeCard() }
+  // A scan that saved nothing leaves its last line up for 600 ms, then the card
+  // retracts into the top edge.
+  Timer { id: closeSoon; interval: 600; onTriggered: root.retractCard("") }
+
+  // Retract, and only then close: the island goes back into the top edge before
+  // its window goes. `then` is the person to open afterwards ("" for none).
+  function retractCard(then) {
+    var going = root.card
+    if (!going) { root.closeCard(); if (then !== "") root.openPerson(then); return }
+    going.retracted.connect(function () {
+      root.closeCard()
+      if (then !== "") root.openPerson(then)
+    })
+    going.retract()
+  }
+
+  // The notch's silhouette, so the card is cut like the notch it sits over: the
+  // user's own `bar.notch.bottomRadius` and `filletRadius` in shell.json (the
+  // notch's defaults, 10 and 10, when they are not there). A read of a file the
+  // shell keeps; nothing of the notch's code is used. OMARCHY_FACE_DEV_SHELL_JSON
+  // stands in for it in tests.
+  readonly property string shellConfigPath: Quickshell.env("OMARCHY_FACE_DEV_SHELL_JSON")
+      || ((Quickshell.env("XDG_CONFIG_HOME") || ((Quickshell.env("HOME") || "") + "/.config")) + "/omarchy/shell.json")
+
+  FileView { id: shellConfigFile; blockLoading: true; printErrors: false }
+
+  function notchShape() {
+    var shape = { bottom: 10, fillet: 10 }
+    try {
+      shellConfigFile.path = ""
+      shellConfigFile.path = root.shellConfigPath
+      var config = JSON.parse(shellConfigFile.text() || "{}")
+      var notch = config && config.bar && config.bar.notch ? config.bar.notch : {}
+      var bottom = Number(notch.bottomRadius)
+      var fillet = Number(notch.filletRadius)
+      if (isFinite(bottom) && bottom >= 0) shape.bottom = Math.min(bottom, 40)
+      if (isFinite(fillet) && fillet >= 0) shape.fillet = Math.min(fillet, 40)
+    } catch (e) { }
+    return shape
+  }
 
   function startRecording(name, appearance, label, isNew) {
     root.closeCard()
@@ -116,16 +155,18 @@ Item {
         closeSoon.restart()
         return
       }
-      root.closeCard()
-      if (saved) root.openPerson(who)
+      root.retractCard(saved ? who : "")
     })
     // A card opening starts with nothing to report; from then on the indicator's
     // suppressed line is the card's, live, so a sudo that lands mid-countdown
     // says so on the surface the person is actually looking at.
     indicator.clearSuppressedNotice()
+    var shape = root.notchShape()
     root.card = cardComponent.createObject(root, {
       session: root.session,
       previewDevice: root.previewDevice,
+      bottomRadius: shape.bottom,
+      filletRadius: shape.fillet,
       appearanceLabels: root.appearanceLabels,
       // Bound, not copied: the indicator re-reads people.json every 200 ms, so
       // an appearance that was recorded by some other route while this card is

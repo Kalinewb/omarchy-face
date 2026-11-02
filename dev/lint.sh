@@ -144,7 +144,12 @@ for f in "${hosted_files[@]}"; do
   # A scan is never drawn inside a host: polkit's dialog takes the focus the notch
   # needs to stay open (the Phase 4 live gate), so nothing the panel is made of
   # may make an EnrolView or a session.
-  sed -E 's#//.*$##' "$f" | grep -qE '\b(EnrolView|EnrolRing|RecordSession|RecordView|RecordPreview)\b' && named+=("$f hosts a scan")
+  sed -E 's#//.*$##' "$f" | grep -qE '\b(ScanIsland|EnrolView|EnrolRing|RecordSession|RecordView|RecordPreview)\b' && named+=("$f hosts a scan")
+done
+# The card is the one window of a scan: the island and everything in it draw
+# inside it (so a test can draw them with no compositor) and open none.
+for f in ScanIsland.qml EnrolView.qml EnrolRing.qml; do
+  window_type <"$f" | grep -q . && named+=("$f opens a window")
 done
 for f in *.qml; do
   [[ $f == Service.qml || $f == RecordCard.qml ]] && continue
@@ -183,7 +188,7 @@ camera_hits <RecordPreview.qml | grep -q 'Camera {' || camera_bad+=("RecordPrevi
 for f in "${all_qml[@]}"; do
   [[ $f == dev/* || $f == EnrolView.qml || $f == RecordPreview.qml ]] && continue
   sed -E 's#//.*$##' "$f" | grep -q 'RecordPreview' && camera_bad+=("$f names RecordPreview")
-  case $f in EnrolView.qml|RecordCard.qml|FaceModel.qml|FaceViews.qml|Surface.qml|Service.qml) continue ;; esac
+  case $f in EnrolView.qml|ScanIsland.qml|RecordCard.qml|FaceModel.qml|FaceViews.qml|Surface.qml|Service.qml) continue ;; esac
   sed -E 's#//.*$##' "$f" | grep -qE 'previewDevice|camera\.rgb' && camera_bad+=("$f reads the RGB node")
 done
 # Nothing that recognises a face on its own names the RGB node (omarchy-face-camera
