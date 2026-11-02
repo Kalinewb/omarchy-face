@@ -368,6 +368,82 @@ branch first (`./install.sh`, which restarts the shell), then:
 Known, not changed here: the lock-screen switch's resume (`kalinewb.face resume`)
 still reopens the stock popup, not the notch's panel.
 
+## E3 — the enrol view and its ring, offscreen
+
+```sh
+./dev/e3-enrol-view.sh                       # headless: no window, no camera
+E3_KEEP=/some/dir ./dev/e3-enrol-view.sh     # keep the PNG strip, the GIFs and the logs
+```
+
+Phase 4 of `plan-face-enroll.md`. `EnrolView.qml` is the enrol screen in both homes (the
+standalone card wraps it in its window, `FaceViews.qml` shows it in the notch's panel);
+`EnrolRing.qml` is the ring (60 ticks, 12 pose bins x 5, in Simple and Advanced);
+`common/enrolring.js` is the ring's arithmetic (looks, the dot, contrast), `common/EnrolLink.qml`
+the text link. `RecordSession.qml` is the state machine: with `scan` on it drives the sweep
+protocol (`sweep`, `track`, `swept`, `finish`, `abort`, `done`) and keeps whatever the engine
+says; the view decides nothing (a target is reached, filled or skipped by the engine alone).
+
+`e3` loads the REAL view, ring and session against the running Omarchy's `qs.Commons` and
+`qs.Ui`, driven by a fake root session that enforces table V (and counts the verbs it must
+refuse: the view must cause none). The picture the circle would hold is a counting stand-in,
+so "no camera object exists in idle" is a count. Cases: Simple start to finish (every look,
+the line for each state, the dot, contrast over `#000` for three palettes, accessibility
+properties), Advanced (any fill order, Done = `finish` then `done`), Esc from every phase,
+each failure of the outcome list with its shake and Try again, the version-skew fallback
+(`ready` without `sweep` in `verbs` -> the single capture, with the note), a session that is
+not the scan (what g3/g8 drive), reduced motion with every animation stopped, the hairline
+(only an accepted frame arms it), the preview fence, the mode file (path, one word, 16-byte
+cap, fallback, FIFO, symlinks, unwritable, rule R), and the PNG strip.
+
+What it cannot say: that the picture looks right on a real screen, that a real `VideoOutput`
+paints in the notch's panel, that pkexec's dialog leaves the panel open, that Qt announces a
+changed description to a screen reader. Two limits of the offscreen scene graph: it has no
+shader effects, so a circle that is masked (a live preview in it) paints nothing there (the
+strip draws the ring with no preview for that reason; the mask is `MultiEffect`, as the
+shell's own Tray and Background use), and `g3`/`g8`/`g10` cannot run headless at all (their
+cases that load `RecordCard.qml` or `Service.qml` need a layer-shell backend; at `cbcad09`
+the same cases fail the same way with no display).
+
+Known departures, all reported with the phase: `palette` is `colors` (QQuickItem already has a
+`palette`), `RecordSession` has a `scan` flag the owners set (so a session that is not the scan,
+which `g3` and `g8` drive, keeps `framing` and the old flow), the card's `secondary` is an
+opaque grey (the contrast rule needs an opaque role), and the hairline arms on the state word
+`hold` because the helper has no word for "accepted" (SR1 notes, item 1: a one-line change in
+`system/`, not made here).
+
+### What only you can try, live (Phase 4's user gate)
+
+Nothing below was run by the build. Install this branch (`./install.sh`; it restarts the shell),
+then:
+
+1. **Look.** Open Face -> a person -> Re-record (or `omarchy-shell kalinewb.face.card record anna
+   "No glasses" Anna ""`). Check the circle, ring and wording against the reference images:
+   Simple first (one arc highlighted at a time: left, right, up, down), then press the
+   `Advanced` link under Start and look again (twelve spots). Your accent should colour the
+   covered ticks; in the notch they are white (accent = foreground, by design).
+2. **VideoOutput in the notch** (plan 6a.4, doubt 11). From the notch, press Start: the RGB
+   preview must paint **inside the circle**, mirrored, round. If the circle stays black, the
+   mask (`MultiEffect`) or the reparenting of the `VideoOutput` into the notch's surface is
+   the cause; tell me, and the enrol route falls back to the card (`available` stays true for
+   every other route). Press Cancel or Esc, or click the notch closed: `fuser /dev/video0`
+   must print nothing within a second.
+3. **pkexec vs the notch's focus** (plan section 4.7). From the notch press Start: polkit's
+   dialog appears. The panel must **stay open** behind it. If it collapses, the session is
+   aborted (safe) and the next open shows a fresh idle view; tell me.
+4. **Esc and Return.** Return = Start, then Done once it is offered; Esc in any phase closes
+   with "Nothing was saved" for a moment. Tab walks the links in order with the focus border.
+5. **Both modes end to end.** Simple: should save in about 15 s with the centre and two to
+   four targets (a skipped target says so). Advanced: Done appears once enough is held; press
+   it, then Done again. `omarchy-face-admin`'s helper must be 3.1.0 or newer (Setup offers the
+   update); with an older one you should get the old single capture and a note.
+6. **The mode is remembered** across the card and the notch (`$XDG_STATE_HOME/omarchy-face/enrol-mode`).
+7. **Screen reader (optional).** With Orca running, Tab through the links and the ring: does it
+   read "Face scan", the step, and the percent? Does it announce a changed target? (Doubt 19.)
+
+Still ahead, not done by this phase: **SR2** (the UI-side security review, plan section 6), the
+**design-reviewer round** (UI, Code, Minimalism, Apple HIG, 7 or more), and your approval of the
+look (PNG strip + GIF, saved by `E3_KEEP`) before Phase 5.
+
 ## F4 — sudo's PAM stack
 
 ```sh
