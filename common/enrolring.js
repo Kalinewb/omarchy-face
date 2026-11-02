@@ -143,3 +143,91 @@ function contrast(a, b) {
   var hi = Math.max(la, lb), lo = Math.min(la, lb)
   return (hi + 0.05) / (lo + 0.05)
 }
+
+// --- the idle demo (no camera): what the scan will ask, played as a loop -----------------
+//
+// A pure function of time so a test can ask for any moment and the view can stop
+// computing the moment it stops running. Poses are (yaw, pitch) in [-1, 1], yaw
+// positive to the person's right (the screen's right in the mirrored preview), pitch
+// positive up; `bins` are the twelve fractions the ring would show, `target` the
+// highlighted bin ("centre", a bin or null), `centre` the rim's fraction.
+
+var DEMO_PROMPT = { 9: "Turn your head to the left", 3: "Turn your head to the right",
+                    0: "Tilt your head up", 6: "Tilt your head down" }
+var DEMO_POSE = { 9: [-1, 0], 3: [1, 0], 0: [0, 1], 6: [0, -1] }
+var DEMO_CENTRE = 2.2     // s: look at the camera, the rim closing
+var DEMO_TRAVEL = 0.9     // s: the head turns to the next spot
+var DEMO_HOLD = 1.5       // s: ...and holds while the arc fills (the first 1.2 s)
+var DEMO_END = 1.6        // s: all set, then the loop starts over
+var DEMO_LEAD = 1.0       // Advanced: s at the centre
+var DEMO_TURN = 12        // Advanced: s for the slow full turn
+var DEMO_ADV_END = 2.0
+
+function smooth(x) { x = clamp(x, 0, 1); return x * x * (3 - 2 * x) }
+
+function demoSeconds(mode) {
+  return mode === "advanced" ? DEMO_LEAD + DEMO_TURN + DEMO_ADV_END
+                             : DEMO_CENTRE + SIMPLE_TARGETS.length * (DEMO_TRAVEL + DEMO_HOLD) + DEMO_END
+}
+
+function demoFrame(mode, time) {
+  var total = demoSeconds(mode)
+  var t = ((Number(time) || 0) % total + total) % total
+  var bins = []
+  for (var i = 0; i < BINS; i++) bins.push(0)
+  var out = { yaw: 0, pitch: 0, bins: bins, target: "centre", centre: 0, caption: "", total: total }
+
+  if (mode === "advanced") {
+    out.caption = "Move your head slowly to complete the circle."
+    out.centre = smooth(t / (DEMO_LEAD * 0.9))
+    if (t < DEMO_LEAD) return out
+    var f = Math.min(1, (t - DEMO_LEAD) / DEMO_TURN)
+    var theta = -15 + 360 * f                      // degrees clockwise from the top
+    var a = theta * Math.PI / 180
+    out.centre = 1
+    out.yaw = 0.9 * Math.sin(a) * smooth((t - DEMO_LEAD) / 0.6)
+    out.pitch = 0.9 * Math.cos(a) * smooth((t - DEMO_LEAD) / 0.6)
+    for (var k = 0; k < BINS; k++) bins[k] = clamp((theta - (30 * k - 15)) / 30, 0, 1)
+    var here = Math.round(((theta % 360) + 360) % 360 / 30) % 12
+    out.target = f < 1 ? here : null
+    if (f >= 1) {
+      out.caption = "The circle is complete."
+      var back = smooth((t - DEMO_LEAD - DEMO_TURN) / 1.0)
+      out.yaw *= 1 - back
+      out.pitch *= 1 - back
+    }
+    return out
+  }
+
+  out.centre = smooth(t / (DEMO_CENTRE * 0.8))
+  out.caption = "Look at the camera"
+  if (t < DEMO_CENTRE) return out
+  out.centre = 1
+  var at = t - DEMO_CENTRE
+  var slot = DEMO_TRAVEL + DEMO_HOLD
+  var n = SIMPLE_TARGETS.length
+  var from = [0, 0]
+  for (var s = 0; s < n; s++) {
+    var bin = SIMPLE_TARGETS[s]
+    if (at < (s + 1) * slot) {
+      var within = at - s * slot
+      var pose = DEMO_POSE[bin]
+      var m = smooth(within / DEMO_TRAVEL)
+      out.yaw = from[0] + (pose[0] - from[0]) * m
+      out.pitch = from[1] + (pose[1] - from[1]) * m
+      bins[bin] = within < DEMO_TRAVEL ? 0 : smooth((within - DEMO_TRAVEL) / (DEMO_HOLD * 0.8))
+      out.target = bin
+      out.caption = DEMO_PROMPT[bin]
+      return out
+    }
+    bins[bin] = 1
+    from = DEMO_POSE[bin]
+  }
+  // all four filled: the head comes back to the middle
+  var back2 = smooth((at - n * slot) / 0.8)
+  out.yaw = from[0] * (1 - back2)
+  out.pitch = from[1] * (1 - back2)
+  out.target = null
+  out.caption = "All set."
+  return out
+}

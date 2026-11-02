@@ -48,6 +48,10 @@ Item {
   // Counts accepted frames; the hairline re-arms on a change of this alone.
   property int scans: 0
   property bool reducedMotion: false
+  // The idle demo drives `bins`, `target` and the rim: no spring on the ticks (they
+  // follow the demo's own easing frame by frame) and `demoCentre` is the rim's fill.
+  property bool demo: false
+  property real demoCentre: 0
   // Round the preview/mask: true while something live is in the circle.
   property bool masked: false
 
@@ -67,7 +71,7 @@ Item {
   readonly property bool active: phase === "centre" || phase === "lap1" || phase === "lap2" || phase === "trial"
   readonly property bool idle: phase === "idle"
   readonly property bool centreHeld: phase === "lap1" || phase === "lap2" || phase === "trial"
-  readonly property real arc: Ring.centreArc(phase, centre)
+  readonly property real arc: demo ? demoCentre : Ring.centreArc(phase, centre)
   readonly property var dotPose: Ring.dot(u, v, 90)
 
   // The controls spring of common/spring.js: zeta 0.85, peak at 0.55, 200 ms.
@@ -107,6 +111,8 @@ Item {
   // What a screen reader is told when the current target changes. The ring is a
   // ProgressBar, one for the whole scan and one per target below.
   readonly property string description: {
+    // The idle demo moves every frame; a reader is told once what it is, not each frame.
+    if (demo) return "A demonstration of the scan, nothing is recording"
     var filled = Ring.filledCount(targets, bins)
     if (mode === "advanced") return filled + " of " + targets.length + " positions"
     var step = targetIndex()
@@ -157,7 +163,7 @@ Item {
         opacity: ring.reducedMotion ? shown : shown * appear
 
         Behavior on len {
-          enabled: !ring.reducedMotion
+          enabled: !ring.reducedMotion && !ring.demo
           SequentialAnimation {
             // 40 ms between a bin's ticks, at most 240 ms.
             PauseAnimation { duration: Math.min(240, 40 * (tick.index % Ring.TICKS_PER_BIN)) }

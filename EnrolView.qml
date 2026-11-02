@@ -207,7 +207,12 @@ Item {
   }
 
   // --- the scan ---------------------------------------------------------------------
-  property bool tilted: false
+  // The idle demo (EnrolDemo.qml) plays only while the card is idle, on screen and
+  // motion is allowed; Start stops it, and with reduced motion there is the static
+  // glyph and one caption line instead.
+  readonly property bool demoOn: view.phase === "idle" && !view.legacy && !view.reduced && view.live
+  readonly property string staticCaption: view.mode === "advanced" ? "Then turn slowly all the way round."
+                                                                   : "Then turn left, right, up and down."
 
   Column {
     id: col
@@ -245,9 +250,11 @@ Item {
         anchors.horizontalCenter: parent.horizontalCenter
         mode: view.mode
         targets: Ring.targetsFor(view.mode)
-        target: view.session && ring.active ? view.session.target : null
+        target: view.demoOn ? demo.target : (view.session && ring.active ? view.session.target : null)
         centre: view.session ? view.session.centre : 0
-        bins: view.session ? view.session.bins : [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        bins: view.demoOn ? demo.bins : (view.session ? view.session.bins : [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        demo: view.demoOn
+        demoCentre: demo.centre
         skipped: view.session ? view.session.skipped : []
         canFinish: view.session ? view.session.canFinish : false
         u: view.session ? view.session.u : 0
@@ -265,22 +272,25 @@ Item {
           id: glyph
           objectName: "glyph"
           anchors.centerIn: parent
-          visible: !previewLoader.active && !(view.session && view.session.scanState === "swept")
+          visible: !previewLoader.active && !view.demoOn && !(view.session && view.session.scanState === "swept")
           textFormat: Text.PlainText
           text: "\u{f0643}"
           color: view.secondary
           opacity: 0.3
           font.family: view.fontFamily
           font.pixelSize: 80
-          // Tilts once, +/-10 degrees over four 1.5 s InOutQuad steps, never looped.
-          SequentialAnimation on rotation {
-            running: view.phase === "idle" && !view.reduced && !view.tilted && !view.legacy
-            NumberAnimation { to: 10; duration: 1500; easing.type: Easing.InOutQuad }
-            NumberAnimation { to: -10; duration: 1500; easing.type: Easing.InOutQuad }
-            NumberAnimation { to: 10; duration: 1500; easing.type: Easing.InOutQuad }
-            NumberAnimation { to: 0; duration: 1500; easing.type: Easing.InOutQuad }
-            ScriptAction { script: view.tilted = true }
-          }
+        }
+
+        // What the scan will ask, played while idle (no camera).
+        EnrolDemo {
+          id: demo
+          objectName: "demo"
+          anchors.fill: parent
+          visible: view.demoOn
+          mode: view.mode
+          running: view.demoOn
+          foreground: view.fg
+          secondary: view.secondary
         }
 
         // The RGB preview, mirrored, in the circle. The Loader exists, and so
@@ -344,6 +354,26 @@ Item {
       Accessible.role: Accessible.StaticText
       Accessible.name: lineLabel.text
       opacity: 1
+    }
+
+    // One short caption under it while idle: the demo's step ("Turn your head to the
+    // left"), or with reduced motion a single static line. Its height is always
+    // reserved, so the island does not change size when Start removes it.
+    Text {
+      id: captionLabel
+      objectName: "caption"
+      textFormat: Text.PlainText
+      width: parent.width
+      height: Style.font.caption * 1.6
+      text: view.demoOn ? demo.caption : (view.phase === "idle" && !view.legacy && view.reduced ? view.staticCaption : "")
+      color: view.secondary
+      font.family: view.fontFamily
+      font.pixelSize: Style.font.caption
+      horizontalAlignment: Text.AlignHCenter
+      verticalAlignment: Text.AlignVCenter
+      elide: Text.ElideRight
+      Accessible.role: Accessible.StaticText
+      Accessible.name: captionLabel.text
     }
 
     // The quiet second line: a reason (Not authorised), an engine hint that does
