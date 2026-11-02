@@ -36,7 +36,7 @@ ShellRoot {
 
   function log(key, value) { console.log("HARNESS " + key, value) }
 
-  // ---- the harness's own palette: the card's, or a host's -------------------------
+  // ---- the harness's own palette: the card's, -------------------------
   QtObject {
     id: harnessColors
     readonly property color foreground: "#ffffff"
@@ -185,7 +185,6 @@ ShellRoot {
           previewDevice: shellRoot.caseName === "strip" ? "" : "/dev/video-fake"
           previewComponent: stub
           live: shellRoot.live
-          maxHeight: Number(Quickshell.env("E3_MAXH") || "0")
           onCloseRequested: shellRoot.session.requestClose()
         }
       }
@@ -299,7 +298,6 @@ ShellRoot {
     else if (c === "plain") buildPlain()
     else if (c === "reduced") buildReduced()
     else if (c === "hairline") buildHairline()
-    else if (c === "size") buildSize()
     else if (c === "fence") buildFence()
     else if (c === "mode") buildMode()
     else if (c === "strip") buildStrip()
@@ -446,8 +444,8 @@ ShellRoot {
       log("capture-never", sentCmds().indexOf("capture") < 0)
       log("finish-never-simple", sentCmds().indexOf("finish") < 0)
       // The look's contrast over #000 (section 3), for this palette and two more:
-      // a host whose accent equals its foreground (the notch) and a coloured one.
-      var pals = {theme: harnessColors.accent, notch: harnessColors.foreground, coloured: "#34c759"}
+      // a theme whose accent equals its foreground and a coloured one.
+      var pals = {theme: harnessColors.accent, mono: harnessColors.foreground, coloured: "#34c759"}
       for (var name in pals) {
         var acc = pals[name]
         log("contrast-" + name, [
@@ -691,13 +689,6 @@ ShellRoot {
     at(function () { log("reduced-hairline-after-frames", ring().hairlineRunning) })
     at(function () { track({state: "hold", centre: 1, target: 9, bins: bins({9: 0.6}), u: -1.5, v: 0}); shellRoot.violations += 0 })
     at(function () { log("reduced-glyph-rot", named("glyph").rotation) })
-  }
-
-  // ---- the ring shrinks to the height it is given (the notch's maxPanelHeight) ----------------------
-  function buildSize() {
-    at(function () {
-      log("size", r1(ring().implicitWidth) + " " + r1(ring().ringScale) + " circle " + r1(ring().circle.width * ring().ringScale))
-    }, 100)
   }
 
   // ---- the hairline: only an accepted frame arms it --------------------------------------------------

@@ -123,11 +123,12 @@ fi
 # never opens a window of its own. The host's own check reads the entry file
 # only, so this one reads every file Surface.qml instantiates, with `//`
 # comments blanked (a window type named in a comment is not a window). The
-# card, which is a window, is named by the Face service alone.
+# card, which is a window, is named by the Face service alone, and it is where
+# every scan lives.
 echo
 echo "${BOLD}Hosting${RESET}"
-hosted_files=(Surface.qml FaceViews.qml FaceModel.qml TestResultView.qml EnrolView.qml EnrolRing.qml RecordView.qml RecordSession.qml RecordPreview.qml
-              PeopleView.qml PersonView.qml SetupView.qml SettingsView.qml RemoveView.qml common/Ask.qml common/EnrolLink.qml)
+hosted_files=(Surface.qml FaceViews.qml FaceModel.qml TestResultView.qml
+              PeopleView.qml PersonView.qml SetupView.qml SettingsView.qml RemoveView.qml common/Ask.qml)
 window_type() { sed -E 's#//.*$##' | grep -nE '\b(PanelWindow|PopupWindow|FloatingWindow)\b'; }
 card_name() { sed -E 's#//.*$##' | grep -nE '\bRecordCard\b'; }
 if ! printf 'Item {\n  // PanelWindow in a comment\n  PanelWindow { }\n}\n' | window_type | grep -q 'PanelWindow { }' \
@@ -140,6 +141,10 @@ for f in "${hosted_files[@]}"; do
   [[ -f $f ]] || { named+=("$f is missing"); continue; }
   window_type <"$f" | grep -q . && named+=("$f opens a window")
   card_name <"$f" | grep -q . && named+=("$f names RecordCard")
+  # A scan is never drawn inside a host: polkit's dialog takes the focus the notch
+  # needs to stay open (the Phase 4 live gate), so nothing the panel is made of
+  # may make an EnrolView or a session.
+  sed -E 's#//.*$##' "$f" | grep -qE '\b(EnrolView|EnrolRing|RecordSession|RecordView|RecordPreview)\b' && named+=("$f hosts a scan")
 done
 for f in *.qml; do
   [[ $f == Service.qml || $f == RecordCard.qml ]] && continue

@@ -1,48 +1,42 @@
 #!/bin/bash
 
 # E2: Face in both homes -- the stock bar's popup and the notch's panel
-# (plan-face-enroll.md section 7.5, Phase 3).
+# (plan-face-enroll.md section 7.5, Phases 3 and 4).
 #
 #   ./dev/e2-hosting.sh
 #   NOTCH_DIR=/path/to/a/clean/notch/copy ./dev/e2-hosting.sh
 #
-# The two cases that need a real notch (marked *) need NOTCH_DIR and E2_NOTCH=1
-# (a compositor, see below). NOTCH_DIR is READ ONLY here: a clean copy of the
-# notch at master, e.g.
+# NOTCH_DIR is READ ONLY here: a clean copy of the notch at master, e.g.
 #
 #   mkdir /tmp/notch && git -C ~/Work/omarchy-notch archive origin/master | tar -x -C /tmp/notch
 #
 # The cases, in the plan's numbers:
 #
 #   (i)    the shared views render the same PNG from FacePanel and from
-#          Surface.qml's panel
-#   (ii)   notch-less: no heartbeat, a stale one, `present` false, Face missing
-#          from `accepted`, contract 0 -> `record` opens the card and never calls
-#          `omarchy-shell notch`
-#   (iii)* a fresh heartbeat accepting Face opens the enrol route and no card
-#   (iv)   `hidden` and `declined` open the card
-#   (v)    a forged heartbeat with no enrol.json `open` opens the card after 2 s
-#          and starts no camera and no pkexec; a stale enrol.json is ignored
-#   (vi)*  switching the integration off mid-session discards it (EOF seen by the
-#          stub); a second `record` answers ok / busy across homes
+#          Surface.qml's panel, inside the margin the notch does not give
 #   (vii)  `omarchy plugin validate` and the notch's own scan accept the
 #          manifest; `available` is false before the status read and while the
 #          engine row is missing
-#   (ix)   faceroute.js round-trips odd names
+#   (ix)   faceroute.js round-trips odd names, and has no enrol route
+#   (xi)   the hosted panel pads its content on all four sides
+#   (xii)  Test, in the notch: its own view in place, not a card over the rows
+#   (xiii) a scan is never hosted: Scan in the notch asks the service for its
+#          card (RecordCard.qml, a window of its own) and closes the panel; the
+#          panel never shows a recording and the notch is never asked for one
 #
-# (viii) is Phase 6's. (x) is Phase 4's and is in dev/e3-enrol-view.sh (the mode file).
+# (iii)-(vi), the heartbeat routing of `record` to an in-notch scan and its
+# enrol.json confirmation, are gone with the in-notch scan (Phase 4's live gate:
+# polkit's dialog collapses the notch). (viii) is Phase 6's. (x) is Phase 4's and is
+# in dev/e3-enrol-view.sh (the mode file).
 #
 # HEADLESS BY DEFAULT: no window opens anywhere. Every Quickshell harness runs
-# with QT_QPA_PLATFORM=offscreen and no WAYLAND_DISPLAY. That runs (i) against
-# the popup's wiring without its window, (ii), (iv), (v) against NotchRoute.qml,
-# (vii) and the fence. What cannot run without a compositor is anything that
-# makes a layer-shell window -- FacePanel's KeyboardPanel, the Service's
-# Indicator and the notch itself -- and these are SKIPPED, loudly, unless
-# E2_NESTED=1, which starts a nested Hyprland (the way dev/g7-preview.sh does)
-# and so draws a window on the desktop while it runs:
+# with QT_QPA_PLATFORM=offscreen and no WAYLAND_DISPLAY. What cannot run without a
+# compositor is anything that makes a layer-shell window -- FacePanel's
+# KeyboardPanel, the Service, its cards and the notch itself -- and these are
+# SKIPPED, loudly, unless E2_NESTED=1, which starts a nested Hyprland (the way
+# dev/g7-preview.sh does) and so draws a window on the desktop while it runs:
 #
 #   * (i)   the REAL FacePanel's PNG, compared with the hosted panel's
-#   * (iii) and (vi), against the notch, and the Service end to end
 #
 # Every stub the code under test could call -- `omarchy-shell`, `pkexec`,
 # `hyprctl` -- is earlier in PATH. No camera is opened: the fixture has no RGB
@@ -114,7 +108,7 @@ echo "${DIM}shell: $SHELL_PATH/shell   plugin: $REPO   notch: ${NOTCH_DIR:-none}
 # (ix) the route parser, under node
 # =============================================================================
 
-step "(ix) faceroute.js round-trips odd names"
+step "(ix) faceroute.js round-trips odd names, and has no enrol route"
 
 cat >"$root/route.js" <<EOF
 const vm = require("vm"), fs = require("fs")
@@ -124,16 +118,6 @@ vm.createContext(ctx); vm.runInContext(source, ctx)
 const R = ctx
 const out = []
 const say = (k, v) => out.push(k + "=" + v)
-const rt = (name, appearance, label, isNew) => {
-  const route = R.build("enrol", { name, appearance, label, isNew })
-  const p = R.parse(route)
-  return JSON.stringify([route.split(":").length, p && p.name === name && p.appearance === appearance && p.label === label && p.isNew === isNew])
-}
-say("ase", rt("Åse", "No glasses", "Åse", false))
-say("colon", rt("a:b", "x:y", "a:b:c", true))
-say("percent", rt("%", "100%", "%41", false))
-say("percentRoute", R.build("enrol", { name: "%", appearance: "a", label: "b", isNew: false }))
-say("empty-label", JSON.stringify(R.parse(R.build("enrol", { name: "anna", appearance: "No glasses", label: "", isNew: false }))))
 say("person", JSON.stringify(R.parse(R.build("person", { name: "Åse:1" }))))
 for (const v of ["setup", "people", "settings", "remove"]) say(v, JSON.stringify(R.parse(v)))
 say("unknown", R.parse("nope"))
@@ -142,9 +126,10 @@ say("null", R.parse(null))
 say("person-no-name", R.parse("person:"))
 say("person-extra", R.parse("person:a:b"))
 say("plain-extra", R.parse("people:x"))
+say("enrol-full", R.parse("enrol:anna:No%20glasses:Anna:old"))
 say("enrol-short", R.parse("enrol:a:b:c"))
-say("enrol-flag", R.parse("enrol:a:b:c:maybe"))
-say("enrol-no-name", R.parse("enrol::b:c:new"))
+say("enrol-build", JSON.stringify(R.build("enrol", { name: "anna", appearance: "x", label: "y", isNew: false })))
+say("odd", JSON.stringify([R.parse(R.build("person", { name: "%" })).name, R.parse(R.build("person", { name: "a:b" })).name, R.build("person", { name: "%" })]))
 say("bad-escape", R.parse("person:%E0%A4%A"))
 say("long", R.parse("person:" + "x".repeat(2000)))
 say("build-unknown", JSON.stringify(R.build("nope", {})))
@@ -153,23 +138,19 @@ console.log(out.join("\n"))
 EOF
 out=$(node "$root/route.js" 2>&1)
 echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
-check "Åse round-trips through five segments" '[5,true]' "$(field ase "$out")"
-check "a:b and a:b:c survive the colon separator" '[5,true]' "$(field colon "$out")"
-check "% and %41 are not decoded twice" '[5,true]' "$(field percent "$out")"
-check "…and a bare % travels as %25" 'enrol:%25:a:b:old' "$(field percentRoute "$out")"
-check "an empty label is a field, not a missing one" '{"view":"enrol","name":"anna","appearance":"No glasses","label":"","isNew":false}' "$(field empty-label "$out")"
-check "a person with a colon and an accent round-trips" '{"view":"person","name":"Åse:1","appearance":"","label":"","isNew":false}' "$(field person "$out")"
+check "odd names (a bare %, a colon) round-trip through the person route, a bare % travelling as %25" '["%","a:b","person:%25"]' "$(field odd "$out")"
+check "a person with a colon and an accent round-trips" '{"view":"person","name":"Åse:1"}' "$(field person "$out")"
 check "the four plain views parse" \
-  '{"view":"setup","name":"","appearance":"","label":"","isNew":false} {"view":"people","name":"","appearance":"","label":"","isNew":false} {"view":"settings","name":"","appearance":"","label":"","isNew":false} {"view":"remove","name":"","appearance":"","label":"","isNew":false}' \
+  '{"view":"setup","name":""} {"view":"people","name":""} {"view":"settings","name":""} {"view":"remove","name":""}' \
   "$(field setup "$out") $(field people "$out") $(field settings "$out") $(field remove "$out")"
 check "an unknown view, an empty route and null are null" "null null null" \
   "$(field unknown "$out") $(field empty "$out") $(field null "$out")"
 check "a person with no name or with extra segments is null" "null null" \
   "$(field person-no-name "$out") $(field person-extra "$out")"
-check "a plain view with a segment, a short enrol and a bad flag are null" "null null null" \
-  "$(field plain-extra "$out") $(field enrol-short "$out") $(field enrol-flag "$out")"
-check "an enrol with no name, a broken escape and a huge route are null" "null null null" \
-  "$(field enrol-no-name "$out") $(field bad-escape "$out") $(field long "$out")"
+check "a plain view with a segment, a broken escape and a huge route are null" "null null null" \
+  "$(field plain-extra "$out") $(field bad-escape "$out") $(field long "$out")"
+check "there is no enrol route: a scan is the standalone card in every home (it parses to null and builds nothing)" 'null null ""' \
+  "$(field enrol-full "$out") $(field enrol-short "$out") $(field enrol-build "$out")"
 check "building an unknown view or a nameless person builds nothing" '"" ""' \
   "$(field build-unknown "$out") $(field build-person-empty "$out")"
 
@@ -327,133 +308,6 @@ mkshell() { # mkshell <dir> <qml file in dev/qml-harness>
 }
 
 # =============================================================================
-# (ii) (iv) (v): `record`, routed by the heartbeat -- NotchRoute.qml, headless
-# =============================================================================
-
-rtr=$root/router
-mkshell "$rtr" hosting-route.qml
-env "${face_env[@]}" timeout 300 quickshell -p "$rtr" -n >"$logs/router.log" 2>&1 &
-pids+=($!)
-
-rtr_ipc() { "$QUICKSHELL" ipc -p "$rtr" call harness "$@" 2>/dev/null; }
-for _ in $(seq 1 60); do
-  sleep 0.25
-  [[ $(rtr_ipc state) == \{* ]] && break
-done
-[[ $(rtr_ipc state) == \{* ]] || {
-  echo "${RED}the router harness never answered${RESET}"
-  "$QUICKSHELL" ipc -p "$rtr" call harness state 2>&1 | head -5
-  tail -8 "$logs/router.log"; exit 1
-}
-
-cards() { rtr_ipc state | jq -r '[.cards[].name] | join(",")'; }
-notch_calls() { local n; n=$(grep -c '^notch ' "$logs/omarchy-shell.log" 2>/dev/null); echo "${n:-0}"; }
-pkexec_calls() { [[ -f $logs/pkexec.log ]] && wc -l <"$logs/pkexec.log" || echo 0; }
-reset_router() {
-  # A request still waiting on the notch (2 s) is let run out first: it ends in
-  # a card request, which the clear below forgets.
-  for _ in $(seq 1 16); do
-    [[ -z $(rtr_ipc state | jq -r '.pending') ]] && break
-    sleep 0.25
-  done
-  rtr_ipc clear >/dev/null
-  rm -f "$rt/kalinewb.face/enrol.json" "$rt/kalinewb.notch/platform.json" "$logs/omarchy-shell.log"
-}
-write_beat() { # write_beat <jq filter applied to a good beat>
-  local beat
-  beat=$(jq -n --argjson now "$(now_ms)" '{contract: 1, features: ["panel"], beatAt: $now, staleAfterMs: 6000,
-      present: true, hidden: false, accepted: {"kalinewb.face": {contract: 1}}, declined: {}}')
-  jq -c "$1" <<<"$beat" >"$rt/kalinewb.notch/platform.json"
-}
-write_flag() { # write_flag <state> <name> <age in ms>
-  mkdir -p "$rt/kalinewb.face"
-  jq -n --arg s "$1" --arg n "$2" --argjson at "$(( $(now_ms) - $3 ))" '{state: $s, name: $n, at: $at}' >"$rt/kalinewb.face/enrol.json"
-}
-record_anna() { rtr_ipc record anna "No glasses" Anna ""; }
-
-step "the sandbox itself"
-check "no fixture has an RGB node, so no camera has anything to open" "" \
-  "$(jq -r '.camera.rgb' "$fixtures"/*/status.json | sort -u | tr -d '\n')"
-check "the router has no card request and nothing waiting on the notch" " " "$(cards) $(rtr_ipc state | jq -r '.pending')"
-
-step "(ii) notch-less: record asks for the card and never calls the notch"
-for variant in \
-  "no heartbeat file|NONE" \
-  "a stale heartbeat|.beatAt = (.beatAt - 20000)" \
-  "present false|.present = false" \
-  "Face missing from accepted|.accepted = {}" \
-  "contract 0|.contract = 0"
-do
-  label=${variant%%|*}
-  filter=${variant#*|}
-  reset_router
-  [[ $filter == NONE ]] || write_beat "$filter"
-  answer=$(record_anna)
-  check "$label: record answers ok" "ok" "$answer"
-  check "$label: the card is asked for, for anna" "anna" "$(cards)"
-  check "$label: omarchy-shell notch was never called" "0" "$(notch_calls)"
-done
-
-step "(iv) a hidden bar and a declined integration ask for the card"
-reset_router
-write_beat '.hidden = true'
-answer=$(record_anna)
-check "hidden: record answers ok" "ok" "$answer"
-check "hidden: the card is asked for (the user pressed Scan)" "anna" "$(cards)"
-check "hidden: the notch was never called" "0" "$(notch_calls)"
-reset_router
-write_beat '.accepted = {} | .declined = {"kalinewb.face": "user-off"}'
-answer=$(record_anna)
-check "declined:user-off: record answers ok" "ok" "$answer"
-check "declined:user-off: the card is asked for" "anna" "$(cards)"
-check "declined:user-off: the notch was never called" "0" "$(notch_calls)"
-
-step "(v) a forged heartbeat shows nothing and starts nothing"
-reset_router
-before=$(pkexec_calls)
-write_beat '.'
-answer=$(record_anna)
-check "a good-looking heartbeat: record answers opening" "opening" "$answer"
-sleep 0.5
-check "…the request went to the notch, once, as an enrol route" \
-  "notch panel kalinewb.face enrol:anna:No%20glasses:Anna:old" "$(grep '^notch ' "$logs/omarchy-shell.log" | head -1)"
-check "…and the router is waiting for it, with no card asked for yet" "anna|" \
-  "$(rtr_ipc state | jq -r '.pending')|$(cards)"
-check "a second record for anna while it waits answers ok" "ok" "$(record_anna)"
-check "…and one for somebody else answers busy" "busy" "$(rtr_ipc record mia "No glasses" Mia "")"
-sleep 2.4
-check "after 2 s with no enrol.json open the card is asked for" "anna" "$(cards)"
-check "…the wait is over" "" "$(rtr_ipc state | jq -r '.pending')"
-check "…no pkexec was started by any of it" "$before" "$(pkexec_calls)"
-
-reset_router
-write_beat '.'
-write_flag open anna 10000
-answer=$(record_anna)
-check "a stale enrol.json (10 s old) does not count as a session: record answers opening" "opening" "$answer"
-sleep 2.6
-check "…and the card is asked for after 2 s" "anna" "$(cards)"
-
-reset_router
-write_beat '.'
-write_flag open mia 0
-check "a fresh enrol.json for mia: record for anna answers busy" "busy" "$(record_anna)"
-check "…and for mia answers ok" "ok" "$(rtr_ipc record mia "No glasses" Mia "")"
-check "…neither asked the notch" "0" "$(notch_calls)"
-write_flag closed "" 0
-answer=$(record_anna)
-check "once it says closed, record goes on to the notch again" "opening" "$answer"
-check "…which it was asked once" "1" "$(notch_calls)"
-reset_router
-mkdir -p "$rt/kalinewb.face"; printf 'not json' >"$rt/kalinewb.face/enrol.json"
-write_beat '.'
-check "garbage in enrol.json is no session either" "opening" "$(record_anna)"
-reset_router
-
-rtr_ipc quit >/dev/null
-sleep 0.5
-
-# =============================================================================
 # (vii) available is honest; (i) the same views in both homes
 # =============================================================================
 
@@ -569,26 +423,31 @@ check "a helper that cannot check says that, not something about the person" "Fa
 check "no case drew a TestCard in the notch: the panel's files name no window, and the card's copy is shared" "1 1" \
   "$(grep -c '^import "common/testverdict.js"' "$REPO/TestCard.qml") $(grep -c '^import "common/testverdict.js"' "$REPO/TestResultView.qml")"
 
-step "the preview camera's fence (6a.1; round-3 notes S1 and S3)"
-fence=$(env "${face_env[@]}" FACE_HARNESS_CASE=fence timeout 60 quickshell -p "$panel_root" -n 2>&1 \
-  | tee -a "$logs/render.log" | sed -n 's/^.*HARNESS \([a-zA-Z0-9-]*\) \(.*\)$/\1=\2/p')
-echo "${DIM}$(sed 's/^/  /' <<<"$fence")${RESET}"
-check "S1: an enrol view pushed in process (no enrol: route) is what the fence reads" "enrol" "$(field fence-view "$fence")"
-check "before Start nothing is on: previewOn is false on both screens (the camera waits for Start, 6a.1)" "false,false" "$(field fence-idle "$fence")"
-check "S3: two panels, one per screen: only the one on the host's panelScreen is live" "true,false" "$(field fence-live "$fence")"
-check "S3: …and once Start has been pressed (authorising) only that one has previewOn" "true,false" "$(field fence-screen1 "$fence")"
-check "S3: …and when the host's panel moves to the other screen, so does the fence" "false,true" "$(field fence-screen2 "$fence")"
-check "the notch closing turns it off in both, though neither panel was destroyed" "false,false" "$(field fence-closed "$fence")"
-check "…opening it again makes the right one live, with a new session that has not been started: no camera until Start" "true,false false,false" \
-  "$(field fence-reopened-live "$fence") $(field fence-reopened "$fence")"
-check "leaving the enrol view removes the view and ends the session" "none,none" "$(field fence-left "$fence")"
-check "…the Surface holds no session after it" "true" "$(field fence-session "$fence")"
-check "the preview Loader is active only for previewOn AND a device (nothing else opens the camera)" "1" \
-  "$(grep -c 'active: view.previewOn && view.previewDevice !== ""' "$REPO/EnrolView.qml")"
-check "…and previewOn is the host being live AND the session wanting it (Start pressed)" "1" \
-  "$(grep -c 'previewOn: view.live && !!view.session && view.session.previewWanted' "$REPO/EnrolView.qml")"
-check "RecordPreview.qml is named by EnrolView.qml alone" "EnrolView.qml" \
-  "$(grep -l 'RecordPreview' "$REPO"/*.qml | xargs -n1 basename | tr '\n' ' ' | sed 's/ $//')"
+step "(xiii) a scan is never hosted: Scan in the notch asks the service for its card and closes the panel"
+# Start brings up polkit's password dialog, the notch loses focus to it and
+# collapses, and a scan drawn inside it dies there (Phase 4's live gate). So the
+# Scan buttons of People and Person do what the stock popup's do -- one call to
+# the Face service, which owns RecordCard.qml (a window of its own) -- and the
+# panel closes so there are not two surfaces.
+record_run() { # record_run <route> -> lines; the stub logs the shell calls
+  : >"$logs/omarchy-shell.log"
+  env "${face_env[@]}" FACE_HARNESS_CASE=record FACE_HARNESS_ROUTE="$1" FACE_HARNESS_HOST=identity \
+    timeout 60 quickshell -p "$panel_root" -n 2>&1 | tee -a "$logs/render.log" \
+    | sed -n 's/^.*HARNESS \([a-zA-Z0-9-]*\) \(.*\)$/\1=\2/p'
+}
+r1=$(record_run people)
+check "People: the Scan button is found on the hosted panel, which is on people" "found | people closes 0" "$(field button "$r1") | $(field before "$r1")"
+check "People: pressing it leaves the view on people (no recording view pushed) and closes the panel" "people closes 1 stack 2" "$(field after "$r1")"
+check "People: the shell was asked for the service's card for anna, and for nothing else" "kalinewb.face.card record anna No glasses Anna " "$(grep '^kalinewb.face.card' "$logs/omarchy-shell.log" | head -1)"
+check "…and never for a panel in the notch (the only notch call is the integration's own rescan)" "0" "$(grep -c '^notch panel' "$logs/omarchy-shell.log")"
+r2=$(record_run person:anna)
+check "Person: the Re-record button closes the panel, with the view left on the person" "found | person closes 0 | person closes 1" \
+  "$(field button "$r2") | $(field before "$r2" | sed 's/ stack.*//') | $(field after "$r2" | sed 's/ stack.*//')"
+check "Person: the card is asked for anna's No glasses with her label" "kalinewb.face.card record anna No glasses Anna " "$(grep '^kalinewb.face.card' "$logs/omarchy-shell.log" | head -1)"
+check "nothing in the panel's files shows or hosts a recording any more" "0" \
+  "$(cd "$REPO" && sed -E 's#//.*$##' Surface.qml FaceViews.qml FaceModel.qml PeopleView.qml PersonView.qml SetupView.qml | grep -cE 'EnrolView|RecordSession|RecordView|showEnrol|enrolSession|previewLive|enrol\.json')"
+check "the Face service answers record with the card and never asks the notch (no routing, no heartbeat, no enrol.json)" "0" \
+  "$(cd "$REPO" && ls NotchRoute.qml 2>/dev/null | wc -l; sed -E 's#//.*$##' Service.qml | grep -cE 'NotchRoute|omarchy-shell.*notch|platform\.json|enrol\.json|notchPending')" | awk '{s+=$1} END {print s}'
 
 step "(vii) available is false until the status has answered and the engine row says installed"
 avail() { # avail <fixture> -> "<at creation> <after the read>"
@@ -600,166 +459,6 @@ mkshell "$avail_root" hosting-available.qml
 check "configured: false at creation, true once the status has been read" "false true " "$(avail configured)"
 check "fresh (the engine not built): false, and stays false" "false false " "$(avail fresh)"
 check "broken-engine (the row says broken): false, and stays false" "false false " "$(avail broken-engine)"
-
-# =============================================================================
-# (iii) (vi) in a throwaway notch
-# =============================================================================
-
-step "(iii) (vi) in a throwaway notch [nested]"
-if (( ! NESTED )); then
-  note "[nested] SKIPPED: (iii) and (vi) need the notch, whose windows are layer-shell windows: no compositor, no notch. Run with E2_NESTED=1 NOTCH_DIR=<a copy of the notch>"
-elif [[ -z $NOTCH_DIR || ! -f $NOTCH_DIR/dev/harness/platform-shell.qml ]]; then
-  note "SKIPPED: these two cases need a read-only copy of the notch at master in NOTCH_DIR"
-else
-  nplugins=$root/notch-plugins
-  mkdir -p "$nplugins/kalinewb.face" "$root/notch-markers"
-  rsync -a --exclude .git --exclude dev --exclude install.sh "$REPO/" "$nplugins/kalinewb.face/"
-  nroot=$root/notch-shell
-  mkdir -p "$nroot"
-  ln -s "$SHELL_PATH/shell/Commons" "$nroot/Commons"
-  ln -s "$SHELL_PATH/shell/Ui" "$nroot/Ui"
-  ln -s "$SHELL_PATH/shell/services" "$nroot/services"
-  ln -s "$NOTCH_DIR" "$nroot/notch"
-  printf 'import QtQuick\nimport qs.Commons\nimport qs.Ui\nItem { }\n' >"$nroot/Probe.qml"
-  # The notch's own harness, plus one handler: what the integration is doing,
-  # and a Start press the harness cannot click. The notch is not modified.
-  python3 - "$NOTCH_DIR/dev/harness/platform-shell.qml" "$nroot/shell.qml" <<'PY'
-import sys
-src = open(sys.argv[1]).read().rstrip()
-assert src.endswith("}")
-extra = '''
-  IpcHandler {
-    target: "facetest"
-    function surface(): string {
-      var item = notch.platform.itemFor("kalinewb.face")
-      if (!item) return JSON.stringify({loaded: false})
-      var s = item.session
-      return JSON.stringify({
-        loaded: true, available: item.available, view: item.model.view,
-        stack: item.model.viewStack, opened: item.model.opened,
-        enrol: item.model.enrol ? item.model.enrol.name : "",
-        session: s !== null, phase: s ? s.phase : "", running: s ? s.running : false,
-        sessionName: s ? s.name : ""
-      })
-    }
-    function start(): string {
-      var item = notch.platform.itemFor("kalinewb.face")
-      if (!item || !item.session) return "no-session"
-      item.session.start()
-      return "started"
-    }
-    function press(): string {
-      var item = notch.platform.itemFor("kalinewb.face")
-      return item ? "ok" : "no-item"
-    }
-  }
-'''
-open(sys.argv[2], "w").write(src[:-1] + extra + "}\n")
-PY
-  : >"$state/session.log"
-  rm -rf "$rt/kalinewb.notch" "$rt/kalinewb.face"; mkdir -p "$rt/kalinewb.notch"
-  notch_env=(
-    "${face_env[@]}"
-    NOTCH_HARNESS=1 NOTCH_NO_KEYBINDS=1 NOTCH_MENU_DRY_RUN=1
-    NOTCH_FORCE_PLATFORM=1 NOTCH_PLUGINS_DIR="$nplugins" NOTCH_PLATFORM_ENABLED='*'
-    NOTCH_PLATFORM_STATE_DIR="$rt/kalinewb.notch" NOTCH_FIXTURE_MARKER_DIR="$root/notch-markers"
-    NOTCH_PLATFORM_WIDGETS='{"kalinewb.face": "kalinewb.face/FacePanel.qml"}'
-    NOTCH_HARNESS_CONFIG='{"batteryPeek":false,"bottomRadius":8}'
-    E2_NOTCH_ROOT="$nroot"
-  )
-  env "${notch_env[@]}" timeout 300 quickshell -p "$nroot" -n >"$logs/notch.log" 2>&1 &
-  pids+=($!)
-  nipc() { "$QUICKSHELL" ipc -p "$nroot" call notch "$@" 2>/dev/null; }
-  nharness() { "$QUICKSHELL" ipc -p "$nroot" call harness "$@" 2>/dev/null; }
-  ntest() { "$QUICKSHELL" ipc -p "$nroot" call facetest "$@" 2>/dev/null; }
-  for _ in $(seq 1 80); do sleep 0.25; [[ $(nipc geometry) == \{* ]] && break; done
-  for _ in $(seq 1 80); do sleep 0.25; [[ $(nipc integrations | jq -r '.scannedAt > 0' 2>/dev/null) == true ]] && break; done
-  # The integration says `available` only after its first status read; the
-  # notch accepts it from then on, and the heartbeat follows.
-  for _ in $(seq 1 60); do
-    sleep 0.25
-    [[ $(nipc integrations | jq -r '.list[] | select(.id == "kalinewb.face") | .accepted' 2>/dev/null) == true ]] && break
-  done
-  sleep 2.5
-  report=$(nipc integrations)
-  echo "  ${DIM}$(jq -c '[.list[] | {id, accepted, reason, hasPanel, loadStatus}]' <<<"$report" 2>/dev/null)${RESET}"
-
-  check "(vii) the notch accepts Face's integration, with a panel and no problems" "true true ready" \
-    "$(jq -r '.list[] | select(.id == "kalinewb.face") | "\(.accepted) \(.hasPanel) \(.loadStatus)"' <<<"$report")"
-  check "(vii) …the reason it gives is none (no own-window)" "" \
-    "$(jq -r '.list[] | select(.id == "kalinewb.face") | .reason' <<<"$report")"
-  beat="$rt/kalinewb.notch/platform.json"
-  check "the notch's own heartbeat lists Face as accepted" "1" "$(jq -r '.accepted["kalinewb.face"].contract' "$beat" 2>/dev/null)"
-  check "(vii) available is true once the status says the engine is installed" "true" \
-    "$(ntest surface | jq -r '.available')"
-
-  # The service, in its own instance, asked to record: the heartbeat is the
-  # notch's real one, and `omarchy-shell notch panel` reaches the throwaway notch.
-  svc2=$root/service2
-  mkshell "$svc2" hosting-service.qml
-  env "${face_env[@]}" E2_NOTCH_ROOT="$nroot" timeout 300 quickshell -p "$svc2" -n >"$logs/service2.log" 2>&1 &
-  pids+=($!)
-  svc2_ipc() { "$QUICKSHELL" ipc -p "$svc2" call "$@" 2>/dev/null; }
-  for _ in $(seq 1 60); do sleep 0.5; [[ $(svc2_ipc kalinewb.face.card state) == \{* ]] && break; done
-  rm -f "$logs/omarchy-shell.log"
-  before=$(pkexec_calls)
-
-  answer=$(svc2_ipc kalinewb.face.card record anna "No glasses" Anna "")
-  check "(iii) a fresh heartbeat accepting Face: record answers opening" "opening" "$answer"
-  for _ in $(seq 1 20); do sleep 0.25; [[ $(ntest surface | jq -r '.view') == enrol ]] && break; done
-  surf=$(ntest surface)
-  check "(iii) the notch is showing the enrol route for anna" "enrol anna true" \
-    "$(jq -r '"\(.view) \(.enrol) \(.opened)"' <<<"$surf")"
-  check "(iii) …the integration made the one session, not started" "true framing false" \
-    "$(jq -r '"\(.session) \(.phase) \(.running)"' <<<"$surf")"
-  check "(iii) …and the geometry says the panel is open on that route" "true enrol:anna:No%20glasses:Anna:old" \
-    "$(nipc geometry | jq -r '"\(.integration.open) \(.integration.route)"')"
-  for _ in $(seq 1 12); do sleep 0.25; [[ -f $rt/kalinewb.face/enrol.json ]] && break; done
-  check "(iii) enrol.json says open for anna" "open anna" \
-    "$(jq -r '"\(.state) \(.name)"' "$rt/kalinewb.face/enrol.json" 2>/dev/null)"
-  sleep 2.6
-  check "(iii) no card opened, because the notch confirmed" "- " \
-    "$(svc2_ipc kalinewb.face.card state | jq -r '.card.name // "-"') $(svc2_ipc kalinewb.face.card state | jq -r '.notch')"
-  check "(iii) enrol.json is still being rewritten (fresher than 2 s)" "true" \
-    "$(jq -r '((now * 1000) - .at) < 2000' "$rt/kalinewb.face/enrol.json" 2>/dev/null)"
-  check "(vi) a second record for anna while it is open answers ok" "ok" \
-    "$(svc2_ipc kalinewb.face.card record anna "No glasses" Anna "")"
-  check "(vi) …and one for somebody else answers busy" "busy" \
-    "$(svc2_ipc kalinewb.face.card record mia "No glasses" Mia "")"
-  check "(iii) nothing started pkexec before Start was pressed" "$before" "$(pkexec_calls)"
-
-  # Start, from outside the panel (the harness cannot click): the stub session
-  # begins and is waiting on its stdin.
-  check "(vi) the session starts" "started" "$(ntest start)"
-  for _ in $(seq 1 40); do sleep 0.25; grep -q '^ready$' "$state/session.log" && break; done
-  check "(vi) the stub root session is running (pkexec was the one start)" "start anna ready" \
-    "$(grep -E '^(start|ready)' "$state/session.log" | tr '\n' ' ' | sed 's/ $//')"
-  check "(vi) …through the stand-in pkexec, once" "$((before + 1))" "$(pkexec_calls)"
-
-  # Switch the integration off mid-session.
-  nharness setNotch '{"batteryPeek":false,"bottomRadius":8,"disabledIntegrations":["kalinewb.face"]}' >/dev/null
-  for _ in $(seq 1 40); do
-    sleep 0.25
-    grep -qE '^(discarded|killed|done)' "$state/session.log" && break
-  done
-  check "(vi) switching the integration off mid-session: the stub saw EOF (discarded), not a kill" "discarded" \
-    "$(grep -E '^(discarded|killed|done)' "$state/session.log" | head -1)"
-  check "(vi) …the integration is gone from the notch" "false user-off" \
-    "$(nipc integrations | jq -r '.list[] | select(.id == "kalinewb.face") | "\(.accepted) \(.reason)"')"
-  sleep 0.5
-  check "(vi) …enrol.json says closed" "closed" "$(jq -r .state "$rt/kalinewb.face/enrol.json" 2>/dev/null)"
-  check "(vi) …and after it a record goes to the card, not the notch" "ok" \
-    "$(sleep 1; svc2_ipc kalinewb.face.card record anna "No glasses" Anna "")"
-  sleep 1.5
-  check "(vi) …the card opened for anna" "anna" "$(svc2_ipc kalinewb.face.card state | jq -r '.card.name // "-"')"
-  svc2_ipc kalinewb.face.card cancel >/dev/null
-
-  check "no QML errors in the notch's log from Face's files" "none" \
-    "$(grep -E '(Surface|FaceModel|FaceViews|EnrolView|EnrolRing|RecordView|FacePanel)\.qml:[0-9]+.*(TypeError|ReferenceError|Unable to assign|is not a)' "$logs/notch.log" | head -1 | cut -c1-120)$(grep -qE '(Surface|FaceModel|FaceViews|EnrolView|EnrolRing|RecordView|FacePanel)\.qml:[0-9]+.*(TypeError|ReferenceError|Unable to assign|is not a)' "$logs/notch.log" || echo none)"
-  nharness quit >/dev/null
-  svc2_ipc harness quit >/dev/null
-  sleep 1
-fi
 
 step "no QML errors from Face's files in any harness"
 errors=$(cat "$logs"/*.log 2>/dev/null | grep -E '(Surface|FaceModel|FaceViews|EnrolView|EnrolRing|RecordView|RecordCard|FacePanel|Service)\.qml:[0-9]+.*(TypeError|ReferenceError|Unable to assign)' | head -3 | cut -c1-140)

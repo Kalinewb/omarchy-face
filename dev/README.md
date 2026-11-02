@@ -300,38 +300,32 @@ the stock bar's popup (a button, a window, the IPC target); `Surface.qml` is wha
 Face gives a surface host (today the notch): one panel, the same `FaceViews.qml`
 on the host's colours, radius and surface. Both are built on `FaceModel.qml` (the
 state, the view stack, the engine seam) and `FaceViews.qml` (the hero, the current
-view, the hint). The recording card's body is `RecordView.qml`, which
-`RecordCard.qml` wraps in its window and the notch shows in place. `record` is
-routed by `NotchRoute.qml`, which the service owns (the notch if its heartbeat
-says it accepts Face and is not hidden, the card otherwise).
+view, the hint). **A scan is never hosted** (Phase 4's live gate: Start brings up
+polkit's password dialog, the notch loses focus to it and collapses, and the scan
+dies with it): in every home the Scan buttons make one call to the Face service,
+which owns `RecordCard.qml`, a window of its own wrapping `EnrolView.qml`, and
+close the panel, so there is one surface. People, Person, Setup, Settings, Remove
+and Test stay hosted.
 
 `e2` runs **headless**: `QT_QPA_PLATFORM=offscreen`, no `WAYLAND_DISPLAY`, no
-window anywhere. That covers the route parser, the manifest, the routing cases
-(ii), (iv), (v), the same PNG from the popup's wiring and the hosted panel (i),
-the preview camera's fence, and `available`. Three things need a layer-shell
-window, which has no backend without a compositor, so they are **skipped, with a
-note**, unless you ask for them:
+window anywhere. That covers the route parser, the manifest, the same PNG from the
+popup's wiring and the hosted panel (i), the margins (xi), Test in place (xii), the
+Scan buttons handing off to the card (xiii) and `available`. What needs a
+layer-shell window has no backend without a compositor, so it is **skipped, with a
+note**, unless you ask for it:
 
 ```sh
-E2_NESTED=1 NOTCH_DIR=/tmp/notch ./dev/e2-hosting.sh   # draws a window while it runs
+E2_NESTED=1 ./dev/e2-hosting.sh   # draws a window while it runs
 ```
 
 `E2_NESTED=1` starts a nested Hyprland (as `g7-preview.sh` does) and so puts a
-window on the desktop for the minute it takes. It adds: the REAL `FacePanel`'s PNG
-against the hosted panel's, and (iii)/(vi) against a read-only copy of the notch
-at master (`NOTCH_DIR`, e.g. `git -C ~/Work/omarchy-notch archive origin/master |
-tar -x -C /tmp/notch`): the enrol route opening in the notch and no card, a
-second `record` answering `ok`/`busy` across homes, and the integration being
-switched off mid-session ending the stub session by EOF (`discarded`). Neither
-the notch nor `NOTCH_DIR` is ever modified.
+window on the desktop for the minute it takes. It adds the REAL `FacePanel`'s PNG
+against the hosted panel's. (The throwaway-notch cases (iii)/(vi) and the
+heartbeat routing of `record` are gone with the in-notch scan.)
 
-Nothing here opens a camera. The fixtures have no RGB node (`camera.rgb` is
-`""`), `RecordView` opens the preview only for a device **and** `previewOn`, and
-the harness reads `previewOn`, the fence's input, rather than loading QtMultimedia
-(Qt's V4L2 enumeration opens `/dev/video*`).
+Nothing here opens a camera. The fixtures have no RGB node (`camera.rgb` is `""`)
+and no QML here loads QtMultimedia (Qt's V4L2 enumeration opens `/dev/video*`).
 
-`OMARCHY_FACE_DEV_RUNTIME` stands in for `$XDG_RUNTIME_DIR` (the notch's
-`kalinewb.notch/platform.json` and Face's `kalinewb.face/enrol.json`), the way
 `OMARCHY_FACE_DEV_STATE` stands in for the state files.
 
 Two Phase 3 regressions, found live on the real notch and fixed after Phase 4's first push, are
@@ -352,7 +346,7 @@ held by `e2` (xi) and (xii):
   pushed, the verdict, the person view not drawn under it, no `testMatch` call to the service, and
   Esc returning to a person view that is pixel-identical to before.
 
-### What only you can try, live (Phase 3's user gate)
+### What only you can try, live (Phase 3's user gate, as changed by Phase 4)
 
 Nothing below was run by the build; it needs your real desktop. Install this
 branch first (`./install.sh`, which restarts the shell), then:
@@ -360,26 +354,24 @@ branch first (`./install.sh`, which restarts the shell), then:
 1. **From a stock bar.** Make `omarchy.bar` the active bar (or switch the notch's
    integration for Face off in Settings -> Integrations). Click the Face glyph:
    the popup opens as before, on People (or Setup). Open a person, press a record
-   button: the recording card appears under the camera, as before; Esc closes it
-   with "nothing saved". Nothing should look different from 3.1.0.
+   button: the recording card appears under the camera; Esc closes it with
+   "Nothing was saved".
 2. **From the notch.** With `kalinewb.notch` as the bar and its integration for
-   Face on (`omarchy-shell notch integration kalinewb.face` should say accepted;
-   it only turns accepted a moment after the shell starts, once Face has read its
-   status), click the Face glyph: the panel opens **inside the notch**, on the
-   notch's colours, with no window of Face's own. Esc goes back one view and
-   closes from the root. Click it again: the notch closes it.
-3. **Scan from the notch.** In People, add a person or press Re-record: the
-   recording view replaces the list inside the notch (same card content: picker,
-   Start, countdown). Start asks for the password as it did; Esc or the notch
-   closing before Done saves nothing. (The camera preview in this view is the
-   thing Phase 4 gates live; tell me if the picture shows or not.)
-4. **`record` from outside.** `omarchy-shell kalinewb.face.card record anna
-   "No glasses" Anna ""` while the notch is the bar answers `opening` and the
-   recording appears in the notch; with the bar hidden (`omarchy toggle bar`) or
-   another bar active it answers `ok` and the card appears instead.
-5. **Switch the integration off mid-session** (Settings -> Integrations -> Face)
-   with a recording open and the password dialog already answered: the recording
-   must end, and the camera light must go off.
+   Face on (`omarchy-shell notch integration kalinewb.face` should say accepted),
+   click the Face glyph: the panel opens **inside the notch**, with an even margin
+   on all four sides and the header glyph whole. Esc goes back one view and closes
+   from the root. Click it again: the notch closes it.
+3. **Scan from the notch.** In People add a person, or press Re-record on a person:
+   the notch panel **closes** and the standalone card appears under the camera
+   (one surface, never two). Start: polkit's dialog appears and **the card stays**.
+   Esc or Cancel closes it with "Nothing was saved".
+4. **`record` from outside.** `omarchy-shell kalinewb.face.card record anna "No
+   glasses" Anna ""` answers `ok` and the card appears, whatever bar is active.
+   (If the notch panel is open at that moment it is not closed by this call; use
+   the buttons.)
+5. **Test in the notch.** On a person press Test: the page is replaced by the
+   check, then "Recognised ..." with "Nothing was unlocked"; Close or Esc goes
+   back. Nothing is drawn over the rows.
 6. **Two monitors**, if you have them: open Face from the bar on the second one;
    the panel opens there, not on the first.
 
@@ -393,8 +385,8 @@ still reopens the stock popup, not the notch's panel.
 E3_KEEP=/some/dir ./dev/e3-enrol-view.sh     # keep the PNG strip, the GIFs and the logs
 ```
 
-Phase 4 of `plan-face-enroll.md`. `EnrolView.qml` is the enrol screen in both homes (the
-standalone card wraps it in its window, `FaceViews.qml` shows it in the notch's panel);
+Phase 4 of `plan-face-enroll.md`. `EnrolView.qml` is the enrol screen; `RecordCard.qml` (the
+Face service's own window, in every home) is the only thing that makes one;
 `EnrolRing.qml` is the ring (60 ticks, 12 pose bins x 5, in Simple and Advanced);
 `common/enrolring.js` is the ring's arithmetic (looks, the dot, contrast), `common/EnrolLink.qml`
 the text link. `RecordSession.qml` is the state machine: with `scan` on it drives the sweep
@@ -410,12 +402,12 @@ properties), Advanced (any fill order, Done = `finish` then `done`), Esc from ev
 each failure of the outcome list with its shake and Try again, the version-skew fallback
 (`ready` without `sweep` in `verbs` -> the single capture, with the note), a session that is
 not the scan (what g3/g8 drive), reduced motion with every animation stopped, the hairline
-(only an accepted frame arms it), the preview fence, the mode file (path, one word, 16-byte
+(only an accepted frame arms it), the preview fence (the card being live and Start pressed), the mode file (path, one word, 16-byte
 cap, fallback, FIFO, symlinks, unwritable, rule R), and the PNG strip.
 
 What it cannot say: that the picture looks right on a real screen, that a real `VideoOutput`
-paints in the notch's panel, that pkexec's dialog leaves the panel open, that Qt announces a
-changed description to a screen reader. Two limits of the offscreen scene graph: it has no
+paints in the card's circle under its `MultiEffect` mask, that pkexec's dialog leaves the card
+alone, that Qt announces a changed description to a screen reader. Two limits of the offscreen scene graph: it has no
 shader effects, so a circle that is masked (a live preview in it) paints nothing there (the
 strip draws the ring with no preview for that reason; the mask is `MultiEffect`, as the
 shell's own Tray and Background use), and `g3`/`g8`/`g10` cannot run headless at all (their
@@ -431,30 +423,30 @@ opaque grey (the contrast rule needs an opaque role), and the hairline arms on t
 
 ### What only you can try, live (Phase 4's user gate)
 
-Nothing below was run by the build. Install this branch (`./install.sh`; it restarts the shell),
-then:
+The first live run failed: Start in the notch brought up polkit's dialog, the notch collapsed
+and the scan died with it, so the scan is now the standalone card in every home (see E2). Nothing
+below was run by the build. Install this branch (`./install.sh`; it restarts the shell), then:
 
-1. **Look.** Open Face -> a person -> Re-record (or `omarchy-shell kalinewb.face.card record anna
-   "No glasses" Anna ""`). Check the circle, ring and wording against the reference images:
-   Simple first (one arc highlighted at a time: left, right, up, down), then press the
-   `Advanced` link under Start and look again (twelve spots). Your accent should colour the
-   covered ticks; in the notch they are white (accent = foreground, by design).
-2. **VideoOutput in the notch** (plan 6a.4, doubt 11). From the notch, press Start: the RGB
-   preview must paint **inside the circle**, mirrored, round. If the circle stays black, the
-   mask (`MultiEffect`) or the reparenting of the `VideoOutput` into the notch's surface is
-   the cause; tell me, and the enrol route falls back to the card (`available` stays true for
-   every other route). Press Cancel or Esc, or click the notch closed: `fuser /dev/video0`
-   must print nothing within a second.
-3. **pkexec vs the notch's focus** (plan section 4.7). From the notch press Start: polkit's
-   dialog appears. The panel must **stay open** behind it. If it collapses, the session is
-   aborted (safe) and the next open shows a fresh idle view; tell me.
+1. **Look.** Open Face -> a person -> Re-record. The card appears under the camera (the notch
+   panel closes). Check the circle, ring and wording against the reference images: Simple first
+   (one arc highlighted at a time: left, right, up, down), then press the `Advanced` link under
+   Start and look again (twelve spots). Your accent should colour the covered ticks.
+2. **VideoOutput in the card's circle** (plan 6a.4). Press Start: the RGB preview must paint
+   **inside the circle**, mirrored and round (the circle is a `MultiEffect` mask over the
+   `VideoOutput`). If the circle stays black or the picture is a square, tell me: the fallback
+   is a pure black "donut" drawn over a square preview (the card is always #000000), which
+   needs no shader. Cancel or Esc, or Done: `fuser /dev/video0` must print nothing within a second.
+3. **pkexec vs the card.** Press Start: polkit's dialog appears; the card **must stay** on
+   screen and the scan must start after the password. (The card has no focus-loss handling at
+   all: it holds `WlrKeyboardFocus.Exclusive` as before, and closes only on Esc, Cancel, its
+   scrim click, Done or the session ending.) If the dialog cannot take the keyboard, tell me.
 4. **Esc and Return.** Return = Start, then Done once it is offered; Esc in any phase closes
    with "Nothing was saved" for a moment. Tab walks the links in order with the focus border.
 5. **Both modes end to end.** Simple: should save in about 15 s with the centre and two to
    four targets (a skipped target says so). Advanced: Done appears once enough is held; press
    it, then Done again. `omarchy-face-admin`'s helper must be 3.1.0 or newer (Setup offers the
    update); with an older one you should get the old single capture and a note.
-6. **The mode is remembered** across the card and the notch (`$XDG_STATE_HOME/omarchy-face/enrol-mode`).
+6. **The mode is remembered** between scans (`$XDG_STATE_HOME/omarchy-face/enrol-mode`).
 7. **Screen reader (optional).** With Orca running, Tab through the links and the ring: does it
    read "Face scan", the step, and the percent? Does it announce a changed target? (Doubt 19.)
 

@@ -14,9 +14,13 @@
 # session that enforces table V and counts the verbs it has to refuse.
 #
 # What it cannot say: that the picture looks right on a real screen, that a real
-# VideoOutput paints inside the notch's surface, that pkexec's dialog leaves the
-# notch panel open, or that Qt announces a changed description to a screen reader.
+# VideoOutput paints inside the card's circle (the MultiEffect mask), that pkexec's
+# dialog leaves the card alone, or that Qt announces a changed description to a screen reader.
 # Those are the live steps in dev/README.md.
+#
+# Where the view lives: RecordCard.qml, the Face service's own window, in every home.
+# It is never hosted in the notch (polkit's dialog takes the notch's focus, and the
+# panel collapses with the scan inside it: the Phase 4 live gate).
 
 set -uo pipefail
 
@@ -109,6 +113,12 @@ check "EnrolView and EnrolRing never read Commons.Color.accent (the host's accen
   "$(cd "$REPO" && sed -E 's#//.*$##' EnrolRing.qml | grep -c 'Color\.accent') $(sed -E 's#//.*$##' EnrolView.qml | grep -cE 'Color\.accent.*(accentColor|ring)')" | awk '{print $1 + $2}'
 check "the mode travels in the sweep line and nowhere else" "1" \
   "$(cd "$REPO" && sed -E 's#//.*$##' RecordSession.qml | grep -E 'send\(' | grep -c 'activeMode\|mode:')"
+check "the preview Loader is active only for previewOn AND a device (nothing else opens the camera)" "1" \
+  "$(grep -c 'active: view.previewOn && view.previewDevice !== ""' "$REPO/EnrolView.qml")"
+check "…and previewOn is the card being live AND the session wanting it (Start pressed)" "1" \
+  "$(grep -c 'previewOn: view.live && !!view.session && view.session.previewWanted' "$REPO/EnrolView.qml")"
+check "only RecordCard.qml makes an EnrolView, and nothing the notch's panel is made of names it" "RecordCard.qml" \
+  "$(cd "$REPO" && for f in *.qml; do sed -E 's#//.*$##' "$f" | grep -q '\bEnrolView *{' && echo "$f"; done | tr '\n' ' ' | sed 's/ $//')"
 check "EnrolView is the only QML file that names RecordPreview" "EnrolView.qml" \
   "$(cd "$REPO" && grep -l 'RecordPreview' ./*.qml | sed 's#^\./##' | tr '\n' ' ' | sed 's/ $//')"
 check "a pure #000000 under it is the host's: the view paints no background of its own" "0" \
@@ -182,8 +192,8 @@ check "Done on swept sends done and the session ends saved" "done 1 true" "$(fie
 check "the view never triggered a bad_sweep (the fake enforces table V)" "0" "$(field violations "$out")"
 check "…never sent capture when the helper lists sweep" "true" "$(field capture-never "$out")"
 check "…and Simple never sends finish" "true" "$(field finish-never-simple "$out")"
-echo "${DIM}  contrast over #000 (rest, current, done, centre arc, done vs rest): theme: $(field contrast-theme "$out"); notch (accent = foreground): $(field contrast-notch "$out"); coloured: $(field contrast-coloured "$out")${RESET}"
-for p in theme notch coloured; do
+echo "${DIM}  contrast over #000 (rest, current, done, centre arc, done vs rest): theme: $(field contrast-theme "$out"); mono (accent = foreground): $(field contrast-mono "$out"); coloured: $(field contrast-coloured "$out")${RESET}"
+for p in theme mono coloured; do
   read -r rest cur done arc dvr <<<"$(field contrast-$p "$out")"
   check_ge "contrast: the rest look is at least 3:1 over #000 ($p palette)" 3 "$rest"
   check_ge "contrast: the current look is at least 3:1 ($p)" 3 "$cur"
@@ -287,13 +297,6 @@ check "it rests before any frame, and on dark, blurry, other, searching, multipl
   "$(field hair-before "$out") $(field hair-dark "$out") $(field hair-blurry "$out") $(field hair-other "$out") $(field hair-searching "$out") $(field hair-multiple "$out") $(field hair-edge "$out")"
 check "…runs on an accepted frame, rests when done, re-arms on the next" "true false true false" \
   "$(field hair-hold "$out") $(field hair-rested "$out") $(field hair-rearmed "$out") $(field hair-done "$out")"
-
-step "Size: the ring scales down to the height the notch gives it (circle no smaller than 120 px)"
-check "unlimited: the full ring, a 160 px circle" "232 1 circle 160" "$(field size "$(run size)")"
-sz=$(field size "$(run size E3_MAXH=490)")
-check "a short panel (490 px): the ring shrinks, between 120 px and the full circle" "true" \
-  "$(awk -v s="$sz" 'BEGIN { split(s, a, " "); print (a[2] < 1 && a[2] >= 0.75 && a[4] >= 120 && a[4] < 160) ? "true" : "false" }')"
-check "a very short one stops at a 120 px circle" "174 0.75 circle 120" "$(field size "$(run size E3_MAXH=100)")"
 
 step "The camera fence (6a.1): the preview exists only after Start and only while the host shows the view"
 out=$(run fence)

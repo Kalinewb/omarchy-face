@@ -18,14 +18,10 @@ import "face" as Face
 //                       hosted   the notch's panel: the REAL Surface.qml, its
 //                                `panel` Component created the way the host
 //                                creates it, on a stand-in host
-//                       fence    the preview camera's fence (plan-face-enroll.md
-//                                6a.1, round-3 notes S1 and S3): two copies of the
-//                                hosted panel, one per screen, the enrol view
-//                                pushed in process; prints what EnrolView's
-//                                `previewOn` is in each as the host's state
-//                                changes. Nothing opens a camera: the fixture has
-//                                no RGB node, so the Loader that would is never
-//                                active, and only the fence's input is read.
+//                       test     Test pressed in the hosted panel (see below)
+//                       record   Scan pressed in the hosted panel: it must ask
+//                                the Face service for its card and close the
+//                                panel, and show no recording of its own
 //   FACE_HARNESS_ROUTE  setup | people | person:anna
 //   FACE_HARNESS_HOST   identity (default) | realistic | other
 //                       identity    a host whose palette is the theme's own,
@@ -82,83 +78,6 @@ ShellRoot {
 
   property var grabbed: null
 
-  // The `previewOn` of the EnrolView inside `panel`, "none" when the panel is
-  // not showing one.
-  function previewOnIn(panel) {
-    function walk(item) {
-      if (item.previewOn !== undefined && item.previewDevice !== undefined) return item
-      for (var i = 0; i < item.children.length; i++) {
-        var found = walk(item.children[i])
-        if (found) return found
-      }
-      return null
-    }
-    var view = walk(panel)
-    return view ? String(view.previewOn) : "none"
-  }
-
-  function liveIn(panel) {
-    function walk(item) {
-      if (item.previewOn !== undefined && item.previewDevice !== undefined) return item
-      for (var i = 0; i < item.children.length; i++) {
-        var found = walk(item.children[i])
-        if (found) return found
-      }
-      return null
-    }
-    var view = walk(panel)
-    return view ? String(view.live) : "none"
-  }
-
-  property var fenceA: null
-  property var fenceB: null
-  property int fenceStep: 0
-
-  function reportFence(label) {
-    shellRoot.log("fence-" + label, previewOnIn(fenceA) + "," + previewOnIn(fenceB))
-  }
-
-  Timer {
-    id: fenceTimer
-    interval: 400
-    repeat: true
-    onTriggered: {
-      var step = shellRoot.fenceStep++
-      if (step === 0) {
-        // The Surface pushes the enrol view in process, as PeopleView/PersonView
-        // do through the model (S1) -- no route, no panelRoute.
-        fakeHost.panelScreen = "T-1"
-        fakeHost.panelRoute = "people"
-        fakeHost.panelOpen = true
-        shellRoot.surface.model.showEnrol("anna", "No glasses", "Anna", false)
-      } else if (step === 1) {
-        shellRoot.log("fence-view", shellRoot.surface.model.view)
-        // Start is what turns the camera on, and the harness presses no Start:
-        // before it, previewOn is false on both screens even though one is live.
-        shellRoot.reportFence("idle")             // false,false
-        shellRoot.log("fence-live", liveIn(fenceA) + "," + liveIn(fenceB))   // true,false
-        shellRoot.surface.session.phase = "authorising"
-        shellRoot.reportFence("screen1")          // true,false
-        fakeHost.panelScreen = "T-2"
-      } else if (step === 2) {
-        shellRoot.reportFence("screen2")          // false,true
-        fakeHost.panelOpen = false
-      } else if (step === 3) {
-        shellRoot.reportFence("closed")           // false,false
-        fakeHost.panelScreen = "T-1"
-        fakeHost.panelOpen = true
-      } else if (step === 4) {
-        shellRoot.reportFence("reopened")         // false,false: a fresh session, no Start yet
-        shellRoot.log("fence-reopened-live", liveIn(fenceA) + "," + liveIn(fenceB))   // true,false
-        shellRoot.surface.model.navBack()
-      } else {
-        shellRoot.reportFence("left")             // none,none
-        shellRoot.log("fence-session", shellRoot.surface.session === null)
-        Qt.exit(0)
-      }
-    }
-  }
-
   // --- the test result, in place (plan-gui.md 5.2) ---------------------------------
   //
   //   FACE_HARNESS_CASE=test  the hosted panel on person:anna; Test pressed
@@ -166,6 +85,7 @@ ShellRoot {
   //                           PNGs: <out>-a (before), -b (the result), -c (after
   //                           Esc), and what each state contains.
   property var testPanel: null
+  property int closes: 0
   property int testStep: 0
   function findItem(root, wants) {
     if (wants(root)) return root
@@ -222,6 +142,32 @@ ShellRoot {
       }
     }
   }
+
+  // --- Scan, in the hosted panel: the standalone card, and the panel closes -------------------
+  //
+  //   FACE_HARNESS_CASE=record  People (route people) or Person (route person:anna):
+  //                             the Scan button's own function is called. The panel
+  //                             must not show a recording (no enrol view, no
+  //                             session), must close itself (closeRequested), and
+  //                             the call that reaches the shell is the service's
+  //                             `kalinewb.face.card record` (logged by the stub).
+  Timer {
+    id: recordTimer
+    interval: 1800
+    onTriggered: {
+      recordTimer.stop()
+      var panel = shellRoot.testPanel
+      var model = shellRoot.surface.model
+      var pv = shellRoot.findItem(panel, function (i) { return typeof i.record === "function" && i.note !== undefined })
+      shellRoot.log("button", pv ? "found" : "none")
+      shellRoot.log("before", model.view + " closes " + shellRoot.closes)
+      if (shellRoot.route === "people") pv.record("anna", "No glasses", "Anna", false)
+      else pv.record("No glasses")
+      shellRoot.log("after", model.view + " closes " + shellRoot.closes + " stack " + model.viewStack.length)
+      Qt.callLater(function () { recordExit.start() })
+    }
+  }
+  Timer { id: recordExit; interval: 900; onTriggered: Qt.exit(0) }
 
   function grab(item, label) {
     item.grabToImage(function (result) {
@@ -285,14 +231,14 @@ ShellRoot {
 
   Loader {
     id: surfaceLoader
-    active: shellRoot.caseName === "hosted" || shellRoot.caseName === "fence" || shellRoot.caseName === "test"
+    active: shellRoot.caseName === "hosted" || shellRoot.caseName === "test" || shellRoot.caseName === "record"
     sourceComponent: Component { Face.Surface { surfaceHost: fakeHost } }
   }
   readonly property var surface: surfaceLoader.item
 
   Window {
     id: hostedWindow
-    visible: shellRoot.caseName === "hosted" || shellRoot.caseName === "fence" || shellRoot.caseName === "test"
+    visible: shellRoot.caseName === "hosted" || shellRoot.caseName === "test" || shellRoot.caseName === "record"
     width: 340
     height: 900
     color: "black"
@@ -317,14 +263,6 @@ ShellRoot {
       }
       if (!shellRoot.surface || !shellRoot.surface.available || shellRoot.surface.model.people === null) return
       running = false
-      if (shellRoot.caseName === "fence") {
-        shellRoot.fenceA = shellRoot.surface.panel.createObject(hostedWindow.contentItem, {
-          surfaceHost: fakeHost, surfaceScreen: "T-1", maxWidth: 400, maxHeight: 900 })
-        shellRoot.fenceB = shellRoot.surface.panel.createObject(hostedWindow.contentItem, {
-          surfaceHost: fakeHost, surfaceScreen: "T-2", maxWidth: 400, maxHeight: 900 })
-        fenceTimer.start()
-        return
-      }
       fakeHost.panelScreen = "T-1"
       fakeHost.panelRoute = shellRoot.route
       fakeHost.panelOpen = true
@@ -333,12 +271,13 @@ ShellRoot {
       })
       panel.open(shellRoot.route)
       shellRoot.log("available", shellRoot.surface.available)
-      var fv = shellRoot.findItem(panel, function (i) { return i.previewLive !== undefined && i.model !== undefined })
+      var fv = shellRoot.findItem(panel, function (i) { return i.focusItem !== undefined && i.model !== undefined && i.contentHeight !== undefined })
       if (fv) shellRoot.log("insets", "left " + Math.round(fv.x) + " top " + Math.round(fv.y)
                             + " right " + Math.round(panel.width - fv.x - fv.width)
                             + " bottom " + Math.round(panel.implicitHeight - fv.y - fv.height)
                             + " implicit " + Math.round(panel.implicitWidth) + "x" + Math.round(panel.implicitHeight))
       if (shellRoot.caseName === "test") { shellRoot.testPanel = panel; testTimer.start(); return }
+      if (shellRoot.caseName === "record") { shellRoot.testPanel = panel; panel.closeRequested.connect(function () { shellRoot.closes += 1 }); recordTimer.start(); return }
       settle.start()
     }
   }
