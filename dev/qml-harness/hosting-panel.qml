@@ -8,7 +8,13 @@ import "face" as Face
 
 // Face's views in both homes, rendered to a PNG, for dev/e2-hosting.sh (i).
 //
-//   FACE_HARNESS_CASE   stock    the stock bar's popup: the REAL FacePanel.qml
+//   FACE_HARNESS_CASE   stock    the stock popup's wiring without its window: a
+//                                hosted:false FaceModel and FaceViews, as
+//                                FacePanel.qml builds them, at the given size
+//                                (runs headless)
+//                       popup    the stock bar's popup: the REAL FacePanel.qml
+//                                (its KeyboardPanel is a layer-shell window, so
+//                                this needs a compositor: E2_NESTED=1)
 //                       hosted   the notch's panel: the REAL Surface.qml, its
 //                                `panel` Component created the way the host
 //                                creates it, on a stand-in host
@@ -46,8 +52,8 @@ ShellRoot {
   // "WxH": the size to give the hosted panel, so it can be compared with the
   // stock popup's content at the size that popup chose.
   readonly property var size: (Quickshell.env("FACE_HARNESS_SIZE") || "").split("x").map(Number)
-  readonly property real wantW: size.length === 2 && size[0] > 0 ? size[0] : 400
-  readonly property real wantH: size.length === 2 && size[1] > 0 ? size[1] : 900
+  readonly property real wantW: size.length === 2 && size[0] > 0 ? size[0] : 305
+  readonly property real wantH: size.length === 2 && size[1] > 0 ? size[1] : 560
 
   function log(key, value) { console.log("HARNESS " + key, value) }
 
@@ -148,17 +154,38 @@ ShellRoot {
     id: settle
     interval: 1800
     onTriggered: {
-      if (shellRoot.caseName === "stock") shellRoot.grab(shellRoot.stockPanel.viewsItem, "stock")
+      if (shellRoot.caseName === "stock") shellRoot.grab(stockViews, "stock")
+      else if (shellRoot.caseName === "popup") shellRoot.grab(shellRoot.stockPanel.viewsItem, "popup")
       else shellRoot.grab(hostedWindow.contentItem.children[0], "hosted")
     }
   }
 
+  // By name, so that a headless run never compiles FacePanel.qml (its window
+  // type has no backend without a compositor).
   Loader {
     id: stockLoader
-    active: shellRoot.caseName === "stock"
-    sourceComponent: Component { Face.FacePanel { bar: null } }
+    source: shellRoot.caseName === "popup" ? "face/FacePanel.qml" : ""
+    onLoaded: item.bar = null
   }
   readonly property var stockPanel: stockLoader.item
+
+  // The popup's wiring, minus the window: the model FacePanel makes, and the
+  // views it puts in its KeyboardPanel.
+  Window {
+    id: stockWindow
+    visible: shellRoot.caseName === "stock"
+    width: 340
+    height: 900
+    color: "black"
+    Face.FaceModel { id: stockModel; hosted: false; bar: null; opened: true }
+    // 305 x 560: what FacePanel's KeyboardPanel gives its content here.
+    Face.FaceViews {
+      id: stockViews
+      model: stockModel
+      width: shellRoot.wantW
+      height: Math.min(stockViews.contentHeight, shellRoot.wantH)
+    }
+  }
 
   Loader {
     id: surfaceLoader
@@ -183,8 +210,8 @@ ShellRoot {
     onTriggered: {
       ticks += 1
       if (ticks > 80) { shellRoot.log("timeout", "no status/people in 20 s"); Qt.exit(1); return }
-      if (shellRoot.caseName === "stock") {
-        var m = shellRoot.stockPanel
+      if (shellRoot.caseName === "stock" || shellRoot.caseName === "popup") {
+        var m = shellRoot.caseName === "stock" ? stockModel : shellRoot.stockPanel
         if (!m || m.status === null || m.people === null) return
         running = false
         var parts = shellRoot.route.split(":")

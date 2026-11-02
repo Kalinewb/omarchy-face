@@ -6,9 +6,9 @@
 #   ./dev/e2-hosting.sh
 #   NOTCH_DIR=/path/to/a/clean/notch/copy ./dev/e2-hosting.sh
 #
-# Without NOTCH_DIR there is no real notch, and the two cases that need one
-# (marked *) are skipped, loudly. NOTCH_DIR is READ ONLY here: a clean copy of
-# the notch at master, e.g.
+# The two cases that need a real notch (marked *) need NOTCH_DIR and E2_NOTCH=1
+# (a compositor, see below). NOTCH_DIR is READ ONLY here: a clean copy of the
+# notch at master, e.g.
 #
 #   mkdir /tmp/notch && git -C ~/Work/omarchy-notch archive origin/master | tar -x -C /tmp/notch
 #
@@ -32,12 +32,22 @@
 #
 # (viii) is Phase 6's and (x) is Phase 4's.
 #
-# Nothing here touches the live session. Every window opens in a nested,
-# headless Hyprland started below (the way dev/g7-preview.sh does it) with its
-# own wayland socket, and every stub the code under test could call --
-# `omarchy-shell`, `pkexec`, `hyprctl` -- is earlier in PATH. No camera is
-# opened: the fixture has no RGB node (`camera.rgb` is "") and the harness
-# asserts it; nothing here reads /dev/video*.
+# HEADLESS BY DEFAULT: no window opens anywhere. Every Quickshell harness runs
+# with QT_QPA_PLATFORM=offscreen and no WAYLAND_DISPLAY. That runs (i) against
+# the popup's wiring without its window, (ii), (iv), (v) against NotchRoute.qml,
+# (vii) and the fence. What cannot run without a compositor is anything that
+# makes a layer-shell window -- FacePanel's KeyboardPanel, the Service's
+# Indicator and the notch itself -- and these are SKIPPED, loudly, unless
+# E2_NESTED=1, which starts a nested Hyprland (the way dev/g7-preview.sh does)
+# and so draws a window on the desktop while it runs:
+#
+#   * (i)   the REAL FacePanel's PNG, compared with the hosted panel's
+#   * (iii) and (vi), against the notch, and the Service end to end
+#
+# Every stub the code under test could call -- `omarchy-shell`, `pkexec`,
+# `hyprctl` -- is earlier in PATH. No camera is opened: the fixture has no RGB
+# node (`camera.rgb` is "") and the harness asserts it; nothing here reads
+# /dev/video*.
 
 set -uo pipefail
 
@@ -49,6 +59,10 @@ RESET=$'\e[0m'
 
 REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 NOTCH_DIR=${NOTCH_DIR:-}
+NESTED=${E2_NESTED:-0}
+SESSION_DISPLAY=${WAYLAND_DISPLAY:-}
+# No compositor unless asked for: a stray display would put windows on the desktop.
+(( NESTED )) || unset WAYLAND_DISPLAY
 
 failures=0
 checks=0
@@ -188,14 +202,14 @@ else
   note "skipped: the notch's own scan needs NOTCH_DIR"
 fi
 
-echo
-echo "${DIM}starting a nested, headless compositor for the windows below${RESET}"
 
 # =============================================================================
-# the nested compositor (as dev/g7-preview.sh)
+# the nested compositor (E2_NESTED=1 only; as dev/g7-preview.sh)
 # =============================================================================
 
-cat >"$root/hypr.conf" <<'CONF'
+start_nested() {
+  echo "${YELLOW}E2_NESTED=1: starting a nested Hyprland. It draws a window on the desktop while it runs.${RESET}"
+  cat >"$root/hypr.conf" <<'CONF'
 monitor = HEADLESS-1, 1600x1200@60, 0x0, 1
 misc {
   disable_hyprland_logo = true
@@ -206,37 +220,44 @@ misc {
 animations { enabled = false }
 decoration { blur { enabled = false } shadow { enabled = false } }
 CONF
-
-before=$(ls "${XDG_RUNTIME_DIR:-/run/user/$UID}/hypr" 2>/dev/null)
-setsid Hyprland -c "$root/hypr.conf" >"$root/hypr.log" 2>&1 &
-hypr_pid=$!
-signature=""
-for _ in $(seq 1 40); do
-  sleep 0.5
-  for path in "${XDG_RUNTIME_DIR:-/run/user/$UID}"/hypr/*; do
-    [[ -e $path ]] || continue
-    candidate=${path##*/}
-    grep -qxF "$candidate" <<<"$before" && continue
-    signature=$candidate
+  local before candidate path display
+  before=$(ls "${XDG_RUNTIME_DIR:-/run/user/$UID}/hypr" 2>/dev/null)
+  # The compositor needs the session's display to nest in; it is the one
+  # variable this script otherwise unsets.
+  WAYLAND_DISPLAY=$SESSION_DISPLAY setsid Hyprland -c "$root/hypr.conf" >"$root/hypr.log" 2>&1 &
+  hypr_pid=$!
+  signature=""
+  for _ in $(seq 1 40); do
+    sleep 0.5
+    for path in "${XDG_RUNTIME_DIR:-/run/user/$UID}"/hypr/*; do
+      [[ -e $path ]] || continue
+      candidate=${path##*/}
+      grep -qxF "$candidate" <<<"$before" && continue
+      signature=$candidate
+    done
+    [[ -n $signature ]] && break
   done
-  [[ -n $signature ]] && break
-done
-[[ -n $signature ]] || { echo "${RED}the nested compositor did not start${RESET}"; exit 1; }
-export HYPRLAND_INSTANCE_SIGNATURE=$signature
-"$HYPRCTL" output create headless >/dev/null
-sleep 1
-"$HYPRCTL" keyword monitor "WAYLAND-1,disable" >/dev/null
-sleep 1
-display=$(ls -t "${XDG_RUNTIME_DIR:-/run/user/$UID}"/wayland-[0-9]* 2>/dev/null | grep -v '\.lock$' | head -n1)
-NESTED_DISPLAY=${display##*/}
-[[ -n $NESTED_DISPLAY ]] || { echo "${RED}no wayland socket for the nested compositor${RESET}"; exit 1; }
-# `quickshell ipc` finds an instance on the current display only.
-export WAYLAND_DISPLAY=$NESTED_DISPLAY
-# Proof that nothing below can reach the live session: the compositor every
-# window and every hyprctl goes to is the one just started.
-check "everything below talks to a compositor with a headless output of its own" "true" \
-  "$("$HYPRCTL" monitors -j | jq -r 'any(.[]; .name | startswith("HEADLESS"))')"
-echo "${DIM}nested compositor $signature on $NESTED_DISPLAY${RESET}"
+  [[ -n $signature ]] || { echo "${RED}the nested compositor did not start${RESET}"; exit 1; }
+  export HYPRLAND_INSTANCE_SIGNATURE=$signature
+  "$HYPRCTL" output create headless >/dev/null
+  sleep 1
+  "$HYPRCTL" keyword monitor "WAYLAND-1,disable" >/dev/null
+  sleep 1
+  display=$(ls -t "${XDG_RUNTIME_DIR:-/run/user/$UID}"/wayland-[0-9]* 2>/dev/null | grep -v '\.lock$' | head -n1)
+  NESTED_DISPLAY=${display##*/}
+  [[ -n $NESTED_DISPLAY ]] || { echo "${RED}no wayland socket for the nested compositor${RESET}"; exit 1; }
+  # `quickshell ipc` finds an instance on the current display only.
+  export WAYLAND_DISPLAY=$NESTED_DISPLAY
+  check "everything below talks to a compositor with a headless output of its own" "true" \
+    "$("$HYPRCTL" monitors -j | jq -r 'any(.[]; .name | startswith("HEADLESS"))')"
+  echo "${DIM}nested compositor $signature on $NESTED_DISPLAY${RESET}"
+}
+
+if (( NESTED )); then
+  start_nested
+else
+  note "headless: the cases marked [nested] below are skipped; E2_NESTED=1 runs them (it draws a window while it runs)"
+fi
 
 # =============================================================================
 # the sandbox every harness shares
@@ -285,8 +306,6 @@ chmod +x "$bin"/*
 # The environment of every process started below.
 face_env=(
   PATH="$bin:$PATH"
-  WAYLAND_DISPLAY="$NESTED_DISPLAY"
-  HYPRLAND_INSTANCE_SIGNATURE="$signature"
   OMARCHY_FACE_DEV_BIN="$REPO/dev/bin"
   OMARCHY_FACE_DEV_STATE="$state"
   OMARCHY_FACE_DEV_FIXTURES="$fixtures"
@@ -294,6 +313,9 @@ face_env=(
   OMARCHY_FACE_DEV_RUNTIME="$rt"
   OMARCHY_FACE_DEV_PKEXEC=1
 )
+# Headless: the offscreen platform, and no display to find. Nested: the nested
+# compositor's (exported by start_nested).
+(( NESTED )) || face_env+=(QT_QPA_PLATFORM=offscreen)
 
 mkshell() { # mkshell <dir> <qml file in dev/qml-harness>
   mkdir -p "$1"
@@ -305,54 +327,56 @@ mkshell() { # mkshell <dir> <qml file in dev/qml-harness>
 }
 
 # =============================================================================
-# (ii) (iv) (v): `record`, routed by the heartbeat
+# (ii) (iv) (v): `record`, routed by the heartbeat -- NotchRoute.qml, headless
 # =============================================================================
 
-svc=$root/service
-mkshell "$svc" hosting-service.qml
-env "${face_env[@]}" timeout 300 quickshell -p "$svc" -n >"$logs/service.log" 2>&1 &
+rtr=$root/router
+mkshell "$rtr" hosting-route.qml
+env "${face_env[@]}" timeout 300 quickshell -p "$rtr" -n >"$logs/router.log" 2>&1 &
 pids+=($!)
 
-svc_ipc() { "$QUICKSHELL" ipc -p "$svc" call "$@" 2>/dev/null; }
+rtr_ipc() { "$QUICKSHELL" ipc -p "$rtr" call harness "$@" 2>/dev/null; }
 for _ in $(seq 1 60); do
-  sleep 0.5
-  [[ $(svc_ipc kalinewb.face.card state) == \{* ]] && break
+  sleep 0.25
+  [[ $(rtr_ipc state) == \{* ]] && break
 done
-[[ $(svc_ipc kalinewb.face.card state) == \{* ]] || {
-  echo "${RED}the service never answered${RESET}"
-  "$QUICKSHELL" ipc -p "$svc" call kalinewb.face.card state 2>&1 | head -5
-  "$QUICKSHELL" ipc -p "$svc" show 2>&1 | head -10
-  tail -5 "$logs/service.log"; exit 1
+[[ $(rtr_ipc state) == \{* ]] || {
+  echo "${RED}the router harness never answered${RESET}"
+  "$QUICKSHELL" ipc -p "$rtr" call harness state 2>&1 | head -5
+  tail -8 "$logs/router.log"; exit 1
 }
 
-service_state() { svc_ipc kalinewb.face.card state; }
-card_name() { service_state | jq -r '.card.name // "-"'; }
+cards() { rtr_ipc state | jq -r '[.cards[].name] | join(",")'; }
 notch_calls() { local n; n=$(grep -c '^notch ' "$logs/omarchy-shell.log" 2>/dev/null); echo "${n:-0}"; }
 pkexec_calls() { [[ -f $logs/pkexec.log ]] && wc -l <"$logs/pkexec.log" || echo 0; }
-reset_service() {
+reset_router() {
   # A request still waiting on the notch (2 s) is let run out first: it ends in
-  # the card, which the cancel below then closes.
+  # a card request, which the clear below forgets.
   for _ in $(seq 1 16); do
-    [[ -z $(svc_ipc kalinewb.face.card state | jq -r '.notch') ]] && break
+    [[ -z $(rtr_ipc state | jq -r '.pending') ]] && break
     sleep 0.25
   done
-  svc_ipc kalinewb.face.card cancel >/dev/null
+  rtr_ipc clear >/dev/null
   rm -f "$rt/kalinewb.face/enrol.json" "$rt/kalinewb.notch/platform.json" "$logs/omarchy-shell.log"
-  sleep 0.5
 }
-write_beat() { # write_beat <json filter applied to a good beat>
+write_beat() { # write_beat <jq filter applied to a good beat>
   local beat
   beat=$(jq -n --argjson now "$(now_ms)" '{contract: 1, features: ["panel"], beatAt: $now, staleAfterMs: 6000,
       present: true, hidden: false, accepted: {"kalinewb.face": {contract: 1}}, declined: {}}')
   jq -c "$1" <<<"$beat" >"$rt/kalinewb.notch/platform.json"
 }
-record_anna() { svc_ipc kalinewb.face.card record anna "No glasses" Anna ""; }
+write_flag() { # write_flag <state> <name> <age in ms>
+  mkdir -p "$rt/kalinewb.face"
+  jq -n --arg s "$1" --arg n "$2" --argjson at "$(( $(now_ms) - $3 ))" '{state: $s, name: $n, at: $at}' >"$rt/kalinewb.face/enrol.json"
+}
+record_anna() { rtr_ipc record anna "No glasses" Anna ""; }
 
 step "the sandbox itself"
-check "the card has no RGB node to open, so no camera can start" "" "$(service_state | jq -r '.previewDevice')"
-check "the service answers with no card and nothing asked of the notch" "- " "$(card_name) $(service_state | jq -r '.notch')"
+check "no fixture has an RGB node, so no camera has anything to open" "" \
+  "$(jq -r '.camera.rgb' "$fixtures"/*/status.json | sort -u | tr -d '\n')"
+check "the router has no card request and nothing waiting on the notch" " " "$(cards) $(rtr_ipc state | jq -r '.pending')"
 
-step "(ii) notch-less: record opens the card and never calls the notch"
+step "(ii) notch-less: record asks for the card and never calls the notch"
 for variant in \
   "no heartbeat file|NONE" \
   "a stale heartbeat|.beatAt = (.beatAt - 20000)" \
@@ -362,31 +386,30 @@ for variant in \
 do
   label=${variant%%|*}
   filter=${variant#*|}
-  reset_service
+  reset_router
   [[ $filter == NONE ]] || write_beat "$filter"
   answer=$(record_anna)
-  sleep 1.2
   check "$label: record answers ok" "ok" "$answer"
-  check "$label: the card opened for anna" "anna" "$(card_name)"
+  check "$label: the card is asked for, for anna" "anna" "$(cards)"
   check "$label: omarchy-shell notch was never called" "0" "$(notch_calls)"
 done
 
-step "(iv) a hidden bar and a declined integration open the card"
-reset_service
+step "(iv) a hidden bar and a declined integration ask for the card"
+reset_router
 write_beat '.hidden = true'
-answer=$(record_anna); sleep 1.2
+answer=$(record_anna)
 check "hidden: record answers ok" "ok" "$answer"
-check "hidden: the card opened (the user pressed Scan)" "anna" "$(card_name)"
+check "hidden: the card is asked for (the user pressed Scan)" "anna" "$(cards)"
 check "hidden: the notch was never called" "0" "$(notch_calls)"
-reset_service
+reset_router
 write_beat '.accepted = {} | .declined = {"kalinewb.face": "user-off"}'
-answer=$(record_anna); sleep 1.2
+answer=$(record_anna)
 check "declined:user-off: record answers ok" "ok" "$answer"
-check "declined:user-off: the card opened" "anna" "$(card_name)"
+check "declined:user-off: the card is asked for" "anna" "$(cards)"
 check "declined:user-off: the notch was never called" "0" "$(notch_calls)"
 
 step "(v) a forged heartbeat shows nothing and starts nothing"
-reset_service
+reset_router
 before=$(pkexec_calls)
 write_beat '.'
 answer=$(record_anna)
@@ -394,44 +417,41 @@ check "a good-looking heartbeat: record answers opening" "opening" "$answer"
 sleep 0.5
 check "…the request went to the notch, once, as an enrol route" \
   "notch panel kalinewb.face enrol:anna:No%20glasses:Anna:old" "$(grep '^notch ' "$logs/omarchy-shell.log" | head -1)"
-check "…and the service is waiting for it, with no card yet" "anna -" \
-  "$(service_state | jq -r '.notch') $(card_name)"
+check "…and the router is waiting for it, with no card asked for yet" "anna|" \
+  "$(rtr_ipc state | jq -r '.pending')|$(cards)"
 check "a second record for anna while it waits answers ok" "ok" "$(record_anna)"
-check "…and one for somebody else answers busy" "busy" "$(svc_ipc kalinewb.face.card record mia "No glasses" Mia "")"
+check "…and one for somebody else answers busy" "busy" "$(rtr_ipc record mia "No glasses" Mia "")"
 sleep 2.4
-check "after 2 s with no enrol.json open the card opens" "anna" "$(card_name)"
-check "…the wait is over" "" "$(service_state | jq -r '.notch')"
+check "after 2 s with no enrol.json open the card is asked for" "anna" "$(cards)"
+check "…the wait is over" "" "$(rtr_ipc state | jq -r '.pending')"
 check "…no pkexec was started by any of it" "$before" "$(pkexec_calls)"
-check "…and the card has no RGB node to open" "" "$(service_state | jq -r '.previewDevice')"
 
-reset_service
+reset_router
 write_beat '.'
-mkdir -p "$rt/kalinewb.face"
-jq -n --argjson at "$(( $(now_ms) - 10000 ))" '{state: "open", name: "anna", at: $at}' >"$rt/kalinewb.face/enrol.json"
+write_flag open anna 10000
 answer=$(record_anna)
 check "a stale enrol.json (10 s old) does not count as a session: record answers opening" "opening" "$answer"
 sleep 2.6
-check "…and the card opens after 2 s" "anna" "$(card_name)"
+check "…and the card is asked for after 2 s" "anna" "$(cards)"
 
-reset_service
+reset_router
 write_beat '.'
-mkdir -p "$rt/kalinewb.face"
-jq -n --argjson at "$(now_ms)" '{state: "open", name: "mia", at: $at}' >"$rt/kalinewb.face/enrol.json"
+write_flag open mia 0
 check "a fresh enrol.json for mia: record for anna answers busy" "busy" "$(record_anna)"
-check "…and for mia answers ok" "ok" "$(svc_ipc kalinewb.face.card record mia "No glasses" Mia "")"
+check "…and for mia answers ok" "ok" "$(rtr_ipc record mia "No glasses" Mia "")"
 check "…neither asked the notch" "0" "$(notch_calls)"
-jq -n --argjson at "$(now_ms)" '{state: "closed", name: "", at: $at}' >"$rt/kalinewb.face/enrol.json"
+write_flag closed "" 0
 answer=$(record_anna)
 check "once it says closed, record goes on to the notch again" "opening" "$answer"
-check "…and a closed or unreadable file is not a session" "1" "$(notch_calls)"
-reset_service
-printf 'not json' >"$rt/kalinewb.face/enrol.json"
+check "…which it was asked once" "1" "$(notch_calls)"
+reset_router
+mkdir -p "$rt/kalinewb.face"; printf 'not json' >"$rt/kalinewb.face/enrol.json"
 write_beat '.'
 check "garbage in enrol.json is no session either" "opening" "$(record_anna)"
-reset_service
+reset_router
 
-svc_ipc harness quit >/dev/null
-sleep 0.8
+rtr_ipc quit >/dev/null
+sleep 0.5
 
 # =============================================================================
 # (vii) available is honest; (i) the same views in both homes
@@ -452,7 +472,7 @@ render() { # render <case> <route> <host> <out png> [<WxH to fit>]
 panel_root=$root/panel
 mkshell "$panel_root" hosting-panel.qml
 
-step "(i) the same views, rendered from FacePanel and from Surface.qml's panel"
+step "(i) the same views, from the popup's wiring and from Surface.qml's panel"
 # png-diff.py compares premultiplied RGBA, the pixels the compositor adds up. A
 # difference of one or two levels on an anti-aliased edge is rasterisation
 # rounding (the same view drawn twice in one home differs by as much), not a
@@ -465,9 +485,9 @@ for route in people person:anna setup; do
   tag=${route//:/-}
   stock=$(render stock "$route" identity "$root/stock-$tag.png")
   stock2=$(render stock "$route" identity "$root/stock2-$tag.png")
-  # The popup's content is as wide as its window allows and at most 560 high;
-  # the notch gives a panel what it asks for. Both are the same views, so the
-  # hosted panel is given the stock content's own size to compare like with like.
+  # The popup's content is 305 wide and at most 560 high; the notch gives a
+  # panel what it asks for. Both are the same views, so the hosted panel is
+  # given the stock content's own size to compare like with like.
   hosted=$(render hosted "$route" identity "$root/hosted-$tag.png" "$(field size "$stock")")
   echo "${DIM}  $route: stock $(field size "$stock"), hosted $(field size "$hosted")${RESET}"
   check "$route: both homes drew a PNG" "true true" "$(field saved "$stock") $(field saved "$hosted")"
@@ -477,7 +497,15 @@ for route in people person:anna setup; do
   echo "${DIM}  $route: stock against stock again: $n_same pixels differ, at most $max_same levels; stock against hosted: $n_diff pixels, at most $max_diff levels${RESET}"
   check "$route: drawn twice, the popup differs by at most $MAX_LEVEL levels (the harness's own noise)" "true" "$(within "$max_same")"
   check "$route: the notch's panel (on a host with the theme's palette) differs from the popup by at most $MAX_LEVEL levels" "true" "$(within "$max_diff")"
+  if (( NESTED )); then
+    popup=$(render popup "$route" identity "$root/popup-$tag.png")
+    read -r _ n_pop max_pop < <(pngdiff "$root/popup-$tag.png" "$root/hosted-$tag.png")
+    echo "${DIM}  $route: the real FacePanel against hosted: $(field size "$popup"), $n_pop pixels, at most $max_pop levels${RESET}"
+    check "$route: [nested] the real FacePanel's content is the same size as the hosted panel's" "$(field size "$hosted")" "$(field size "$popup")"
+    check "$route: [nested] …and differs from it by at most $MAX_LEVEL levels" "true" "$(within "$max_pop")"
+  fi
 done
+(( NESTED )) || note "[nested] SKIPPED: the real FacePanel's PNG (its KeyboardPanel is a layer-shell window); the popup side above is its wiring without the window"
 
 step "(i) what the hosted-panel rules change, and only that"
 for route in people person:anna setup; do
@@ -523,8 +551,10 @@ check "broken-engine (the row says broken): false, and stays false" "false false
 # (iii) (vi) in a throwaway notch
 # =============================================================================
 
-step "(iii) (vi) in a throwaway notch"
-if [[ -z $NOTCH_DIR || ! -f $NOTCH_DIR/dev/harness/platform-shell.qml ]]; then
+step "(iii) (vi) in a throwaway notch [nested]"
+if (( ! NESTED )); then
+  note "[nested] SKIPPED: (iii) and (vi) need the notch, whose windows are layer-shell windows: no compositor, no notch. Run with E2_NESTED=1 NOTCH_DIR=<a copy of the notch>"
+elif [[ -z $NOTCH_DIR || ! -f $NOTCH_DIR/dev/harness/platform-shell.qml ]]; then
   note "SKIPPED: these two cases need a read-only copy of the notch at master in NOTCH_DIR"
 else
   nplugins=$root/notch-plugins
