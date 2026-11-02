@@ -195,7 +195,7 @@ sudo /usr/bin/bash -c 'PATH=/usr/bin; set -o pipefail; t=$(mktemp -d) || exit 1
     bash "$t/install.sh" "$1" "$2"
   }
   run "$@"; s=$?; rm -rf -- "$t"; exit $s' \
-  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.1.0
+  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.1.1
 ```
 
 What it does, from the button or from a terminal: root copies the installer out of the
@@ -292,6 +292,15 @@ that a later release's view will use, and `set-limits`), so Setup shows *the plu
 newer than the installed system files*: **Update Face's system files**, one password. Nothing
 about who can unlock changes: Sudo still uses one straight-on picture per look, and a stored
 person is not touched.
+
+### Updating from 3.1.0
+
+Face ID 3.1.1 changes the enrolment helper in `system/` again (one fix, in root code): a strobing
+infrared emitter lights every other frame, and the head-turning scan counted the black ones as the
+room being too dark ("Too dark here" with the emitter visibly blinking). It now skips a fully black
+frame as the emitter's off phase, as howdy itself does, and says "dark" only of a lit frame. Setup
+shows the plugin is newer than the installed system files: **Update Face's system files**, one
+password. Nothing about who can unlock changes.
 
 ## The views
 

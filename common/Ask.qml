@@ -125,7 +125,7 @@ Item {
   // The version is here rather than read from the folder for the same reason
   // the URL is pinned: check-pins.sh fails the build if it drifts from
   // system/install.sh's own header.
-  readonly property string systemVersion: "3.1.0"
+  readonly property string systemVersion: "3.1.1"
 
   // pins:command:begin -- dev/check-pins.sh compares this against README.md
   //

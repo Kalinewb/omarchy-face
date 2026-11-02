@@ -182,6 +182,11 @@ class VideoCapture:
             gray = cv2.GaussianBlur(gray, (0, 0), 25)
         elif kind == "black":
             gray = np.zeros((400, 400), np.uint8)
+        elif kind == "dim":
+            # lit but dim: mostly the darkest values with a fifth of the pixels brighter, so that
+            # after CLAHE about 80% sit in the darkest bin (over DARK_MAX, under 100: not black)
+            gray = rng.randint(0, 8, (400, 400)).astype(np.uint8)
+            gray[rng.random_sample((400, 400)) < 0.2] = 120
         frame = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
         return frame, gray
 PY
@@ -423,6 +428,32 @@ reset_store
 scenario black
 out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
 same "...and all-black frames are named black_frames" '"black_frames"' "$(q "$out" 'last("capture_failed")["code"]')"
+same "...and a covered or dead camera still says dark, after 2 s with nothing lit (the strobe rule does not silence it)" 'true' "$(q "$out" 'any(t["state"] == "dark" for t in tracks)')"
+
+step "a strobing emitter (3.1.1): every other frame is black, and that is not the room being dark"
+reset_store
+scenario simple-strobe
+out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
+same "a Simple lap on a strobing camera (half the frames black) finishes: all four targets" '[0,3,6,9]' "$(q "$out" 'first("swept")["filled"]')"
+same "...and never says dark: the off phases are not a state, no word is emitted for them" 'false' "$(q "$out" 'any(t["state"] == "dark" for t in tracks)')"
+same "...nor is anything stored short of the five templates the same lap gives without the strobe" '5' "$(q "$out" 'first("swept")["kept"]')"
+reset_store
+scenario advanced-strobe
+out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 180" "send $DONE" "await saved 30")
+same "an Advanced lap on a strobing camera fills all twelve bins, with no dark word" '[12,false]' "$(q "$out" '[len(first("swept")["filled"]), any(t["state"] == "dark" for t in tracks)]')"
+reset_store
+scenario strobe-black
+out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
+same "a strobe whose lit frames are all black too is black_frames" '"black_frames"' "$(q "$out" 'last("capture_failed")["code"]')"
+reset_store
+scenario dim
+out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
+same "an all-dim stream (every frame lit but too dark) is too_dark" '"too_dark"' "$(q "$out" 'last("capture_failed")["code"]')"
+reset_store
+scenario strobe-dim
+out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
+same "...and behind a strobe it is too_dark still, not black_frames (the off phases are not evidence)" '"too_dark"' "$(q "$out" 'last("capture_failed")["code"]')"
+same "...the strobe frames still count towards the ceiling (it ended at 18 s of frame time, not 18 s of lit frames)" 'true' "$(q "$out" 'len([e for e in evs if e.get("event") == "capture_failed"]) >= 1')"
 
 step "finish: below the floor it is not_enough and the lap goes on; at it the lap ends"
 reset_store

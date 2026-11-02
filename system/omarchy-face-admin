@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 3.1.0
+# omarchy-face-version: 3.1.1
 #
 # Every privileged thing Face does, behind one polkit action
 # (plan-engine.md §8.2, plan-merged.md §2.3).
@@ -2817,6 +2817,8 @@ SMOOTH_FRAMES = 3            # rule J: steadiness is judged on the mean of this 
 GATE_WORDS = ("hold", "dark", "blurry", "closer", "farther", "edge", "multiple", "other",
               "searching", "over")
 ACCEPTED_WORD = "hold"       # the plan names no word for a frame that passed (see SR1-notes)
+STROBE_SILENCE = 2.0         # s: a strobing emitter lights a frame every few hundred ms at worst, so a
+                             # stream with no lit frame for this long is a covered or dead camera, not a strobe
 CODES = ("black_frames", "too_dark", "multiple_faces", "no_face", "timeout", "camera_busy",
          "changed", "sweep_stalled", "lap_timeout", "bad_sweep", "not_enough", "too_few")
 
@@ -2998,6 +3000,33 @@ def frame_word(faces, eye, box, size, dark, saturated, sharp, roll, steady):
         return "hold"
     return None
 
+
+
+def is_strobe(total, darkness):
+    """A frame that is entirely black (no pixels, or every pixel in the darkest bin) is the
+    emitter's off phase on a strobing IR camera, not evidence about the room: on this
+    laptop every other frame is, and the lit ones are fine. It is howdy's own rule
+    (`add.py` and `compare.py` skip such a frame as "a bad camera read" and count a frame
+    as dark only if it is lit), so `dark` is a property of a LIT frame, never of a black one."""
+    return total == 0 or darkness >= 100
+
+
+def refine_for(seen):
+    """Why a lap that never held the centre failed, from what its frames were. `seen` counts
+    `frames`, `strobe` (black frames skipped as the emitter's off phase), `black` (black
+    frames called dark because nothing lit had been seen for STROBE_SILENCE), `dark` (lit
+    frames over the threshold), `multi` and `none`. Only LIT frames are evidence: no lit
+    frame at all is `black_frames`, every lit frame too dark is `too_dark`."""
+    lit = seen["frames"] - seen["strobe"] - seen["black"]
+    if lit <= 0:
+        return "black_frames"
+    if seen["dark"] == lit:
+        return "too_dark"
+    if seen["multi"] * 2 >= lit:
+        return "multiple_faces"
+    if seen["none"] * 2 >= lit:
+        return "no_face"
+    return None
 
 def lap2_want(reference_eye):
     """Which way lap 2 asks the user to move, or None when neither fits the gate."""
@@ -3490,7 +3519,8 @@ def run(mode, lap, targets, bounds, reference, ref_eye):
     mark, became = (0.0, 0.0), None
     run_failed, changed = 0, False
     sharp_seen, eyes = [], []
-    seen = {"frames": 0, "black": 0, "dark": 0, "none": 0, "multi": 0}
+    seen = {"frames": 0, "black": 0, "strobe": 0, "dark": 0, "none": 0, "multi": 0}
+    last_lit = None
     last_emit, last_key = None, None
     sup_total, sup_at, stalled = 0, None, False
     started = None
@@ -3505,24 +3535,39 @@ def run(mode, lap, targets, bounds, reference, ref_eye):
         seen["frames"] += 1
         word, uv, r = None, None, None
 
-        # rule P's clock starts at the first frame after a target becomes current
-        cur_top = None
-        if mode == "simple" and centre_held:
-            cur_top = current_target(mode, targets, filled, skipped, True, None)
-            if cur_top is not None and became is None:
-                became, mark = now, (0.0, now)
-
         gray = clahe.apply(gray_in)
         hist = cv2.calcHist([gray], [0], None, [8], [0, 256])
         total = float(np.sum(hist))
         darkness = float(hist[0] / total * 100) if total else 100.0
-        if total == 0 or darkness == 100:
-            word = "dark"
-            seen["black"] += 1
+        # The emitter's off phase: skipped entirely. No word, no state change, no
+        # patience, dwell or stall tick, not a `dark` frame; it only counts as a frame
+        # (the lap ceilings run on wall time, so they still advance). Unless nothing lit
+        # has been seen for STROBE_SILENCE: then the camera is covered or dead, and the
+        # frame is called dark as it always was.
+        if last_lit is None:
+            last_lit = now
+        blank = is_strobe(total, darkness)
+        strobe = blank and now - last_lit < STROBE_SILENCE
+
+        # rule P's clock starts at the first frame after a target becomes current
+        cur_top = None
+        if not strobe and mode == "simple" and centre_held:
+            cur_top = current_target(mode, targets, filled, skipped, True, None)
+            if cur_top is not None and became is None:
+                became, mark = now, (0.0, now)
+
+        if blank:
+            if strobe:
+                seen["strobe"] += 1
+            else:
+                word = "dark"
+                seen["black"] += 1
         elif darkness > dark_threshold:
+            last_lit = now
             word = "dark"
             seen["dark"] += 1
         else:
+            last_lit = now
             native_h, native_w = frame.shape[0], frame.shape[1]
             factor = (max_height / native_h) if max_height > 0 else 1.0
             if factor != 1.0:
@@ -3627,33 +3672,34 @@ def run(mode, lap, targets, bounds, reference, ref_eye):
         if reason == "changed":
             break
 
-        if mode == "simple" and centre_held:
-            cur = current_target(mode, targets, filled, skipped, True, None)
-            if cur != cur_top:
-                became, mark = None, (0.0, 0.0)     # the next target starts on the next frame
-            elif cur is not None and became is not None:
-                mark = progress_mark(mark, prog[cur], now)
-                if patience_expired(mode, patience_since(mark, became, lead), now, patience):
-                    skipped.add(cur)
-                    became, mark = None, (0.0, 0.0)
+        if not strobe:
+            if mode == "simple" and centre_held:
+                cur = current_target(mode, targets, filled, skipped, True, None)
+                if cur != cur_top:
+                    became, mark = None, (0.0, 0.0)     # the next target starts on the next frame
+                elif cur is not None and became is not None:
+                    mark = progress_mark(mark, prog[cur], now)
+                    if patience_expired(mode, patience_since(mark, became, lead), now, patience):
+                        skipped.add(cur)
+                        became, mark = None, (0.0, 0.0)
 
-        total_sup = (1 if centre_held else 0) + sum(len(supported(c)) for c in cands.values())
-        if total_sup > sup_total or sup_at is None and centre_held:
-            sup_total, sup_at, stalled = total_sup, now, False
-        if mode == "advanced" and centre_held and not stalled and sup_at is not None and now - sup_at >= stall:
-            stalled = True
-            say({"event": "capture_failed", "code": "sweep_stalled"})
+            total_sup = (1 if centre_held else 0) + sum(len(supported(c)) for c in cands.values())
+            if total_sup > sup_total or sup_at is None and centre_held:
+                sup_total, sup_at, stalled = total_sup, now, False
+            if mode == "advanced" and centre_held and not stalled and sup_at is not None and now - sup_at >= stall:
+                stalled = True
+                say({"event": "capture_failed", "code": "sweep_stalled"})
 
-        target = current_target(mode, targets, filled, skipped, centre_held, head_bin if uv else None)
-        key = (target, tuple(sorted(filled)), tuple(sorted(skipped)), centre_held)
-        if last_emit is None or now - last_emit >= TRACK_EVERY or key != last_key:
-            u_out, v_out = (uv if uv else (0.0, 0.0))
-            clamp = lambda x: round(max(-4.0, min(4.0, x)), 3)
-            say({"event": "track", "state": word or ACCEPTED_WORD, "u": clamp(u_out), "v": clamp(v_out),
-                 "target": target, "centre": round(centre_prog, 2),
-                 "bins": track_bins(targets, {**prog, **{k: 1.0 for k in filled}}),
-                 "skipped": sorted(skipped), "canFinish": can_finish(mode, centre_held, filled)})
-            last_emit, last_key = now, key
+            target = current_target(mode, targets, filled, skipped, centre_held, head_bin if uv else None)
+            key = (target, tuple(sorted(filled)), tuple(sorted(skipped)), centre_held)
+            if last_emit is None or now - last_emit >= TRACK_EVERY or key != last_key:
+                u_out, v_out = (uv if uv else (0.0, 0.0))
+                clamp = lambda x: round(max(-4.0, min(4.0, x)), 3)
+                say({"event": "track", "state": word or ACCEPTED_WORD, "u": clamp(u_out), "v": clamp(v_out),
+                     "target": target, "centre": round(centre_prog, 2),
+                     "bins": track_bins(targets, {**prog, **{k: 1.0 for k in filled}}),
+                     "skipped": sorted(skipped), "canFinish": can_finish(mode, centre_held, filled)})
+                last_emit, last_key = now, key
 
         # `finish`: the only thing the parent ever writes here, judged after this frame
         if select.select([0], [], [], 0)[0]:
@@ -3680,15 +3726,7 @@ def run(mode, lap, targets, bounds, reference, ref_eye):
         skipped |= set(targets) - filled
     refine = None
     if not centre_held and not changed:
-        n = seen["frames"]
-        if seen["black"] == n:
-            refine = "black_frames"
-        elif seen["black"] + seen["dark"] == n:
-            refine = "too_dark"
-        elif seen["multi"] * 2 >= n:
-            refine = "multiple_faces"
-        elif seen["none"] * 2 >= n:
-            refine = "no_face"
+        refine = refine_for(seen)
     say({"result": {
         "changed": changed, "ended": reason, "refine": refine,
         "centreHeld": bool(centre_held),

@@ -390,6 +390,30 @@ def test_gates():
     check("lap 2 'closer' until eye >= 1.25 x lap 1", (sw.lap2_word(124, 100, "near"), sw.lap2_word(125, 100, "near")) == ("closer", None))
 
 
+# --- 2b. the strobing emitter: a black frame is not a dark one ---------------------
+def test_strobe():
+    print("a strobing IR emitter: black frames are skipped, `dark` is a property of lit frames (3.1.1)")
+    check("a frame with no pixels is the emitter's off phase", sw.is_strobe(0, 100.0))
+    check("a frame entirely in the darkest bin is too", sw.is_strobe(160000.0, 100.0))
+    check("one pixel above the darkest bin is lit, however dark", not sw.is_strobe(160000.0, 99.99))
+    check("an ordinary lit frame is not", not sw.is_strobe(160000.0, 12.0))
+    check("the silence after which an all-black stream stops being a strobe is 2 s", sw.STROBE_SILENCE == 2.0)
+
+    def refine(frames, strobe=0, black=0, dark=0, none=0, multi=0):
+        return sw.refine_for({"frames": frames, "strobe": strobe, "black": black, "dark": dark, "none": none, "multi": multi})
+
+    check("only black frames: black_frames", refine(40, strobe=40) == "black_frames")
+    check("black frames called dark after the silence, and nothing lit: still black_frames", refine(40, strobe=30, black=10) == "black_frames")
+    check("half the frames strobe-off, every lit one too dark: too_dark (not black_frames)",
+          refine(40, strobe=20, dark=20) == "too_dark")
+    check("the strobe frames do not count for or against `no_face`: 20 lit, 9 empty is not a verdict, 10 is",
+          (refine(40, strobe=20, none=9), refine(40, strobe=20, none=10)) == (None, "no_face"))
+    check("...nor for `multiple_faces`", refine(40, strobe=20, multi=10) == "multiple_faces")
+    check("a lit frame with a face among the strobe frames means no refinement", refine(40, strobe=20, none=5, dark=3) is None)
+    check("before the fix a stream of half black frames could never be too_dark: lit frames alone decide",
+          refine(10, strobe=5, black=0, dark=5) == "too_dark" and refine(10, strobe=5, black=0, dark=4, none=1) is None)
+
+
 # --- 3. the same-person guard and the changed counter -----------------------------
 def test_guard():
     print("same-person guard")
@@ -857,6 +881,7 @@ def main():
     test_noise()
     coupling_findings()
     test_gates()
+    test_strobe()
     test_guard()
     test_support()
     test_pick()

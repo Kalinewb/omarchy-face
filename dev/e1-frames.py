@@ -77,6 +77,16 @@ def build(segments):
     return frames
 
 
+def strobe(frames):
+    """A strobing emitter: every other frame is fully black (the off phase), the lit ones
+    unchanged, so the lit frames arrive at half the rate. That is this laptop's IR camera."""
+    out = []
+    for frame in frames:
+        out.append(frame)
+        out.append(dict(frame, kind="black", hold=False))
+    return out
+
+
 CLOCK = (0, 6, 3, 9, 1, 7, 4, 10, 2, 8, 5, 11)
 SIMPLE = (9, 3, 0, 6)
 
@@ -106,6 +116,13 @@ SCENARIOS = {
     # never at the centre: the head never settles, so there is no neutral and no centre
     "no-centre": lambda: build([dict(n=900, swing=12.0)]),
     "black": lambda: build([dict(n=900, kind="black")]),
+    # a strobing emitter (3.1.1): black frames between the lit ones are not "dark"
+    "simple-strobe": lambda: strobe(build([dict(n=40)] + visit(SIMPLE))),
+    "advanced-strobe": lambda: strobe(build([dict(n=40)] + visit(CLOCK))),
+    # every frame lit but too dark (80% in the darkest bin: kind "dark" is 100%, which is black); and the same behind a strobe
+    "dim": lambda: build([dict(n=900, kind="dim")]),
+    "strobe-dim": lambda: strobe(build([dict(n=450, kind="dim")])),
+    "strobe-black": lambda: strobe(build([dict(n=450, kind="black")])),
     "advanced-idle": lambda: build([dict(n=40), dict(n=900)]),
     "simple-wrong-long": lambda: build([dict(n=40), dict(at=6, n=900)]),
     # the camera waits on its first frame for a line on stdin (for the session-bound test)
