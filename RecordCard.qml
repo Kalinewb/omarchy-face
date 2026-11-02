@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Wayland
 import qs.Commons
+import qs.Commons as Commons
 import "common/spring.js" as Spring
 
 // The recording card (plan-gui.md §5.3): a scrim on the built-in screen with a
@@ -13,10 +14,10 @@ import "common/spring.js" as Spring
 // cannot give it that), and it has to outlive the popup, which any write under
 // ~/.config/omarchy/plugins destroys (plan-engine.md E13).
 //
-// This file is the window around the recording view. What is inside it --
-// the preview, the line, the picker, the buttons -- is RecordView.qml, which
-// the notch shows in place when it is the host; every decision about the
-// session is in RecordSession.qml.
+// This file is the window around the enrol view. What is inside it -- the ring,
+// the line, the links, and on an old helper the single capture's picker and
+// buttons -- is EnrolView.qml, which the notch shows in place when it is the
+// host; every decision about the session is in RecordSession.qml.
 PanelWindow {
   id: card
 
@@ -31,7 +32,7 @@ PanelWindow {
   // person view.
   property var appearanceLabels: ["No glasses", "Everyday glasses", "Reading glasses"]
 
-  // What the picker shows and says is RecordView's; these are the card's way of
+  // What the picker shows and says is the view's; these are the card's way of
   // being asked, which is how Service.qml's state() and the offscreen suites
   // question a card that has no window they could read.
   property alias recordedAppearances: view.recordedAppearances
@@ -51,6 +52,19 @@ PanelWindow {
   // declaring a second one is an invalid override -- Qt warns about it today
   // and is on its way to refusing it.
   signal dismissed()
+
+  // The card's palette: white on its black scrim, the theme's accent.
+  QtObject {
+    id: cardColors
+    readonly property color foreground: "white"
+    readonly property color secondary: Qt.darker("white", 1.55)
+    readonly property color accent: Commons.Color.accent
+    readonly property color urgent: Commons.Color.urgent
+    readonly property string fontFamily: card.fontFamily
+    readonly property bool reducedMotion: Quickshell.env("OMARCHY_REDUCED_MOTION") === "1"
+                                          || Quickshell.env("NOTCH_REDUCED_MOTION") === "1"
+    function radiusFor(size) { return Style.cornerRadius }
+  }
 
   readonly property string phase: session ? session.phase : "framing"
 
@@ -170,20 +184,21 @@ PanelWindow {
       filletRadius: Style.space(10) * barHeight / fullHeight
       color: "#000000"
 
-      RecordView {
+      EnrolView {
         id: view
         anchors.centerIn: parent
         width: panel.contentWidth
 
         session: card.session
-        fontFamily: card.fontFamily
+        colors: cardColors
         previewDevice: card.previewDevice
-        // The card is on screen from the moment it exists.
-        previewOn: true
+        // The card is on screen from the moment it exists; the camera still
+        // waits for Start (the session says `previewWanted`).
+        live: card.visible
         appearanceLabels: card.appearanceLabels
         onCloseRequested: card.requestClose()
 
-        // Only once the bar is mostly grown, so the preview and the picker are
+        // Only once the bar is mostly grown, so the ring and the links are
         // never seen half-clipped inside a bar still arriving. The bar itself
         // never fades; this is what is in it.
         opacity: Math.max(0, Math.min(1, (Math.min(card.heightP, card.widthP) - 0.7) / 0.3))

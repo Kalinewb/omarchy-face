@@ -26,6 +26,9 @@ Item {
   // the card is on screen from the moment it exists; the notch's panel only
   // while it is open, on its own screen. The home computes it.
   property bool previewLive: false
+  // The most height the home will give the whole of this (the notch's
+  // `maxPanelHeight`); 0 when it is not limited. The enrol ring shrinks to fit.
+  property real maxHeight: 0
 
   // What the home hands the keyboard to.
   readonly property Item focusItem: keyCatcher
@@ -121,7 +124,7 @@ Item {
           textFormat: Text.PlainText
           width: parent.width
           topPadding: Style.space(2)
-          text: root.model ? root.model.chrome().hint : ""
+          text: root.model ? (root.model.notice !== "" ? root.model.notice : root.model.chrome().hint) : ""
           color: root.model ? root.model.dim : Commons.Color.muted
           font.family: root.model ? root.model.fontFamily : Style.font.family
           font.pixelSize: Style.font.caption
@@ -138,21 +141,19 @@ Item {
   Component { id: settingsComponent; SettingsView {} }
   Component { id: removeComponent;   RemoveView {} }
 
-  // The single-capture recording view, in place. Its session is the one the
-  // host's integration runs (FaceModel.enrolSession); its camera is fenced by
-  // `previewLive`.
+  // The enrol view, in place. Its session is the one the host's integration runs
+  // (FaceModel.enrolSession); its camera is fenced by `live`, which is true only
+  // while the home is showing the enrol view (6a.1). The palette is the model's,
+  // which is the host's inside a host.
   Component {
     id: enrolComponent
-    RecordView {
+    EnrolView {
       session: root.model.enrolSession
-      fontFamily: root.model.fontFamily
+      colors: root.model
       previewDevice: root.model.previewDevice
-      previewOn: root.previewLive && root.model.view === "enrol"
-      foreground: root.model.foreground
-      dim: root.model.dim
-      urgent: root.model.urgent
-      accent: root.model.accent
-      radiusSource: root.model
+      live: root.previewLive && root.model.view === "enrol"
+      maxHeight: root.maxHeight > 0 ? Math.max(0, root.maxHeight - Style.space(90)) : 0
+      notice: ""
       recordedAppearances: root.model.enrol ? root.model.appearancesFor(root.model.enrol.name) : []
       onCloseRequested: root.model.back()
     }

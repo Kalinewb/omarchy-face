@@ -6,14 +6,16 @@ import qs.Ui
 // What the recording card shows, without the card: the title, the preview in its
 // oval, the line saying what is happening, the appearance picker and the
 // buttons. It is the single-capture enrol view (plan-gui.md §5.3) and it is the
-// same item in both homes of Face's UI -- RecordCard.qml wraps it in its window
-// under the stock bar, and FaceViews.qml shows it in place inside the notch --
-// so the two cannot drift apart. Phase 4 of plan-face-enroll.md replaces what
-// is inside with the ring; the seam (a session, a palette, a fence for the
-// camera) stays.
+// same item in both homes of Face's UI -- EnrolView.qml draws it inside whichever home
+// it is in (the card's window under the stock bar, the notch's panel) --
+// so the two cannot drift apart.
 //
 // Every decision about the session is in RecordSession.qml; this file is what
 // that state machine looks like.
+//
+// Phase 4 of plan-face-enroll.md put EnrolView.qml in front of this: the ring is
+// the enrol screen, and this stays as the single capture an old helper (before
+// 3.1.0, no `sweep` in `ready.verbs`) and a session that is not the scan still get.
 Item {
   id: view
 
@@ -22,14 +24,13 @@ Item {
   // session that is already running, and on none yet.
   property var session: null
   property string fontFamily: Style.font.family
-  // The RGB preview node from `omarchy-face-status` (`camera.rgb`), or "" when
-  // this laptop has none (plan-merged.md §1 row 18).
-  property string previewDevice: ""
-  // Whether this view is on screen right now. The preview camera is opened only
-  // while it is: the card is on screen from the moment it exists, the notch's
-  // panel only while it is open, on its own screen, showing this view
-  // (plan-face-enroll.md 6a.1). A hosted panel is not destroyed when the notch
-  // closes, so destruction cannot be the fence.
+  // The preview, given by EnrolView.qml and nobody else: the only file that names
+  // the camera (plan-face-enroll.md 6a.2). This view is the single capture an old
+  // helper still gets, and it draws whatever EnrolView gives it, only while
+  // EnrolView says `previewOn` -- the fence is EnrolView's, not this file's.
+  property Component previewComponent: null
+  // Whether this laptop has an RGB node at all (`camera.rgb` is not empty).
+  property bool hasPreview: false
   property bool previewOn: false
   // The three standard labels, so the picker offers the same words as the
   // person view.
@@ -174,9 +175,8 @@ Item {
         Loader {
           id: preview
           anchors.fill: parent
-          active: view.previewDevice !== "" && view.previewOn
-          source: "RecordPreview.qml"
-          onLoaded: if (item) item.device = view.previewDevice
+          active: view.hasPreview && view.previewOn && view.previewComponent !== null
+          sourceComponent: view.previewComponent
         }
       }
 
@@ -195,7 +195,7 @@ Item {
         textFormat: Text.PlainText
         anchors.centerIn: parent
         width: parent.width - Style.space(24)
-        visible: view.previewDevice === "" || preview.status === Loader.Error
+        visible: !view.hasPreview || preview.status === Loader.Error
         text: "No preview on this laptop — centre your face under the camera"
         color: view.dim
         font.family: view.fontFamily

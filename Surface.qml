@@ -89,6 +89,7 @@ Item {
         // The camera is allowed only here: this panel is open, on its screen,
         // and showing the enrol view (RecordView also asks for the view itself).
         previewLive: hosted.mine
+        maxHeight: hosted.maxHeight
       }
 
       Connections {
@@ -141,7 +142,9 @@ Item {
       appearance: request.appearance,
       label: request.label,
       isNew: request.isNew,
-      ask: faceModel.ask
+      ask: faceModel.ask,
+      scan: true,
+      stored: faceModel.templatesFor(request.name, request.appearance)
     })
     if (!made) return
     surface.session = made
@@ -172,7 +175,7 @@ Item {
     var who = faceModel.enrol ? faceModel.enrol.name : ""
     surface.endSession()
     if (saved && who !== "") faceModel.openAt("person", who)
-    else faceModel.navBack()
+    else { faceModel.navBack(); faceModel.flash("Nothing was saved") }
   }
 
   // The panel closed. A session is never kept for a panel nobody is looking at,

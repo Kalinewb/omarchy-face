@@ -93,6 +93,8 @@ Item {
 
   Process { id: openProcess }
 
+  Timer { id: closeSoon; interval: 600; onTriggered: root.closeCard() }
+
   function startRecording(name, appearance, label, isNew) {
     root.closeCard()
     root.cardName = String(name)
@@ -101,11 +103,19 @@ Item {
       appearance: String(appearance || "No glasses"),
       label: String(label || name),
       isNew: !!isNew,
-      ask: engine
+      ask: engine,
+      scan: true,
+      stored: indicator.templatesFor(String(name), String(appearance || "No glasses"))
     })
     if (!root.session) return "the session could not be created"
     root.session.finished.connect(function (saved) {
       var who = root.cardName
+      // A scan that saved nothing leaves its last line up for 600 ms: "Nothing
+      // was saved", on the card, where the person was looking.
+      if (!saved && root.session && root.session.scan && root.session.discarding) {
+        closeSoon.restart()
+        return
+      }
       root.closeCard()
       if (saved) root.openPerson(who)
     })

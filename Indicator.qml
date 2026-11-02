@@ -138,6 +138,20 @@ Item {
     return []
   }
 
+  // How many templates `name`'s appearance `label` already holds (people.json
+  // `templates`), for rule R of the enrol view: Simple may not shrink a set.
+  function templatesFor(name, label) {
+    var who = String(name || "")
+    var list = root.people && Array.isArray(root.people.people) ? root.people.people : []
+    for (var i = 0; i < list.length; i++) {
+      if (!list[i] || String(list[i].name) !== who) continue
+      var found = Array.isArray(list[i].appearances) ? list[i].appearances : []
+      for (var j = 0; j < found.length; j++)
+        if (found[j] && String(found[j].label) === String(label)) return Number(found[j].templates) || 1
+    }
+    return 0
+  }
+
   readonly property string headline: {
     if (root.authState === "matched")
       return root.service === "identity"

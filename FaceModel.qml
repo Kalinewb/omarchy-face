@@ -60,6 +60,10 @@ Item {
   readonly property color accent: inHost ? surfaceHost.accent : Commons.Color.accent
   readonly property color urgent: inHost ? surfaceHost.accent : Commons.Color.urgent
   readonly property color dim: inHost ? surfaceHost.secondary : Qt.darker(foreground, 1.55)
+  // The enrol view's names for the same roles (plan-face-enroll.md section 3).
+  readonly property color secondary: dim
+  readonly property bool reducedMotion: Quickshell.env("OMARCHY_REDUCED_MOTION") === "1"
+                                        || Quickshell.env("NOTCH_REDUCED_MOTION") === "1"
   readonly property string fontFamily: inHost ? surfaceHost.fontFamily
                                      : (bar ? bar.fontFamily : Style.font.family)
 
@@ -540,6 +544,29 @@ Item {
     }
     return []
   }
+
+  // How many templates `name`'s appearance `label` already holds (people.json
+  // `templates`); 0 when there is none. Rule R: Simple may not shrink a set.
+  function templatesFor(name, label) {
+    var who = String(name || "")
+    var list = root.people && Array.isArray(root.people.people) ? root.people.people : []
+    for (var i = 0; i < list.length; i++) {
+      if (!list[i] || String(list[i].name) !== who) continue
+      var found = Array.isArray(list[i].appearances) ? list[i].appearances : []
+      for (var j = 0; j < found.length; j++)
+        if (found[j] && String(found[j].label) === String(label)) return Number(found[j].templates) || 1
+    }
+    return 0
+  }
+
+  // A line for the view the person lands on after a scan that saved nothing,
+  // gone after 600 ms (plan-face-enroll.md section 3, Phases). One-shot.
+  property string notice: ""
+  function flash(text) {
+    root.notice = String(text)
+    flashTimer.restart()
+  }
+  Timer { id: flashTimer; interval: 600; onTriggered: root.notice = "" }
 
   // True when the request was taken. Outside a host it is not, and the caller
   // carries on with the service's card.
