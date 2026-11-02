@@ -289,6 +289,85 @@ The recording card itself (`RecordCard.qml`) is a layer-shell window and is not
 covered offscreen: what it draws is checked by opening it. Everything it decides
 is in `RecordSession.qml`, which is.
 
+## E2 — Face in the stock bar's popup and in the notch's panel
+
+```sh
+./dev/e2-hosting.sh                                   # headless: no window opens
+```
+
+Phase 3 of `plan-face-enroll.md`: the same views in two homes. `FacePanel.qml` is
+the stock bar's popup (a button, a window, the IPC target); `Surface.qml` is what
+Face gives a surface host (today the notch): one panel, the same `FaceViews.qml`
+on the host's colours, radius and surface. Both are built on `FaceModel.qml` (the
+state, the view stack, the engine seam) and `FaceViews.qml` (the hero, the current
+view, the hint). The recording card's body is `RecordView.qml`, which
+`RecordCard.qml` wraps in its window and the notch shows in place. `record` is
+routed by `NotchRoute.qml`, which the service owns (the notch if its heartbeat
+says it accepts Face and is not hidden, the card otherwise).
+
+`e2` runs **headless**: `QT_QPA_PLATFORM=offscreen`, no `WAYLAND_DISPLAY`, no
+window anywhere. That covers the route parser, the manifest, the routing cases
+(ii), (iv), (v), the same PNG from the popup's wiring and the hosted panel (i),
+the preview camera's fence, and `available`. Three things need a layer-shell
+window, which has no backend without a compositor, so they are **skipped, with a
+note**, unless you ask for them:
+
+```sh
+E2_NESTED=1 NOTCH_DIR=/tmp/notch ./dev/e2-hosting.sh   # draws a window while it runs
+```
+
+`E2_NESTED=1` starts a nested Hyprland (as `g7-preview.sh` does) and so puts a
+window on the desktop for the minute it takes. It adds: the REAL `FacePanel`'s PNG
+against the hosted panel's, and (iii)/(vi) against a read-only copy of the notch
+at master (`NOTCH_DIR`, e.g. `git -C ~/Work/omarchy-notch archive origin/master |
+tar -x -C /tmp/notch`): the enrol route opening in the notch and no card, a
+second `record` answering `ok`/`busy` across homes, and the integration being
+switched off mid-session ending the stub session by EOF (`discarded`). Neither
+the notch nor `NOTCH_DIR` is ever modified.
+
+Nothing here opens a camera. The fixtures have no RGB node (`camera.rgb` is
+`""`), `RecordView` opens the preview only for a device **and** `previewOn`, and
+the harness reads `previewOn`, the fence's input, rather than loading QtMultimedia
+(Qt's V4L2 enumeration opens `/dev/video*`).
+
+`OMARCHY_FACE_DEV_RUNTIME` stands in for `$XDG_RUNTIME_DIR` (the notch's
+`kalinewb.notch/platform.json` and Face's `kalinewb.face/enrol.json`), the way
+`OMARCHY_FACE_DEV_STATE` stands in for the state files.
+
+### What only you can try, live (Phase 3's user gate)
+
+Nothing below was run by the build; it needs your real desktop. Install this
+branch first (`./install.sh`, which restarts the shell), then:
+
+1. **From a stock bar.** Make `omarchy.bar` the active bar (or switch the notch's
+   integration for Face off in Settings -> Integrations). Click the Face glyph:
+   the popup opens as before, on People (or Setup). Open a person, press a record
+   button: the recording card appears under the camera, as before; Esc closes it
+   with "nothing saved". Nothing should look different from 3.1.0.
+2. **From the notch.** With `kalinewb.notch` as the bar and its integration for
+   Face on (`omarchy-shell notch integration kalinewb.face` should say accepted;
+   it only turns accepted a moment after the shell starts, once Face has read its
+   status), click the Face glyph: the panel opens **inside the notch**, on the
+   notch's colours, with no window of Face's own. Esc goes back one view and
+   closes from the root. Click it again: the notch closes it.
+3. **Scan from the notch.** In People, add a person or press Re-record: the
+   recording view replaces the list inside the notch (same card content: picker,
+   Start, countdown). Start asks for the password as it did; Esc or the notch
+   closing before Done saves nothing. (The camera preview in this view is the
+   thing Phase 4 gates live; tell me if the picture shows or not.)
+4. **`record` from outside.** `omarchy-shell kalinewb.face.card record anna
+   "No glasses" Anna ""` while the notch is the bar answers `opening` and the
+   recording appears in the notch; with the bar hidden (`omarchy toggle bar`) or
+   another bar active it answers `ok` and the card appears instead.
+5. **Switch the integration off mid-session** (Settings -> Integrations -> Face)
+   with a recording open and the password dialog already answered: the recording
+   must end, and the camera light must go off.
+6. **Two monitors**, if you have them: open Face from the bar on the second one;
+   the panel opens there, not on the first.
+
+Known, not changed here: the lock-screen switch's resume (`kalinewb.face resume`)
+still reopens the stock popup, not the notch's panel.
+
 ## F4 — sudo's PAM stack
 
 ```sh
