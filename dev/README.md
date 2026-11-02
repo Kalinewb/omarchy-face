@@ -385,8 +385,9 @@ still reopens the stock popup, not the notch's panel.
 E3_KEEP=/some/dir ./dev/e3-enrol-view.sh     # keep the PNG strip, the GIFs and the logs
 ```
 
-Phase 4 of `plan-face-enroll.md`. `EnrolView.qml` is the enrol screen; `RecordCard.qml` (the
-Face service's own window, in every home) is the only thing that makes one;
+Phase 4 of `plan-face-enroll.md`. `EnrolView.qml` is the enrol screen; `ScanIsland.qml` is the
+island around it (the notch's silhouette, the drop and the retract, no window); `RecordCard.qml`
+(the Face service's own layer-shell window, in every home) is the only thing that makes one;
 `EnrolRing.qml` is the ring (60 ticks, 12 pose bins x 5, in Simple and Advanced);
 `common/enrolring.js` is the ring's arithmetic (looks, the dot, contrast), `common/EnrolLink.qml`
 the text link. `RecordSession.qml` is the state machine: with `scan` on it drives the sweep
@@ -403,7 +404,9 @@ each failure of the outcome list with its shake and Try again, the version-skew 
 (`ready` without `sweep` in `verbs` -> the single capture, with the note), a session that is
 not the scan (what g3/g8 drive), reduced motion with every animation stopped, the hairline
 (only an accepted frame arms it), the preview fence (the card being live and Start pressed), the mode file (path, one word, 16-byte
-cap, fallback, FIFO, symlinks, unwritable, rule R), and the PNG strip.
+cap, fallback, FIFO, symlinks, unwritable, rule R), the idle demo (it plays only in idle, in the engine's order,
+stops on Start, does nothing under reduced motion or when the card is not on screen), the island's
+geometry and its drop and retract, and the PNG strips (the scan, and the demo's steps).
 
 What it cannot say: that the picture looks right on a real screen, that a real `VideoOutput`
 paints in the card's circle under its `MultiEffect` mask, that pkexec's dialog leaves the card
@@ -427,8 +430,12 @@ The first live run failed: Start in the notch brought up polkit's dialog, the no
 and the scan died with it, so the scan is now the standalone card in every home (see E2). Nothing
 below was run by the build. Install this branch (`./install.sh`; it restarts the shell), then:
 
-1. **Look.** Open Face -> a person -> Re-record. The card appears under the camera (the notch
-   panel closes). Check the circle, ring and wording against the reference images: Simple first
+1. **Look.** Open Face -> a person -> Re-record. The notch panel closes and an island drops from
+   the top edge, centred on the monitor you are on, **black, flush with the screen edge, bottom
+   corners and top fillets cut like your notch** (`bar.notch.bottomRadius` / `filletRadius` from
+   shell.json, 8 and 8 here), above the real notch, with no scrim; Esc, Cancel or Done retract it
+   into the edge (no animation with `OMARCHY_REDUCED_MOTION=1`). Check the circle, ring and wording
+   against the reference images: Simple first
    (one arc highlighted at a time: left, right, up, down), then press the `Advanced` link under
    Start and look again (twelve spots). Your accent should colour the covered ticks.
 2. **VideoOutput in the card's circle** (plan 6a.4). Press Start: the RGB preview must paint
@@ -436,10 +443,13 @@ below was run by the build. Install this branch (`./install.sh`; it restarts the
    `VideoOutput`). If the circle stays black or the picture is a square, tell me: the fallback
    is a pure black "donut" drawn over a square preview (the card is always #000000), which
    needs no shader. Cancel or Esc, or Done: `fuser /dev/video0` must print nothing within a second.
-3. **pkexec vs the card.** Press Start: polkit's dialog appears; the card **must stay** on
-   screen and the scan must start after the password. (The card has no focus-loss handling at
-   all: it holds `WlrKeyboardFocus.Exclusive` as before, and closes only on Esc, Cancel, its
-   scrim click, Done or the session ending.) If the dialog cannot take the keyboard, tell me.
+3. **pkexec vs the island.** Press Start: polkit's dialog appears; the island **must stay** on
+   screen and the scan must start after the password. (It has no focus-loss handling at all: it
+   holds `WlrKeyboardFocus.Exclusive` as before, and closes only on Esc, Cancel, Done or the
+   session ending. It is a strip along the top edge, but only the island takes clicks; clicks
+   elsewhere go to what is under them.) With a second monitor: the island opens on the one with
+   focus. If the dialog cannot take the keyboard, or clicks elsewhere do nothing while it is up,
+   tell me.
 4. **Esc and Return.** Return = Start, then Done once it is offered; Esc in any phase closes
    with "Nothing was saved" for a moment. Tab walks the links in order with the focus border.
 5. **Both modes end to end.** Simple: should save in about 15 s with the centre and two to
@@ -447,7 +457,13 @@ below was run by the build. Install this branch (`./install.sh`; it restarts the
    it, then Done again. `omarchy-face-admin`'s helper must be 3.1.0 or newer (Setup offers the
    update); with an older one you should get the old single capture and a note.
 6. **The mode is remembered** between scans (`$XDG_STATE_HOME/omarchy-face/enrol-mode`).
-7. **Screen reader (optional).** With Orca running, Tab through the links and the ring: does it
+7. **The idle demo.** Before Start (the camera is off) the circle plays a calm loop: a head
+   silhouette holds still at the centre (the rim closes), then turns left, right, up and down while
+   the matching arcs fill, with a caption under the line ("Turn your head to the left", ...);
+   Advanced: one slow turn all the way round. Pressing Start stops it at once and the preview takes
+   over. With `OMARCHY_REDUCED_MOTION=1` there is only the static glyph and one caption line. Tell me
+   if it is too busy, too slow (about 13 s per loop) or the head reads badly.
+8. **Screen reader (optional).** With Orca running, Tab through the links and the ring: does it
    read "Face scan", the step, and the percent? Does it announce a changed target? (Doubt 19.)
 
 Still ahead, not done by this phase: **SR2** (the UI-side security review, plan section 6), the
@@ -1020,6 +1036,19 @@ The SR1 fixes (3.1.0) are in it too: the parent refusing a stranger's template o
 child's stderr never reaching the client, the child holding the camera lock, a 60,000-bracket
 line, a bad label, a corrupt record's error carrying no path, the session bound no longer
 lengthened by a sweep, and the two copies of the template caps being equal.
+
+### A strobing emitter (3.1.1)
+
+This laptop's IR emitter strobes: every other frame is entirely black, the lit ones are fine. `SWEEP_PY`
+used to count a black frame as `dark`, so "Too dark here" showed with the emitter blinking. Now a fully
+black frame (no pixels, or every pixel in the darkest bin after CLAHE) is the emitter's off phase, as
+in howdy's own `add.py` and `compare.py`: it is skipped (no word, no `track`, no dwell, patience or
+stall tick, not a `dark` frame; it only counts as a frame, and the ceilings run on wall time), and
+`dark` is a property of a lit frame. A stream with no lit frame for `STROBE_SILENCE` (2 s) is a covered
+or dead camera and says `dark` as before. `refine` (`black_frames` / `too_dark` / ...) is decided over
+lit frames only (`refine_for`). `e0` covers the pure functions; `e1` has `simple-strobe`,
+`advanced-strobe`, `strobe-black`, `dim` and `strobe-dim` (a "dim" frame is lit, about 80% in the
+darkest bin; the old "dark" kind is 100% and so is black). `dev/SR1-notes.md` has the delta for SR1.
 
 ### How to widen Sudo later
 

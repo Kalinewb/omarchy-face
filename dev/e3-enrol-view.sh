@@ -117,8 +117,8 @@ check "the preview Loader is active only for previewOn AND a device (nothing els
   "$(grep -c 'active: view.previewOn && view.previewDevice !== ""' "$REPO/EnrolView.qml")"
 check "…and previewOn is the card being live AND the session wanting it (Start pressed)" "1" \
   "$(grep -c 'previewOn: view.live && !!view.session && view.session.previewWanted' "$REPO/EnrolView.qml")"
-check "only RecordCard.qml makes an EnrolView, and nothing the notch's panel is made of names it" "RecordCard.qml" \
-  "$(cd "$REPO" && for f in *.qml; do sed -E 's#//.*$##' "$f" | grep -q '\bEnrolView *{' && echo "$f"; done | tr '\n' ' ' | sed 's/ $//')"
+check "only ScanIsland.qml makes an EnrolView, and only RecordCard.qml makes a ScanIsland (nothing the notch's panel is made of names either)" "ScanIsland.qml|RecordCard.qml" \
+  "$(cd "$REPO" && for f in *.qml; do sed -E 's#//.*$##' "$f" | grep -q '\bEnrolView *{' && echo "$f"; done | tr '\n' ' ' | sed 's/ $//')|$(cd "$REPO" && for f in *.qml; do sed -E 's#//.*$##' "$f" | grep -q '\bScanIsland *{' && echo "$f"; done | tr '\n' ' ' | sed 's/ $//')"
 check "EnrolView is the only QML file that names RecordPreview" "EnrolView.qml" \
   "$(cd "$REPO" && grep -l 'RecordPreview' ./*.qml | sed 's#^\./##' | tr '\n' ' ' | sed 's/ $//')"
 check "a pure #000000 under it is the host's: the view paints no background of its own" "0" \
@@ -137,7 +137,7 @@ check "idle: the four target arcs are at rest (8 px, 0.7)" \
   "rest,rest,rest,rest,rest | rest,rest,rest,rest,rest | rest,rest,rest,rest,rest | rest,rest,rest,rest,rest" "$(field idle-targets "$out")"
 check "idle: …drawn 8 px at opacity 0.7" "8/0.7 8/0.7 8/0.7 8/0.7 8/0.7" "$(field idle-target-look "$out")"
 check "idle: Simple's other eight bins are 5 px at 0.2 (inactive)" "5/0.2 5/0.2 5/0.2 5/0.2 5/0.2" "$(field idle-inactive "$out")"
-check "idle: the face glyph is up" "true" "$(field idle-glyph "$out")"
+check "idle: the demo is playing in the circle (the static glyph is hidden) with a caption under the line" "false demo true true caption Look at the camera" "$(field idle-glyph "$out")"
 check "idle: no camera exists, previewOn is false, the preview Loader holds nothing" "0 false true" "$(field idle-cameras "$out")"
 check "idle: the line is 'Fit your face in the circle.'" "Fit your face in the circle." "$(field idle-line "$out")"
 check "idle: Cancel, Start and the mode link; no Done, Try again or Start over" \
@@ -168,8 +168,8 @@ check "progress 0.4: two of the five ticks are covered (20 px accent look), thre
   "done,done,current,current,current | 20/0.9 20/0.9 14/1 14/1 14/1" "$(field p40-kinds "$out") | $(field p40-look "$out")"
 check "…and the line says 'Hold still' while the wedge is held" "Hold still" "$(field p40-line "$out")"
 check "progress 0.55: the third tick interpolates (monotone, one tick moving)" "20/0.9 20/0.9 18.5/0.93 14/1 14/1" "$(field p55-look "$out")"
-check "the dot sits 90 px out at the engine's ring angle (u -1.5: the left, 270 degrees)" "-89.3 true" \
-  "$(jq -r '"\((.x * 10 | round) / 10) \(.shown)"' <<<"$(field p40-dot "$out")")"
+check "the dot sits about 90 px out at the engine's ring angle (u -1.5: the left, 270 degrees; it is still easing in over 100 ms)" "true true" \
+  "$(jq -r '"\((.x < -88.5 and .x > -90.5)) \(.shown)"' <<<"$(field p40-dot "$out")")"
 check "a target that fills stays filled (20 px, covered) after the highlight leaves" \
   "20/0.9 20/0.9 20/0.9 20/0.9 20/0.9 | done,done,done,done,done" "$(field next-9 "$out")"
 check "…the next arc is current, and its line changed in the same frame" \
@@ -202,7 +202,7 @@ for p in theme mono coloured; do
   check_ge "contrast: the done colour is not within 1.5:1 of the rest colour ($p)" 1.5 "$dvr"
 done
 check "accessibility: the ring says its step and progress" \
-  "0 of 4 positions|Step 2 of 5, turn your head to the left, 0 percent|Step 2 of 5, turn your head to the left, 40 percent|Step 3 of 5, turn your head to the right, 0 percent|Step 3 of 5, turn your head to the right, 40 percent" \
+  "A demonstration of the scan, nothing is recording|Step 2 of 5, turn your head to the left, 0 percent|Step 2 of 5, turn your head to the left, 40 percent|Step 3 of 5, turn your head to the right, 0 percent|Step 3 of 5, turn your head to the right, 40 percent" \
   "$(field idle-descr "$out")|$(field lap1-descr "$out")|$(field p40-descr "$out")|$(field next-descr "$out")|$(field three-descr "$out")"
 
 # =============================================================================
@@ -289,7 +289,8 @@ check "the done look, the highlight, and the dot are all there with every animat
   "20/0.9 20/0.9 20/0.9 14/1 14/1" "$(field reduced-shown "$out")"
 check "…the dot is at its place without easing" "-90 true" \
   "$(jq -r '"\((.x | round)) \(.shown)"' <<<"$(field reduced-dot "$out")")"
-check "…no hairline frames, no tilt" "false false 0" "$(field reduced-hairline "$out") $(field reduced-hairline-after-frames "$out") $(field reduced-glyph-rot "$out")"
+check "…no hairline frames" "false false" "$(field reduced-hairline "$out") $(field reduced-hairline-after-frames "$out")"
+check "…and no demo: not running, not drawn, the clock never moved (a scan is running, so no static glyph either)" "false false t 0 glyph false" "$(field reduced-demo "$out")"
 
 step "The hairline runs on accepted frames only"
 out=$(run hairline)
@@ -298,9 +299,29 @@ check "it rests before any frame, and on dark, blurry, other, searching, multipl
 check "…runs on an accepted frame, rests when done, re-arms on the next" "true false true false" \
   "$(field hair-hold "$out") $(field hair-rested "$out") $(field hair-rearmed "$out") $(field hair-done "$out")"
 
+step "The idle demo: what the scan will ask, played while nothing runs (no camera)"
+out=$(run demo)
+check "idle: it plays, in the circle, with no camera object and the static glyph hidden" "true true cameras 0 glyph false" "$(field demo-state "$out")"
+check "Simple: the captions follow the order the engine takes (centre, left, right, up, down, all set)" \
+  "Look at the camera | Turn your head to the left | Turn your head to the right | Tilt your head up | Tilt your head down | All set." "$(field simple-captions "$out")"
+check "…the head turns to each side as the matching arc fills (turn left/right to the limit, nod up/down), the rim closes, all four fill" \
+  '{"rim":true,"leftYaw":true,"leftFill":"done,done,done,done,done","rightYaw":true,"rightFill":"done,done,done,done,done","upPitch":true,"downPitch":true,"allFilled":true}' "$(field simple-seen "$out")"
+check "Advanced: one slow turn under the reference's line, and all twelve arcs fill in one sweep, never emptying on the way" \
+  'advanced|Move your head slowly to complete the circle. | The circle is complete.|{"top":12,"monotone":true}' \
+  "$(field adv-mode "$out")|$(field adv-captions "$out")|$(field adv-seen "$out")"
+check "Start stops it at once: not running, not drawn, its clock frozen, no caption, and the ring is the session's (empty, no target)" \
+  "false false true caption '' [0,0,0,0] target null cameras 1" "$(field start-stopped "$out") $(field start-ring "$out")"
+out=$(run demo-reduced)
+check "reduced motion: not running, not drawn, the clock never moves, the static glyph and one caption line (per mode)" \
+  "false false|0|true|Then turn left, right, up and down.|Then turn slowly all the way round." \
+  "$(field running "$out")|$(field t "$out")|$(field glyph "$out")|$(field caption "$out")|$(field caption-advanced "$out")"
+check "…and the ring is at rest (nothing fills, no rim)" "8/0.7 8/0.7 8/0.7 8/0.7 8/0.7 | 0" "$(field ring "$out")"
+out=$(run demo-hidden)
+check "a card that is not on screen costs nothing: not running, clock frozen; and it plays again when shown" "false true|true" "$(field hidden "$out")|$(field shown "$out")"
+
 step "The camera fence (6a.1): the preview exists only after Start and only while the host shows the view"
 out=$(run fence)
-check "idle: no camera object; the glyph has tilted (once)" "0 false false tilt true" "$(field fence-idle "$out")"
+check "idle: no camera object, and the demo has been running (it needs none)" "0 false false true true" "$(field fence-idle "$out")"
 check "Start (authorising): the camera is wanted and exists" "1 true authorising" "$(field fence-authorising "$out")"
 check "lap1: still on" "1 true lap1" "$(field fence-lap1 "$out")"
 check "the host stops showing the view (route change, notch closed, bar hidden): gone within 200 ms" "0 false" "$(field fence-host-hidden "$out")"
@@ -402,21 +423,54 @@ check "rule R: 5 stored templates may still be re-scanned in Simple" "true simpl
 # The PNG strip and the GIF
 # =============================================================================
 
-step "The ring, rendered (Simple and Advanced), a strip and a short GIF"
+step "The island: the notch's silhouette, centred, flush, dropping from the top edge and retracting"
+out=$(run island)
+echo "${DIM}$(sed 's/^/  /' <<<"$out" | head -14)${RESET}"
+check "full motion is on (not reduced)" "reduced false" "$(field first "$out")"
+check "it drops to full height and width, overshooting by under 5% on the spring" "true" \
+  "$(awk -v p="$(field drop-peak "$out")" 'BEGIN { print (p >= 1 && p < 1.05) ? "true" : "false" }')"
+check "…landing on 1" "1 1" "$(field drop-end "$out")"
+check "…the height is rising in the first frames" "true" "$(field drop-monotone-early "$out")"
+check "…its top edge is on the screen edge at every frame (only height and width move)" "flush" "$(field drop-top "$out")"
+check "the bottom corners and the fillets are the notch's (8 and 8 from shell.json)" "8 8" "$(field radii "$out")"
+check "the surface is true #000000" "#000000" "$(field colour "$out")"
+check "its top is flush with the strip's top edge" "0 0" "$(field flush "$out")"
+read -r cx _ cw <<<"$(field centred "$out")"
+check "it is centred in the strip, as the notch is on its monitor (within a pixel)" "true" \
+  "$(awk -v a="$cx" -v b="$cw" 'BEGIN { d = a - b; if (d < 0) d = -d; print (d <= 1) ? "true" : "false" }')"
+check "it is tall enough for the view plus the notch's side padding top and bottom" "true" "$(field fits "$out")"
+echo "${DIM}  bar $(field bar "$out"), view at $(field inner "$out")${RESET}"
+check "retracting: still on its way after 120 ms, and gone (answered once) a moment later" "0 true|1 0 0" \
+  "$(field retract-early "$out" | awk '{print $1" "($2 > 0 && $2 < 1 ? "true" : "false")}')|$(field retract-late "$out")"
+check "retracting twice answers once, and it can drop again" "1 1 1" "$(field retract-twice "$out") $(field retract-twice-late "$out") $(field again "$out")"
+out=$(run island-reduced)
+check "reduced motion: reduced is on, and it is simply there (1, 1)" "reduced true|1 1" "$(field first "$out")|$(field drop-end "$out")"
+check "reduced motion: it never leaves its place while it 'drops' (no frames of motion: the peak is exactly 1)" "1" "$(field drop-peak "$out")"
+check "reduced motion: retracting is immediate (answered, closed) well inside 120 ms" "1 0" "$(field retract-early "$out" | awk '{print $1" "$2}')"
+
+step "The ring on the island, rendered (Simple and Advanced), a strip and a short GIF"
 mkdir -p "$root/strip"
 for m in simple advanced; do
   run strip E3_OUT="$root/strip" E3_MODE_ACT=$m >/dev/null
 done
 frames=$(ls "$root/strip"/*.png 2>/dev/null | wc -l)
-check "twelve frames were drawn (seven Simple, six Advanced, less the idle pair counted once each)" "13" "$frames"
+check "frames were drawn (Simple: seven scan frames and five demo steps; Advanced: six and four)" "22" "$frames"
 if (( frames > 0 )); then
-  for m in simple advanced; do
-    magick montage "$root/strip/$m"-*.png -tile x1 -geometry +4+4 -background black "$root/strip/strip-$m.png" 2>/dev/null
-    magick -delay 90 -loop 0 "$root/strip/$m"-[0-9]-*.png -background black -layers optimize "$root/strip/ring-$m.gif" 2>/dev/null
+  for f in "$root/strip"/*.png; do
+    # The window's grey is the desktop; the island is black on it. Flatten onto it
+    # and cut the strip to the island's height.
+    magick "$f" -background '#3a3a46' -flatten -gravity north -crop 400x520+0+0 +repage "$f"
   done
-  check "the strips and the GIFs were assembled" "4" "$(ls "$root/strip"/strip-*.png "$root/strip"/ring-*.gif 2>/dev/null | wc -l)"
-  check "the first strip frame is not blank (a pixel count of non-black pixels)" "true" \
-    "$(magick "$root/strip/simple-3-left30.png" -format '%[fx:mean > 0.01 ? 1 : 0]' info: 2>/dev/null | sed 's/1/true/;s/0/false/')"
+  for m in simple advanced; do
+    magick montage "$root/strip/$m"-[0-9]-*.png -tile x1 -geometry +4+4 -background '#3a3a46' "$root/strip/strip-$m.png" 2>/dev/null
+    magick montage "$root/strip/$m"-d[0-9]-*.png -tile x1 -geometry +4+4 -background '#3a3a46' "$root/strip/demo-$m.png" 2>/dev/null
+    magick -delay 90 -loop 0 "$root/strip/$m"-[0-9]-*.png -layers optimize "$root/strip/ring-$m.gif" 2>/dev/null
+  done
+  check "the strips and the GIFs were assembled" "6" "$(ls "$root/strip"/strip-*.png "$root/strip"/demo-*.png "$root/strip"/ring-*.gif 2>/dev/null | wc -l)"
+  # The island's top edge is flush: the pixel row 0 is black across its width and
+  # the desktop's grey beyond the fillets; the corner pixel of the strip is grey.
+  check "the silhouette is black on the grey desktop (centre of the top edge black, far corner grey)" "true true" \
+    "$(magick "$root/strip/simple-3-left30.png" -format '%[fx:p{200,2}.r < 0.02 ? 1 : 0] %[fx:p{3,2}.r > 0.15 ? 1 : 0]' info: | sed 's/1/true/g;s/0/false/g')"
 fi
 [[ -n ${E3_KEEP:-} ]] && note "PNG strip and GIF kept in $E3_KEEP"
 

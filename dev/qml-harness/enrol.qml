@@ -32,7 +32,9 @@ ShellRoot {
   readonly property int stored: Number(Quickshell.env("E3_STORED") || "0")
   readonly property string outDir: Quickshell.env("E3_OUT") || "/tmp"
   readonly property string accentEnv: Quickshell.env("E3_ACCENT") || ""
-  readonly property bool reducedCase: caseName === "reduced"
+  readonly property bool reducedCase: caseName === "reduced" || caseName === "island-reduced" || caseName === "demo-reduced"
+  // The island cases draw the whole card body (ScanIsland.qml), no window around it.
+  readonly property bool islandCase: caseName === "strip" || caseName === "island" || caseName === "island-reduced"
 
   function log(key, value) { console.log("HARNESS " + key, value) }
 
@@ -166,31 +168,53 @@ ShellRoot {
   Window {
     id: win
     visible: true
-    width: 360
+    width: 400
     height: 760
-    color: "#000000"
+    // The strip draws on a grey "desktop" so the black silhouette reads.
+    color: shellRoot.islandCase ? "#3a3a46" : "#000000"
 
     Loader {
       id: viewLoader
       active: sessionLoader.item !== null
-      width: 320
-      x: 20
-      y: 10
-      sourceComponent: Component {
-        Face.EnrolView {
-          session: shellRoot.session
-          colors: harnessColors
-          // The strip draws the ring without a preview: the offscreen scene graph has no
-          // shader effects, so a layered (masked) circle paints nothing there.
-          previewDevice: shellRoot.caseName === "strip" ? "" : "/dev/video-fake"
-          previewComponent: stub
-          live: shellRoot.live
-          onCloseRequested: shellRoot.session.requestClose()
-        }
-      }
+      width: shellRoot.islandCase ? 400 : 320
+      height: shellRoot.islandCase ? 640 : 0
+      x: shellRoot.islandCase ? 0 : 20
+      y: shellRoot.islandCase ? 0 : 10
+      sourceComponent: shellRoot.islandCase ? islandComponent : viewComponent
     }
   }
-  readonly property var view: viewLoader.item
+
+  Component {
+    id: viewComponent
+    Face.EnrolView {
+      session: shellRoot.session
+      colors: harnessColors
+      previewDevice: "/dev/video-fake"
+      previewComponent: stub
+      live: shellRoot.live
+      onCloseRequested: shellRoot.session.requestClose()
+    }
+  }
+
+  // The card's body: the island in the notch's silhouette (8 and 8, this user's
+  // shell.json), centred in a 400 px strip. No preview device: the offscreen scene
+  // graph has no shader effects, so a layered (masked) circle paints nothing there.
+  property int retractedCount: 0
+  Component {
+    id: islandComponent
+    Face.ScanIsland {
+      session: shellRoot.session
+      colors: harnessColors
+      previewDevice: ""
+      live: shellRoot.live
+      bottomRadius: 8
+      filletRadius: 8
+      onCloseRequested: shellRoot.session.requestClose()
+      onRetracted: shellRoot.retractedCount += 1
+    }
+  }
+  readonly property var island: shellRoot.islandCase ? viewLoader.item : null
+  readonly property var view: viewLoader.item ? (viewLoader.item.enrolView || viewLoader.item) : null
 
   // ---- looking at the view -------------------------------------------------------------------
   function find(item, name) {
@@ -204,6 +228,7 @@ ShellRoot {
     return null
   }
   function ring() { return find(view, "ring") }
+  function demoItem() { return find(view, "demo") }
   function named(name) { return find(view, name) }
   function tick(i) { return find(ring(), "tick" + i) }
 
@@ -262,19 +287,31 @@ ShellRoot {
   property var steps: []
   property int stepAt: 0
   function at(fn, wait) { steps.push({fn: fn, wait: wait === undefined ? 70 : wait}) }
+  // A step may return a function: the runner then waits (up to 20 s) until it is true.
+  property var waitCond: null
+  property real waitDeadline: 0
   Timer {
     id: stepper
     interval: 70
     onTriggered: {
+      if (shellRoot.waitCond) {
+        var done = false
+        try { done = shellRoot.waitCond() } catch (e) { done = true }
+        if (!done && Date.now() < shellRoot.waitDeadline) { stepper.interval = 50; stepper.restart(); return }
+        if (!done) shellRoot.log("wait-timeout", "step " + (shellRoot.stepAt - 1))
+        shellRoot.waitCond = null
+      }
       if (shellRoot.stepAt >= shellRoot.steps.length) { Qt.exit(0); return }
       var st = shellRoot.steps[shellRoot.stepAt++]
-      try { st.fn() } catch (e) { shellRoot.log("exception", String(e) + " at step " + (shellRoot.stepAt - 1)) }
+      var ret = null
+      try { ret = st.fn() } catch (e) { shellRoot.log("exception", String(e) + " at step " + (shellRoot.stepAt - 1)) }
+      if (typeof ret === "function") { shellRoot.waitCond = ret; shellRoot.waitDeadline = Date.now() + 20000 }
       stepper.interval = st.wait
       stepper.restart()
     }
   }
   Timer {
-    interval: 90000
+    interval: 110000
     running: true
     onTriggered: { shellRoot.log("timeout", "the script did not finish"); Qt.exit(2) }
   }
@@ -298,9 +335,13 @@ ShellRoot {
     else if (c === "plain") buildPlain()
     else if (c === "reduced") buildReduced()
     else if (c === "hairline") buildHairline()
+    else if (c === "demo") buildDemo()
+    else if (c === "demo-reduced") buildDemoReduced()
+    else if (c === "demo-hidden") buildDemoHidden()
     else if (c === "fence") buildFence()
     else if (c === "mode") buildMode()
     else if (c === "strip") buildStrip()
+    else if (c === "island" || c === "island-reduced") buildIsland()
   }
 
   // ---- Simple ----------------------------------------------------------------------------------------
@@ -312,7 +353,7 @@ ShellRoot {
       log("idle-targets", [9, 3, 0, 6].map(function (k) { return binKinds(k) }).join(" | "))
       log("idle-target-look", binLook(9))
       log("idle-inactive", [1, 2, 4, 5, 7, 8, 10, 11].map(function (k) { return binLook(k) }).filter(function (v, i, a) { return a.indexOf(v) === i }).join(" | "))
-      log("idle-glyph", named("glyph").visible)
+      log("idle-glyph", named("glyph").visible + " demo " + demoItem().visible + " " + demoItem().running + " caption " + named("caption").text)
       log("idle-cameras", cameras + " " + view.previewOn + " " + (named("previewLoader").item === null))
       log("idle-line", line())
       log("idle-links", links())
@@ -325,6 +366,8 @@ ShellRoot {
       log("auth-phase", session.phase)
       log("auth-cameras", cameras + " " + view.previewOn)
       log("auth-line", line())
+      log("auth-demo", demoItem().running + " " + demoItem().visible + " caption '" + named("caption").text + "'")
+      shellRoot.tAtStart = demoItem().t
       log("auth-links", links())
       log("mode-after-start", session.modeFixed)
       session.setMode("advanced")
@@ -332,6 +375,7 @@ ShellRoot {
       ready(true)
     })
     at(function () {
+      log("demo-frozen", demoItem().t === shellRoot.tAtStart)
       log("centre-sent", JSON.stringify(sent))
       log("centre-phase", session.phase + " " + session.scanState)
       log("centre-line", line())
@@ -688,7 +732,96 @@ ShellRoot {
     at(function () { track({state: "hold", centre: 1, target: 9, bins: bins({9: 0.6}), u: -1.5, v: 0}) }, 250)
     at(function () { log("reduced-hairline-after-frames", ring().hairlineRunning) })
     at(function () { track({state: "hold", centre: 1, target: 9, bins: bins({9: 0.6}), u: -1.5, v: 0}); shellRoot.violations += 0 })
-    at(function () { log("reduced-glyph-rot", named("glyph").rotation) })
+    at(function () {
+      log("reduced-demo", demoItem().running + " " + demoItem().visible + " t " + demoItem().t + " glyph " + named("glyph").visible)
+    })
+  }
+
+  // ---- the idle demo (no camera): plays only in idle, stops on Start, still under reduced motion ----
+  function buildDemo() {
+    var captions = [], seen = {}
+    function note() {
+      var c = named("caption").text
+      if (c !== "" && captions[captions.length - 1] !== c) captions.push(c)
+    }
+    at(function () {
+      log("demo-state", demoItem().running + " " + demoItem().visible + " cameras " + cameras + " glyph " + named("glyph").visible)
+      log("demo-line", line())
+    }, 300)
+    // Simple: one full loop, noting the captions in order, the arcs filling and the rim closing.
+    var t0 = 0
+    at(function () {
+      t0 = Date.now()
+      return function () {
+        note()
+        var b = ring().bins
+        if (ring().target === 9 && b[9] > 0.5) seen.leftFill = ring().look9 || binKinds(9)
+        if (ring().target === 3 && b[3] > 0.5) seen.rightFill = binKinds(3)
+        if (ring().arc >= 0.99) seen.rim = true
+        if (ring().target === 9 && demoItem().frame.yaw < -0.9) seen.leftYaw = true
+        if (ring().target === 3 && demoItem().frame.yaw > 0.9) seen.rightYaw = true
+        if (ring().target === 0 && demoItem().frame.pitch > 0.9) seen.upPitch = true
+        if (ring().target === 6 && demoItem().frame.pitch < -0.9) seen.downPitch = true
+        if (named("caption").text === "All set." && b[9] >= 0.999 && b[3] >= 0.999 && b[0] >= 0.999 && b[6] >= 0.999) seen.allFilled = true
+        return captions.indexOf("All set.") >= 0 && seen.allFilled === true
+      }
+    }, 100)
+    at(function () {
+      log("simple-captions", captions.join(" | "))
+      log("simple-seen", JSON.stringify(seen))
+      log("simple-seconds", Math.round((Date.now() - t0) / 1000))
+      captions = []; seen = {}
+      session.setMode("advanced")
+    }, 300)
+    at(function () {
+      var top = 0, monotone = true, last = -1
+      return function () {
+        note()
+        var b = ring().bins, n = 0
+        for (var i = 0; i < 12; i++) if (b[i] >= 0.999) n++
+        if (n < last && captions.indexOf("The circle is complete.") < 0) monotone = false
+        last = n
+        top = Math.max(top, n)
+        seen.top = top; seen.monotone = monotone
+        return captions.indexOf("The circle is complete.") >= 0
+      }
+    }, 100)
+    at(function () {
+      log("adv-captions", captions.join(" | "))
+      log("adv-seen", JSON.stringify(seen))
+      log("adv-mode", view.mode)
+      shellRoot.tAtStart = 0
+      session.start()
+    }, 150)
+    at(function () { shellRoot.tAtStart = demoItem().t }, 300)
+    at(function () {
+      log("start-stopped", demoItem().running + " " + demoItem().visible + " " + (demoItem().t === shellRoot.tAtStart) + " caption '" + named("caption").text + "'")
+      log("start-ring", JSON.stringify(ring().bins.slice(0, 4)) + " target " + ring().target + " cameras " + cameras)
+    }, 500)
+    at(function () { log("start-still", demoItem().t === shellRoot.tAtStart) }, 10)
+  }
+
+  // Reduced motion: no demo at all, the glyph and one caption line.
+  function buildDemoReduced() {
+    at(function () { }, 1500)
+    at(function () {
+      log("running", demoItem().running + " " + demoItem().visible)
+      log("t", demoItem().t)
+      log("glyph", named("glyph").visible)
+      log("caption", named("caption").text)
+      log("ring", binLook(9) + " | " + ring().arc)
+      session.setMode("advanced")
+    }, 300)
+    at(function () { log("caption-advanced", named("caption").text) }, 10)
+  }
+
+  // The card is not on screen (the host hides it): nothing runs.
+  function buildDemoHidden() {
+    at(function () { shellRoot.live = false }, 600)
+    at(function () { shellRoot.tAtStart = demoItem().t }, 500)
+    at(function () { log("hidden", demoItem().running + " " + (demoItem().t === shellRoot.tAtStart)) }, 10)
+    at(function () { shellRoot.live = true }, 400)
+    at(function () { log("shown", demoItem().running) }, 10)
   }
 
   // ---- the hairline: only an accepted frame arms it --------------------------------------------------
@@ -708,13 +841,12 @@ ShellRoot {
     at(function () { track({state: "hold", centre: 0.5, target: "centre"}) }, 120)
     at(function () { log("hair-rearmed", ring().hairlineRunning) }, 1000)
     at(function () { log("hair-done", ring().hairlineRunning) }, 10)
-    at(function () { log("glyph-tilts-once", named("glyph").rotation + " " + view.tilted) }, 10)
   }
 
   // ---- the preview fence (6a.1) -------------------------------------------------------------------------------------
   function buildFence() {
     at(function () { }, 1700)
-    at(function () { log("fence-idle", cameras + " " + view.previewOn + " " + session.previewWanted + " tilt " + (Math.abs(named("glyph").rotation) > 3)) }, 300)
+    at(function () { log("fence-idle", cameras + " " + view.previewOn + " " + session.previewWanted + " " + demoItem().running + " " + (demoItem().t > 0.5)) }, 300)
     at(function () { session.start() })
     at(function () { log("fence-authorising", cameras + " " + view.previewOn + " " + session.phase) }, 150)
     at(function () { ready(true) })
@@ -772,6 +904,57 @@ ShellRoot {
     at(function () { log("mode-start-works", session.phase) }, 1200)
   }
 
+  // ---- the island: the notch's silhouette, the drop and the retract --------------------
+  function buildIsland() {
+    var heights = [], widths = [], tops = []
+    var t0 = 0
+    at(function () {
+      t0 = Date.now()
+      var sh = island.shape
+      log("first", "reduced " + island.reduced)
+    }, 5)
+    for (var i = 0; i < 16; i++) {
+      at(function () {
+        heights.push(island.heightP); widths.push(island.widthP); tops.push(island.shape.y)
+      }, 40)
+    }
+    at(function () {
+      var peak = 0
+      for (var k = 0; k < heights.length; k++) peak = Math.max(peak, heights[k])
+      log("drop-peak", r1(peak))
+      log("drop-end", r1(island.heightP) + " " + r1(island.widthP))
+      log("drop-monotone-early", heights[0] < heights[1])
+      log("drop-top", tops.filter(function (y) { return y !== 0 }).length === 0 ? "flush" : "moved " + tops.join(","))
+      log("drop-ms", Date.now() - t0)
+    }, 10)
+    at(function () {
+      var sh = island.shape
+      log("bar", r1(sh.barWidth) + "x" + r1(sh.barHeight))
+      log("radii", r1(sh.bottomR) + " " + r1(sh.fillet))
+      log("colour", String(sh.color))
+      log("flush", sh.y + " " + (sh.mapToItem(null, 0, 0).y))
+      log("centred", r1(sh.x + sh.width / 2) + " of " + r1(island.width / 2))
+      log("fits", sh.barHeight >= island.enrolView.implicitHeight + 2 * island.pad - 0.5)
+      log("width", r1(island.fullWidth) + " " + r1(sh.barWidth))
+      log("inner", island.enrolView.x + " " + island.enrolView.y + " " + island.enrolView.opacity)
+    }, 10)
+    at(function () { shellRoot.t1 = Date.now(); shellRoot.retractedCount = 0; island.retract() }, 5)
+    at(function () { log("retract-early", shellRoot.retractedCount + " " + r1(island.heightP)) }, 100)
+    // Wait for the answer, up to 4 s: the offscreen scene graph paces animation frames slowly.
+    for (var w = 0; w < 40; w++)
+      at(function () {
+        if (shellRoot.retractedCount > 0 && shellRoot.t1 > 0) {
+          log("retract-late", shellRoot.retractedCount + " " + r1(island.heightP) + " " + r1(island.widthP))
+          shellRoot.t1 = 0
+        }
+      }, 100)
+    at(function () { island.retract(); log("retract-twice", shellRoot.retractedCount) }, 100)
+    at(function () { log("retract-twice-late", shellRoot.retractedCount); island.drop() }, 400)
+    at(function () { log("again", r1(island.heightP)) }, 700)
+  }
+  property real t1: 0
+  property real tAtStart: 0
+
   // ---- the PNG strip ------------------------------------------------------------------------------------------------------------
   property int frameNo: 0
   function shoot(name) {
@@ -782,7 +965,24 @@ ShellRoot {
   }
   function buildStrip() {
     var m = Quickshell.env("E3_MODE_ACT") === "advanced" ? "advanced" : "simple"
-    at(function () { if (m === "advanced") session.setMode("advanced") }, 3500)
+    at(function () { if (m === "advanced") session.setMode("advanced") }, 600)
+    // The idle demo, caught at a few of its steps (the demo is time-driven, so each
+    // is waited for rather than timed).
+    var stops = m === "simple"
+      ? [["d1-centre", function () { return demoItem().caption === "Look at the camera" && ring().arc > 0.6 }],
+         ["d2-left", function () { return ring().target === 9 && ring().bins[9] > 0.6 }],
+         ["d3-right", function () { return ring().target === 3 && ring().bins[3] > 0.6 }],
+         ["d4-up", function () { return ring().target === 0 && ring().bins[0] > 0.6 }],
+         ["d5-down", function () { return ring().target === 6 && ring().bins[6] > 0.6 }]]
+      : [["d1-quarter", function () { return ring().bins[2] > 0.9 && ring().bins[3] < 0.2 }],
+         ["d2-half", function () { return ring().bins[5] > 0.9 && ring().bins[6] < 0.2 }],
+         ["d3-threequarters", function () { return ring().bins[8] > 0.9 && ring().bins[9] < 0.2 }],
+         ["d4-complete", function () { return demoItem().caption === "The circle is complete." }]]
+    stops.forEach(function (stop) {
+      at(function () { return stop[1] }, 20)
+      at(function () { shoot(m + "-" + stop[0]) }, 120)
+    })
+    at(function () { return function () { return demoItem().caption !== "" } }, 100)
     at(function () { shoot(m + "-1-idle") }, 250)
     at(function () { session.start() })
     at(function () { ready(true) })
