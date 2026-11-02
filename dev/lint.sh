@@ -126,8 +126,8 @@ fi
 # card, which is a window, is named by the Face service alone.
 echo
 echo "${BOLD}Hosting${RESET}"
-hosted_files=(Surface.qml FaceViews.qml FaceModel.qml RecordView.qml RecordSession.qml RecordPreview.qml
-              PeopleView.qml PersonView.qml SetupView.qml SettingsView.qml RemoveView.qml common/Ask.qml)
+hosted_files=(Surface.qml FaceViews.qml FaceModel.qml EnrolView.qml EnrolRing.qml RecordView.qml RecordSession.qml RecordPreview.qml
+              PeopleView.qml PersonView.qml SetupView.qml SettingsView.qml RemoveView.qml common/Ask.qml common/EnrolLink.qml)
 window_type() { sed -E 's#//.*$##' | grep -nE '\b(PanelWindow|PopupWindow|FloatingWindow)\b'; }
 card_name() { sed -E 's#//.*$##' | grep -nE '\bRecordCard\b'; }
 if ! printf 'Item {\n  // PanelWindow in a comment\n  PanelWindow { }\n}\n' | window_type | grep -q 'PanelWindow { }' \
@@ -150,6 +150,54 @@ if (( ${#named[@]} )); then
   failures=$((failures + 1))
 else
   echo "  ${GREEN}pass${RESET}  the ${#hosted_files[@]} files Surface.qml is made of open no window, and only the service names the card"
+fi
+
+# The RGB camera is fenced to the enrol view (plan-face-enroll.md 6a.2). One file
+# may touch QtMultimedia, one file may name that one, and nothing that sets a
+# camera up may appear anywhere else. Comments and string literals are blanked
+# first, so prose that says "Camera" is not a Camera (SetupView.qml:151 and the
+# lock screen's "Camera waking?" are the self-test).
+echo
+echo "${BOLD}The RGB camera${RESET}"
+camera_re='import QtMultimedia|\bCamera\s*\{|MediaDevices\s*\{|CaptureSession\s*\{|ImageCapture|MediaRecorder|VideoSink'
+blank() { sed -E 's#"([^"\\]|\\.)*"##g; s#//.*$##'; }
+camera_hits() { blank | grep -nE "$camera_re"; }
+if printf 'Text { text: "Camera, system files and engine..." }\n' | camera_hits | grep -q . \
+   || printf 'Text { text: "Camera waking?" } // Camera { in a comment\n' | camera_hits | grep -q . \
+   || ! printf 'Item {\n  Camera {\n  }\n}\n' | camera_hits | grep -q 'Camera {'; then
+  echo "  ${RED}FAIL${RESET}  the camera check's own self-test (the prose lines must not match, a planted Camera { must)"
+  failures=$((failures + 1))
+fi
+camera_bad=()
+mapfile -t all_qml < <(git ls-files '*.qml')
+for f in "${all_qml[@]}"; do
+  [[ $f == dev/* || $f == RecordPreview.qml ]] && continue
+  camera_hits <"$f" | grep -q . && camera_bad+=("$f sets up a camera")
+done
+camera_hits <RecordPreview.qml | grep -q 'Camera {' || camera_bad+=("RecordPreview.qml no longer has the one Camera")
+for f in "${all_qml[@]}"; do
+  [[ $f == dev/* || $f == EnrolView.qml || $f == RecordPreview.qml ]] && continue
+  sed -E 's#//.*$##' "$f" | grep -q 'RecordPreview' && camera_bad+=("$f names RecordPreview")
+  case $f in EnrolView.qml|RecordCard.qml|FaceModel.qml|FaceViews.qml|Surface.qml|Service.qml) continue ;; esac
+  sed -E 's#//.*$##' "$f" | grep -qE 'previewDevice|camera\.rgb' && camera_bad+=("$f reads the RGB node")
+done
+# Nothing that recognises a face on its own names the RGB node (omarchy-face-camera
+# only prints names; omarchy-face-status may read `--describe` for the view).
+for f in system/omarchy-faced system/omarchy-face-verify system/omarchy-face-lock-verify system/omarchy-face-gate \
+         system/omarchy-face-identity system/omarchy-face-admin system/omarchy-faced.service system/omarchy-faced.socket \
+         bin/omarchy-face-lock lock/Service.qml; do
+  [[ -f $f ]] || continue
+  grep -qEi -- '--rgb-node|/dev/video|\brgb\b' "$f" && camera_bad+=("$f names an RGB node or a video device")
+done
+# systemd's DeviceAllow cannot name the IR node (its /dev/videoN is not stable), so
+# the daemon is not fenced by the unit; this pin makes a change to it deliberate.
+allow=$(grep -E '^(DeviceAllow|DevicePolicy)=' system/omarchy-faced.service | tr '\n' '|')
+[[ $allow == 'DevicePolicy=closed|DeviceAllow=char-video4linux rw|' ]] || camera_bad+=("omarchy-faced.service's DevicePolicy/DeviceAllow lines changed (got: $allow)")
+if (( ${#camera_bad[@]} )); then
+  echo "  ${RED}FAIL${RESET}  ${camera_bad[*]}"
+  failures=$((failures + 1))
+else
+  echo "  ${GREEN}pass${RESET}  only RecordPreview.qml sets up a camera, only EnrolView.qml names it, no RGB node is named in the daemon, gate, lock or admin, and the unit's DeviceAllow line is as pinned"
 fi
 
 echo

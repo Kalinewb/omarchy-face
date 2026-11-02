@@ -21,7 +21,7 @@ import "face" as Face
 //                       fence    the preview camera's fence (plan-face-enroll.md
 //                                6a.1, round-3 notes S1 and S3): two copies of the
 //                                hosted panel, one per screen, the enrol view
-//                                pushed in process; prints what RecordView's
+//                                pushed in process; prints what EnrolView's
 //                                `previewOn` is in each as the host's state
 //                                changes. Nothing opens a camera: the fixture has
 //                                no RGB node, so the Loader that would is never
@@ -82,7 +82,7 @@ ShellRoot {
 
   property var grabbed: null
 
-  // The `previewOn` of the RecordView inside `panel`, "none" when the panel is
+  // The `previewOn` of the EnrolView inside `panel`, "none" when the panel is
   // not showing one.
   function previewOnIn(panel) {
     function walk(item) {
@@ -95,6 +95,19 @@ ShellRoot {
     }
     var view = walk(panel)
     return view ? String(view.previewOn) : "none"
+  }
+
+  function liveIn(panel) {
+    function walk(item) {
+      if (item.previewOn !== undefined && item.previewDevice !== undefined) return item
+      for (var i = 0; i < item.children.length; i++) {
+        var found = walk(item.children[i])
+        if (found) return found
+      }
+      return null
+    }
+    var view = walk(panel)
+    return view ? String(view.live) : "none"
   }
 
   property var fenceA: null
@@ -120,6 +133,11 @@ ShellRoot {
         shellRoot.surface.model.showEnrol("anna", "No glasses", "Anna", false)
       } else if (step === 1) {
         shellRoot.log("fence-view", shellRoot.surface.model.view)
+        // Start is what turns the camera on, and the harness presses no Start:
+        // before it, previewOn is false on both screens even though one is live.
+        shellRoot.reportFence("idle")             // false,false
+        shellRoot.log("fence-live", liveIn(fenceA) + "," + liveIn(fenceB))   // true,false
+        shellRoot.surface.session.phase = "authorising"
         shellRoot.reportFence("screen1")          // true,false
         fakeHost.panelScreen = "T-2"
       } else if (step === 2) {
@@ -130,7 +148,8 @@ ShellRoot {
         fakeHost.panelScreen = "T-1"
         fakeHost.panelOpen = true
       } else if (step === 4) {
-        shellRoot.reportFence("reopened")         // true,false
+        shellRoot.reportFence("reopened")         // false,false: a fresh session, no Start yet
+        shellRoot.log("fence-reopened-live", liveIn(fenceA) + "," + liveIn(fenceB))   // true,false
         shellRoot.surface.model.navBack()
       } else {
         shellRoot.reportFence("left")             // none,none

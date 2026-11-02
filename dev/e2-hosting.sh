@@ -30,7 +30,7 @@
 #          engine row is missing
 #   (ix)   faceroute.js round-trips odd names
 #
-# (viii) is Phase 6's and (x) is Phase 4's.
+# (viii) is Phase 6's. (x) is Phase 4's and is in dev/e3-enrol-view.sh (the mode file).
 #
 # HEADLESS BY DEFAULT: no window opens anywhere. Every Quickshell harness runs
 # with QT_QPA_PLATFORM=offscreen and no WAYLAND_DISPLAY. That runs (i) against
@@ -525,15 +525,20 @@ fence=$(env "${face_env[@]}" FACE_HARNESS_CASE=fence timeout 60 quickshell -p "$
   | tee -a "$logs/render.log" | sed -n 's/^.*HARNESS \([a-zA-Z0-9-]*\) \(.*\)$/\1=\2/p')
 echo "${DIM}$(sed 's/^/  /' <<<"$fence")${RESET}"
 check "S1: an enrol view pushed in process (no enrol: route) is what the fence reads" "enrol" "$(field fence-view "$fence")"
-check "S3: two panels, one per screen: only the one on the host's panelScreen has previewOn" "true,false" "$(field fence-screen1 "$fence")"
+check "before Start nothing is on: previewOn is false on both screens (the camera waits for Start, 6a.1)" "false,false" "$(field fence-idle "$fence")"
+check "S3: two panels, one per screen: only the one on the host's panelScreen is live" "true,false" "$(field fence-live "$fence")"
+check "S3: …and once Start has been pressed (authorising) only that one has previewOn" "true,false" "$(field fence-screen1 "$fence")"
 check "S3: …and when the host's panel moves to the other screen, so does the fence" "false,true" "$(field fence-screen2 "$fence")"
 check "the notch closing turns it off in both, though neither panel was destroyed" "false,false" "$(field fence-closed "$fence")"
-check "…and opening it again turns it back on in the right one" "true,false" "$(field fence-reopened "$fence")"
+check "…opening it again makes the right one live, with a new session that has not been started: no camera until Start" "true,false false,false" \
+  "$(field fence-reopened-live "$fence") $(field fence-reopened "$fence")"
 check "leaving the enrol view removes the view and ends the session" "none,none" "$(field fence-left "$fence")"
 check "…the Surface holds no session after it" "true" "$(field fence-session "$fence")"
-check "the preview Loader is active only for a device AND previewOn (nothing else opens the camera)" "1" \
-  "$(grep -c 'active: view.previewDevice !== "" && view.previewOn' "$REPO/RecordView.qml")"
-check "RecordPreview.qml is named by RecordView.qml alone" "RecordView.qml" \
+check "the preview Loader is active only for previewOn AND a device (nothing else opens the camera)" "1" \
+  "$(grep -c 'active: view.previewOn && view.previewDevice !== ""' "$REPO/EnrolView.qml")"
+check "…and previewOn is the host being live AND the session wanting it (Start pressed)" "1" \
+  "$(grep -c 'previewOn: view.live && !!view.session && view.session.previewWanted' "$REPO/EnrolView.qml")"
+check "RecordPreview.qml is named by EnrolView.qml alone" "EnrolView.qml" \
   "$(grep -l 'RecordPreview' "$REPO"/*.qml | xargs -n1 basename | tr '\n' ' ' | sed 's/ $//')"
 
 step "(vii) available is false until the status has answered and the engine row says installed"
@@ -701,14 +706,14 @@ PY
   svc2_ipc kalinewb.face.card cancel >/dev/null
 
   check "no QML errors in the notch's log from Face's files" "none" \
-    "$(grep -E '(Surface|FaceModel|FaceViews|RecordView|FacePanel)\.qml:[0-9]+.*(TypeError|ReferenceError|Unable to assign|is not a)' "$logs/notch.log" | head -1 | cut -c1-120)$(grep -qE '(Surface|FaceModel|FaceViews|RecordView|FacePanel)\.qml:[0-9]+.*(TypeError|ReferenceError|Unable to assign|is not a)' "$logs/notch.log" || echo none)"
+    "$(grep -E '(Surface|FaceModel|FaceViews|EnrolView|EnrolRing|RecordView|FacePanel)\.qml:[0-9]+.*(TypeError|ReferenceError|Unable to assign|is not a)' "$logs/notch.log" | head -1 | cut -c1-120)$(grep -qE '(Surface|FaceModel|FaceViews|EnrolView|EnrolRing|RecordView|FacePanel)\.qml:[0-9]+.*(TypeError|ReferenceError|Unable to assign|is not a)' "$logs/notch.log" || echo none)"
   nharness quit >/dev/null
   svc2_ipc harness quit >/dev/null
   sleep 1
 fi
 
 step "no QML errors from Face's files in any harness"
-errors=$(cat "$logs"/*.log 2>/dev/null | grep -E '(Surface|FaceModel|FaceViews|RecordView|RecordCard|FacePanel|Service)\.qml:[0-9]+.*(TypeError|ReferenceError|Unable to assign)' | head -3 | cut -c1-140)
+errors=$(cat "$logs"/*.log 2>/dev/null | grep -E '(Surface|FaceModel|FaceViews|EnrolView|EnrolRing|RecordView|RecordCard|FacePanel|Service)\.qml:[0-9]+.*(TypeError|ReferenceError|Unable to assign)' | head -3 | cut -c1-140)
 check "the service, the panels and the notch logged none" "" "$errors"
 
 echo
