@@ -13,7 +13,11 @@
   "keepLoaded": true,
   "entryPoints": {
     "barWidget": "FacePanel.qml",
-    "service": "Service.qml"
+    "service": "Service.qml",
+    "surface": "Surface.qml"
+  },
+  "surface": {
+    "contract": 1
   },
   "barWidget": {
     "displayName": "Face ID",
