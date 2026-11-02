@@ -119,6 +119,39 @@ else
   echo "  ${DIM}skip  shellcheck is not installed${RESET}"
 fi
 
+# Hosting (plan-face-enroll.md 6a.2c): the integration draws inside the host and
+# never opens a window of its own. The host's own check reads the entry file
+# only, so this one reads every file Surface.qml instantiates, with `//`
+# comments blanked (a window type named in a comment is not a window). The
+# card, which is a window, is named by the Face service alone.
+echo
+echo "${BOLD}Hosting${RESET}"
+hosted_files=(Surface.qml FaceViews.qml FaceModel.qml RecordView.qml RecordSession.qml RecordPreview.qml
+              PeopleView.qml PersonView.qml SetupView.qml SettingsView.qml RemoveView.qml common/Ask.qml)
+window_type() { sed -E 's#//.*$##' | grep -nE '\b(PanelWindow|PopupWindow|FloatingWindow)\b'; }
+card_name() { sed -E 's#//.*$##' | grep -nE '\bRecordCard\b'; }
+if ! printf 'Item {\n  // PanelWindow in a comment\n  PanelWindow { }\n}\n' | window_type | grep -q 'PanelWindow { }' \
+   || printf '// PanelWindow, PopupWindow, FloatingWindow\n' | window_type | grep -q .; then
+  echo "  ${RED}FAIL${RESET}  the window check's own self-test (a planted PanelWindow must match, a comment must not)"
+  failures=$((failures + 1))
+fi
+named=()
+for f in "${hosted_files[@]}"; do
+  [[ -f $f ]] || { named+=("$f is missing"); continue; }
+  window_type <"$f" | grep -q . && named+=("$f opens a window")
+  card_name <"$f" | grep -q . && named+=("$f names RecordCard")
+done
+for f in *.qml; do
+  [[ $f == Service.qml || $f == RecordCard.qml ]] && continue
+  card_name <"$f" | grep -q . && named+=("$f names RecordCard")
+done
+if (( ${#named[@]} )); then
+  echo "  ${RED}FAIL${RESET}  ${named[*]}"
+  failures=$((failures + 1))
+else
+  echo "  ${GREEN}pass${RESET}  the ${#hosted_files[@]} files Surface.qml is made of open no window, and only the service names the card"
+fi
+
 echo
 if (( failures )); then echo "${RED}$failures check(s) failed${RESET}"; exit 1; fi
 echo "${GREEN}everything passes${RESET}"

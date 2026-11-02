@@ -1,11 +1,7 @@
 import QtQuick
-import QtQuick.Controls
-import Quickshell
 import Quickshell.Io
 import qs.Commons
-import qs.Commons as Commons
 import qs.Ui
-import "common"
 import "common/faceroute.js" as Route
 
 // Face ID: the bar button and the popup behind it.

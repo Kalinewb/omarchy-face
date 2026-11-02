@@ -2,8 +2,6 @@ import QtQuick
 import Quickshell
 import Quickshell.Wayland
 import qs.Commons
-import qs.Commons as Commons
-import qs.Ui
 import "common/spring.js" as Spring
 
 // The recording card (plan-gui.md §5.3): a scrim on the built-in screen with a

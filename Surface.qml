@@ -2,7 +2,6 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
-import "common/faceroute.js" as Route
 
 // What Face gives a surface host (today: kalinewb.notch). Contract 1.
 //

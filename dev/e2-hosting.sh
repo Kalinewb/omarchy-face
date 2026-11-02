@@ -492,6 +492,22 @@ for route in people person:anna setup; do
     "$(awk -v d="$max_other" -v m="$MAX_LEVEL" 'BEGIN { print (d + 0 > m) ? "true" : "false" }')"
 done
 
+step "the preview camera's fence (6a.1; round-3 notes S1 and S3)"
+fence=$(env "${face_env[@]}" FACE_HARNESS_CASE=fence timeout 60 quickshell -p "$panel_root" -n 2>&1 \
+  | tee -a "$logs/render.log" | sed -n 's/^.*HARNESS \([a-zA-Z0-9-]*\) \(.*\)$/\1=\2/p')
+echo "${DIM}$(sed 's/^/  /' <<<"$fence")${RESET}"
+check "S1: an enrol view pushed in process (no enrol: route) is what the fence reads" "enrol" "$(field fence-view "$fence")"
+check "S3: two panels, one per screen: only the one on the host's panelScreen has previewOn" "true,false" "$(field fence-screen1 "$fence")"
+check "S3: …and when the host's panel moves to the other screen, so does the fence" "false,true" "$(field fence-screen2 "$fence")"
+check "the notch closing turns it off in both, though neither panel was destroyed" "false,false" "$(field fence-closed "$fence")"
+check "…and opening it again turns it back on in the right one" "true,false" "$(field fence-reopened "$fence")"
+check "leaving the enrol view removes the view and ends the session" "none,none" "$(field fence-left "$fence")"
+check "…the Surface holds no session after it" "true" "$(field fence-session "$fence")"
+check "the preview Loader is active only for a device AND previewOn (nothing else opens the camera)" "1" \
+  "$(grep -c 'active: view.previewDevice !== "" && view.previewOn' "$REPO/RecordView.qml")"
+check "RecordPreview.qml is named by RecordView.qml alone" "RecordView.qml" \
+  "$(grep -l 'RecordPreview' "$REPO"/*.qml | xargs -n1 basename | tr '\n' ' ' | sed 's/ $//')"
+
 step "(vii) available is false until the status has answered and the engine row says installed"
 avail() { # avail <fixture> -> "<at creation> <after the read>"
   env "${face_env[@]}" OMARCHY_FACE_DEV_FIXTURE="$1" FACE_HARNESS_CASE=available \

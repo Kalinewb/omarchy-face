@@ -12,6 +12,14 @@ import "face" as Face
 //                       hosted   the notch's panel: the REAL Surface.qml, its
 //                                `panel` Component created the way the host
 //                                creates it, on a stand-in host
+//                       fence    the preview camera's fence (plan-face-enroll.md
+//                                6a.1, round-3 notes S1 and S3): two copies of the
+//                                hosted panel, one per screen, the enrol view
+//                                pushed in process; prints what RecordView's
+//                                `previewOn` is in each as the host's state
+//                                changes. Nothing opens a camera: the fixture has
+//                                no RGB node, so the Loader that would is never
+//                                active, and only the fence's input is read.
 //   FACE_HARNESS_ROUTE  setup | people | person:anna
 //   FACE_HARNESS_HOST   identity (default) | realistic | other
 //                       identity    a host whose palette is the theme's own,
@@ -68,6 +76,64 @@ ShellRoot {
 
   property var grabbed: null
 
+  // The `previewOn` of the RecordView inside `panel`, "none" when the panel is
+  // not showing one.
+  function previewOnIn(panel) {
+    function walk(item) {
+      if (item.previewOn !== undefined && item.previewDevice !== undefined) return item
+      for (var i = 0; i < item.children.length; i++) {
+        var found = walk(item.children[i])
+        if (found) return found
+      }
+      return null
+    }
+    var view = walk(panel)
+    return view ? String(view.previewOn) : "none"
+  }
+
+  property var fenceA: null
+  property var fenceB: null
+  property int fenceStep: 0
+
+  function reportFence(label) {
+    shellRoot.log("fence-" + label, previewOnIn(fenceA) + "," + previewOnIn(fenceB))
+  }
+
+  Timer {
+    id: fenceTimer
+    interval: 400
+    repeat: true
+    onTriggered: {
+      var step = shellRoot.fenceStep++
+      if (step === 0) {
+        // The Surface pushes the enrol view in process, as PeopleView/PersonView
+        // do through the model (S1) -- no route, no panelRoute.
+        fakeHost.panelScreen = "T-1"
+        fakeHost.panelRoute = "people"
+        fakeHost.panelOpen = true
+        shellRoot.surface.model.showEnrol("anna", "No glasses", "Anna", false)
+      } else if (step === 1) {
+        shellRoot.log("fence-view", shellRoot.surface.model.view)
+        shellRoot.reportFence("screen1")          // true,false
+        fakeHost.panelScreen = "T-2"
+      } else if (step === 2) {
+        shellRoot.reportFence("screen2")          // false,true
+        fakeHost.panelOpen = false
+      } else if (step === 3) {
+        shellRoot.reportFence("closed")           // false,false
+        fakeHost.panelScreen = "T-1"
+        fakeHost.panelOpen = true
+      } else if (step === 4) {
+        shellRoot.reportFence("reopened")         // true,false
+        shellRoot.surface.model.navBack()
+      } else {
+        shellRoot.reportFence("left")             // none,none
+        shellRoot.log("fence-session", shellRoot.surface.session === null)
+        Qt.exit(0)
+      }
+    }
+  }
+
   function grab(item, label) {
     item.grabToImage(function (result) {
       shellRoot.log("size", Math.round(item.width) + "x" + Math.round(item.height))
@@ -96,14 +162,14 @@ ShellRoot {
 
   Loader {
     id: surfaceLoader
-    active: shellRoot.caseName === "hosted"
+    active: shellRoot.caseName === "hosted" || shellRoot.caseName === "fence"
     sourceComponent: Component { Face.Surface { surfaceHost: fakeHost } }
   }
   readonly property var surface: surfaceLoader.item
 
   Window {
     id: hostedWindow
-    visible: shellRoot.caseName === "hosted"
+    visible: shellRoot.caseName === "hosted" || shellRoot.caseName === "fence"
     width: 340
     height: 900
     color: "black"
@@ -128,6 +194,14 @@ ShellRoot {
       }
       if (!shellRoot.surface || !shellRoot.surface.available || shellRoot.surface.model.people === null) return
       running = false
+      if (shellRoot.caseName === "fence") {
+        shellRoot.fenceA = shellRoot.surface.panel.createObject(hostedWindow.contentItem, {
+          surfaceHost: fakeHost, surfaceScreen: "T-1", maxWidth: 400, maxHeight: 900 })
+        shellRoot.fenceB = shellRoot.surface.panel.createObject(hostedWindow.contentItem, {
+          surfaceHost: fakeHost, surfaceScreen: "T-2", maxWidth: 400, maxHeight: 900 })
+        fenceTimer.start()
+        return
+      }
       fakeHost.panelScreen = "T-1"
       fakeHost.panelRoute = shellRoot.route
       fakeHost.panelOpen = true
