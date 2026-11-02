@@ -25,6 +25,14 @@ Column {
   readonly property color foreground: panel ? panel.foreground : Commons.Color.foreground
   readonly property color dim: panel ? panel.dim : Commons.Color.muted
   readonly property string fontFamily: panel ? panel.fontFamily : Style.font.family
+  // The two colours that used to come straight from the theme, and the radius.
+  // Inside a surface host they are the host's (FaceModel.urgent/accent/
+  // radiusFor); anywhere else, and for a stand-in panel that has none, the theme's.
+  readonly property color urgent: panel && panel.urgent !== undefined ? panel.urgent : Commons.Color.urgent
+  readonly property color accent: panel && panel.accent !== undefined ? panel.accent : Commons.Color.accent
+  function radiusFor(size) {
+    return panel && typeof panel.radiusFor === "function" ? panel.radiusFor(size) : Style.cornerRadius
+  }
   readonly property var config: panel ? panel.config : ({})
   readonly property var lockState: panel ? panel.lockState : ({})
   readonly property var store: panel && panel.people ? panel.people : ({})
@@ -157,7 +165,7 @@ Column {
           ? " Turning this off stops any face being tried, whether or not the lines can be removed."
           : " Nothing is tried while this is off. Removing the lines needs somebody who can edit "
             + "/etc/pam.d/sudo as root — Face will not touch a block it did not write.")
-    color: Commons.Color.urgent
+    color: view.urgent
     font.family: view.fontFamily
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap
@@ -361,7 +369,7 @@ Column {
       : (view.lockFaces === 1 ? "1 person can unlock the lock screen"
                               : view.lockFaces + " people can unlock the lock screen")
         + " · " + view.lockStatusText
-    color: view.lockFaces === 0 ? Commons.Color.accent : view.dim
+    color: view.lockFaces === 0 ? view.accent : view.dim
     font.family: view.fontFamily
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap
@@ -396,7 +404,7 @@ Column {
     visible: view.note !== ""
     topPadding: Style.space(4)
     text: view.note
-    color: Commons.Color.urgent
+    color: view.urgent
     font.family: view.fontFamily
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap

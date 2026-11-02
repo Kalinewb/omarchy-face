@@ -39,6 +39,14 @@ Column {
   readonly property color foreground: panel ? panel.foreground : Commons.Color.foreground
   readonly property color dim: panel ? panel.dim : Commons.Color.muted
   readonly property string fontFamily: panel ? panel.fontFamily : Style.font.family
+  // The two colours that used to come straight from the theme, and the radius.
+  // Inside a surface host they are the host's (FaceModel.urgent/accent/
+  // radiusFor); anywhere else, and for a stand-in panel that has none, the theme's.
+  readonly property color urgent: panel && panel.urgent !== undefined ? panel.urgent : Commons.Color.urgent
+  readonly property color accent: panel && panel.accent !== undefined ? panel.accent : Commons.Color.accent
+  function radiusFor(size) {
+    return panel && typeof panel.radiusFor === "function" ? panel.radiusFor(size) : Style.cornerRadius
+  }
   readonly property var removal: panel && panel.status && panel.status.removal ? panel.status.removal : null
   readonly property var lockState: panel && panel.lockState ? panel.lockState : ({})
   readonly property bool lockEnabled: view.lockState.enabled === true
@@ -510,7 +518,7 @@ Column {
     visible: view.phase === "incomplete"
     text: "Face's system files are partly still here, so the plugin has been left in place — "
           + "it is the only way back to this page. Still on the machine:"
-    color: Commons.Color.urgent
+    color: view.urgent
     font.family: view.fontFamily
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap
@@ -537,7 +545,7 @@ Column {
     visible: view.note !== ""
     topPadding: Style.space(2)
     text: view.note
-    color: Commons.Color.urgent
+    color: view.urgent
     font.family: view.fontFamily
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap

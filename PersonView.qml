@@ -25,6 +25,14 @@ Column {
   readonly property color foreground: panel ? panel.foreground : Commons.Color.foreground
   readonly property color dim: panel ? panel.dim : Commons.Color.muted
   readonly property string fontFamily: panel ? panel.fontFamily : Style.font.family
+  // The two colours that used to come straight from the theme, and the radius.
+  // Inside a surface host they are the host's (FaceModel.urgent/accent/
+  // radiusFor); anywhere else, and for a stand-in panel that has none, the theme's.
+  readonly property color urgent: panel && panel.urgent !== undefined ? panel.urgent : Commons.Color.urgent
+  readonly property color accent: panel && panel.accent !== undefined ? panel.accent : Commons.Color.accent
+  function radiusFor(size) {
+    return panel && typeof panel.radiusFor === "function" ? panel.radiusFor(size) : Style.cornerRadius
+  }
   readonly property string name: panel ? panel.personName : ""
 
   readonly property var store: panel && panel.people ? panel.people : ({})
@@ -174,8 +182,12 @@ Column {
   // popup closes because the card is what the person is looking at now. Adding
   // or re-recording an appearance on a Sudo person asks for the owner's password
   // like the toggle does -- the session's own prompt covers it (§5.2).
+  //
+  // Inside a surface host the recording is shown in place instead
+  // (FaceModel.showEnrol), and nothing closes.
   function record(appearanceLabel) {
     if (!panel) return
+    if (panel.hosted === true && panel.showEnrol(view.name, appearanceLabel, view.label, false)) return
     panel.ask.ask(panel.ask.cardArgv(["record", view.name, String(appearanceLabel),
                                       view.label, ""]), "", function (result) {
       if (!result.ok) view.note = "The recording card could not be opened."
@@ -569,7 +581,7 @@ Column {
       id: removeButton
       visible: !view.confirmingRemove
       text: "Remove " + view.label
-      foreground: Commons.Color.urgent
+      foreground: view.urgent
       fontFamily: view.fontFamily
       onClicked: view.confirmingRemove = true
     }
@@ -595,7 +607,7 @@ Column {
         text: "Remove"
         bordered: true
         enabled: view.busy === ""
-        foreground: Commons.Color.urgent
+        foreground: view.urgent
         fontFamily: view.fontFamily
         onClicked: view.removePerson()
       }
@@ -615,7 +627,7 @@ Column {
     visible: view.note !== ""
     topPadding: Style.space(4)
     text: view.note
-    color: Commons.Color.urgent
+    color: view.urgent
     font.family: view.fontFamily
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap

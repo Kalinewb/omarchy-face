@@ -20,6 +20,14 @@ Column {
   readonly property color foreground: panel ? panel.foreground : Commons.Color.foreground
   readonly property color dim: panel ? panel.dim : Commons.Color.muted
   readonly property string fontFamily: panel ? panel.fontFamily : Style.font.family
+  // The two colours that used to come straight from the theme, and the radius.
+  // Inside a surface host they are the host's (FaceModel.urgent/accent/
+  // radiusFor); anywhere else, and for a stand-in panel that has none, the theme's.
+  readonly property color urgent: panel && panel.urgent !== undefined ? panel.urgent : Commons.Color.urgent
+  readonly property color accent: panel && panel.accent !== undefined ? panel.accent : Commons.Color.accent
+  function radiusFor(size) {
+    return panel && typeof panel.radiusFor === "function" ? panel.radiusFor(size) : Style.cornerRadius
+  }
 
   readonly property var store: panel && panel.people ? panel.people : ({})
   readonly property var people: store && Array.isArray(store.people) ? store.people : []
@@ -70,9 +78,14 @@ Column {
   // keepLoaded, so the card survives a plugins-folder reload, and it needs
   // exclusive keyboard focus, which a popup cannot give it (plan-gui.md §1).
   // The popup closes, because the card is what the person is looking at now.
+  //
+  // Inside a surface host there is no window to put a card in, so the model
+  // shows the recording in place instead (FaceModel.showEnrol) and nothing
+  // closes.
   function record(name, appearance, label, isNew) {
     if (!panel) return
     view.note = ""
+    if (panel.hosted === true && panel.showEnrol(name, appearance, label, isNew)) return
     panel.ask.ask(panel.ask.cardArgv(["record", String(name), String(appearance),
                                       String(label), isNew ? "new" : ""]), "",
       function (result) {
@@ -129,7 +142,7 @@ Column {
 
       width: view.width
       implicitHeight: rowContent.implicitHeight + Style.space(10)
-      radius: Style.cornerRadius
+      radius: view.radiusFor(height)
       color: hover.hovered ? Qt.rgba(view.foreground.r, view.foreground.g, view.foreground.b, 0.06)
                            : "transparent"
 
@@ -205,7 +218,7 @@ Column {
               visible: modelData.on
               implicitWidth: chipText.implicitWidth + Style.space(12)
               implicitHeight: chipText.implicitHeight + Style.space(4)
-              radius: Style.cornerRadius
+              radius: view.radiusFor(height)
               color: "transparent"
               border.width: 1
               border.color: modelData.faded ? view.dim : view.foreground
@@ -310,7 +323,7 @@ Column {
     width: parent.width
     visible: view.note !== ""
     text: view.note
-    color: Commons.Color.urgent
+    color: view.urgent
     font.family: view.fontFamily
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap
@@ -335,7 +348,7 @@ Column {
     width: parent.width
     visible: view.warning !== ""
     text: view.warning
-    color: Commons.Color.urgent
+    color: view.urgent
     font.family: view.fontFamily
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap
