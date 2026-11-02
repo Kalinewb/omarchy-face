@@ -91,6 +91,10 @@ Panel {
   function takeResumeWord(prefix) { return faceModel.takeResumeWord(prefix) }
   function navBack() { faceModel.navBack() }
 
+  // The content of the popup, for dev/e2-hosting.sh, which renders it to a PNG
+  // and compares it with the notch panel's.
+  readonly property Item viewsItem: views
+
   // --- the press, and the IPC's open(), under the notch -------------------------
 
   // The route a (view, name) pair names, or "" for none (an unknown view, a

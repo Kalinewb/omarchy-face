@@ -582,6 +582,12 @@ Item {
   // place to go, exactly as openWithBase does for the other views.
   function showEnrolAt(parsed) {
     if (!root.hosted) return false
+    // The host calls open() for a route more than once while it loads the
+    // panel; the same request again must not tear down a session that is
+    // already running for it.
+    var now = root.enrol
+    if (root.view === "enrol" && now && now.name === parsed.name && now.appearance === parsed.appearance
+        && now.label === parsed.label && now.isNew === parsed.isNew) return true
     root.resetView("setup")
     return root.showEnrol(parsed.name, parsed.appearance, parsed.label, parsed.isNew)
   }

@@ -37,6 +37,17 @@ Item {
   // For the panel, the suites and anyone asking what this integration knows.
   readonly property var model: faceModel
 
+  // The host reads `available` when it refreshes (a scan, a load, a settings
+  // change), not continuously, and the first status read answers after the first
+  // refresh has already declined Face. So the host is asked to look again, once,
+  // when the answer turns true -- the documented `rescanIntegrations` verb
+  // (SURFACE-HOSTING section 9). It re-evaluates every candidate and touches no
+  // file that did not change.
+  onAvailableChanged: {
+    if (surface.available && surface.surfaceHost !== null)
+      Quickshell.execDetached(["omarchy-shell", "notch", "rescanIntegrations"])
+  }
+
   property Component panel: Component {
     Item {
       id: hosted
@@ -113,22 +124,24 @@ Item {
   property string sessionKey: ""
   property bool ending: false
 
-  readonly property bool wantsSession: faceModel.opened && faceModel.view === "enrol" && faceModel.enrol !== null
-
   function keyOf(request) {
     return request ? [request.name, request.appearance, request.label, request.isNew].join("\u0001") : ""
   }
 
+  // Read from the model, not from a binding on it: this runs inside the model's
+  // own change signals, where a binding that depends on the same property may
+  // not have been told yet.
   function syncSession() {
-    if (!surface.wantsSession) { surface.endSession(); return }
-    var key = surface.keyOf(faceModel.enrol)
+    var request = faceModel.enrol
+    if (!faceModel.opened || faceModel.view !== "enrol" || request === null) { surface.endSession(); return }
+    var key = surface.keyOf(request)
     if (surface.session && surface.sessionKey === key) return
     surface.endSession()
     var made = sessionComponent.createObject(surface, {
-      name: faceModel.enrol.name,
-      appearance: faceModel.enrol.appearance,
-      label: faceModel.enrol.label,
-      isNew: faceModel.enrol.isNew,
+      name: request.name,
+      appearance: request.appearance,
+      label: request.label,
+      isNew: request.isNew,
       ask: faceModel.ask
     })
     if (!made) return

@@ -1,0 +1,142 @@
+import QtQuick
+import QtQuick.Window
+import Quickshell
+import Quickshell.Io
+import qs.Commons
+import qs.Commons as Commons
+import "face" as Face
+
+// Face's views in both homes, rendered to a PNG, for dev/e2-hosting.sh (i).
+//
+//   FACE_HARNESS_CASE   stock    the stock bar's popup: the REAL FacePanel.qml
+//                       hosted   the notch's panel: the REAL Surface.qml, its
+//                                `panel` Component created the way the host
+//                                creates it, on a stand-in host
+//   FACE_HARNESS_ROUTE  setup | people | person:anna
+//   FACE_HARNESS_HOST   identity (default) | realistic | other
+//                       identity    a host whose palette is the theme's own,
+//                                   with accent set to the theme's urgent, so
+//                                   the one place the hosted rules change a
+//                                   colour (urgent -> the host's accent) draws
+//                                   the same pixels and nothing else can differ
+//                       realistic   the notch's own rule: accent = the theme's
+//                                   accent (the notch's accent equals its
+//                                   foreground)
+//                       other       an unrelated palette, to show the panel
+//                                   follows its host and not the theme
+//   FACE_HARNESS_OUT    the PNG to write
+//
+// It prints `HARNESS key value` lines: the size of what was grabbed and whether
+// the grab worked. The stand-in host answers only what a host answers.
+ShellRoot {
+  id: shellRoot
+
+  readonly property string caseName: Quickshell.env("FACE_HARNESS_CASE") || "stock"
+  readonly property string route: Quickshell.env("FACE_HARNESS_ROUTE") || "people"
+  readonly property string hostKind: Quickshell.env("FACE_HARNESS_HOST") || "identity"
+  readonly property string out: Quickshell.env("FACE_HARNESS_OUT") || "/tmp/face-views.png"
+  // "WxH": the size to give the hosted panel, so it can be compared with the
+  // stock popup's content at the size that popup chose.
+  readonly property var size: (Quickshell.env("FACE_HARNESS_SIZE") || "").split("x").map(Number)
+  readonly property real wantW: size.length === 2 && size[0] > 0 ? size[0] : 400
+  readonly property real wantH: size.length === 2 && size[1] > 0 ? size[1] : 900
+
+  function log(key, value) { console.log("HARNESS " + key, value) }
+
+  QtObject {
+    id: fakeHost
+    readonly property int contract: 1
+    readonly property var features: ["panel"]
+    readonly property string pluginId: "kalinewb.face"
+    readonly property bool present: true
+    readonly property bool accepted: true
+    readonly property bool hidden: false
+    readonly property color foreground: shellRoot.hostKind === "other" ? "#ffd166" : Commons.Color.foreground
+    readonly property color secondary: shellRoot.hostKind === "other" ? "#9a7b2f" : Qt.darker(Commons.Color.foreground, 1.55)
+    readonly property color accent: shellRoot.hostKind === "identity" ? Commons.Color.urgent
+                                  : shellRoot.hostKind === "other" ? "#06d6a0" : Commons.Color.accent
+    readonly property color color: "#000000"
+    readonly property real radius: shellRoot.hostKind === "other" ? 0 : Style.cornerRadius
+    readonly property string fontFamily: Style.font.family
+    property bool panelOpen: false
+    property string panelRoute: ""
+    property string panelScreen: ""
+    function radiusFor(size) { return Math.max(0, Math.min(radius, size / 2)) }
+    function openPanel(route, screen) { return "declined:harness" }
+    function closePanel() { return "unknown" }
+  }
+
+  property var grabbed: null
+
+  function grab(item, label) {
+    item.grabToImage(function (result) {
+      shellRoot.log("size", Math.round(item.width) + "x" + Math.round(item.height))
+      shellRoot.log("saved", result.saveToFile(shellRoot.out))
+      Qt.exit(0)
+    })
+  }
+
+  // Wait for the status read and people.json, then give the views a second to
+  // settle (their own transitions), then draw.
+  Timer {
+    id: settle
+    interval: 1800
+    onTriggered: {
+      if (shellRoot.caseName === "stock") shellRoot.grab(shellRoot.stockPanel.viewsItem, "stock")
+      else shellRoot.grab(hostedWindow.contentItem.children[0], "hosted")
+    }
+  }
+
+  Loader {
+    id: stockLoader
+    active: shellRoot.caseName === "stock"
+    sourceComponent: Component { Face.FacePanel { bar: null } }
+  }
+  readonly property var stockPanel: stockLoader.item
+
+  Loader {
+    id: surfaceLoader
+    active: shellRoot.caseName === "hosted"
+    sourceComponent: Component { Face.Surface { surfaceHost: fakeHost } }
+  }
+  readonly property var surface: surfaceLoader.item
+
+  Window {
+    id: hostedWindow
+    visible: shellRoot.caseName === "hosted"
+    width: 340
+    height: 900
+    color: "black"
+  }
+
+  Timer {
+    interval: 250
+    repeat: true
+    running: true
+    property int ticks: 0
+    onTriggered: {
+      ticks += 1
+      if (ticks > 80) { shellRoot.log("timeout", "no status/people in 20 s"); Qt.exit(1); return }
+      if (shellRoot.caseName === "stock") {
+        var m = shellRoot.stockPanel
+        if (!m || m.status === null || m.people === null) return
+        running = false
+        var parts = shellRoot.route.split(":")
+        m.openAt(parts[0], parts.length > 1 ? parts[1] : "")
+        settle.start()
+        return
+      }
+      if (!shellRoot.surface || !shellRoot.surface.available || shellRoot.surface.model.people === null) return
+      running = false
+      fakeHost.panelScreen = "T-1"
+      fakeHost.panelRoute = shellRoot.route
+      fakeHost.panelOpen = true
+      var panel = shellRoot.surface.panel.createObject(hostedWindow.contentItem, {
+        surfaceHost: fakeHost, surfaceScreen: "T-1", maxWidth: shellRoot.wantW, maxHeight: shellRoot.wantH
+      })
+      panel.open(shellRoot.route)
+      shellRoot.log("available", shellRoot.surface.available)
+      settle.start()
+    }
+  }
+}
