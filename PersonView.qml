@@ -182,12 +182,10 @@ Column {
   // popup closes because the card is what the person is looking at now. Adding
   // or re-recording an appearance on a Sudo person asks for the owner's password
   // like the toggle does -- the session's own prompt covers it (§5.2).
-  //
-  // Inside a surface host the recording is shown in place instead
-  // (FaceModel.showEnrol), and nothing closes.
+  // The notch's panel closes too: a scan is never drawn inside a host (polkit's
+  // dialog takes the focus the notch needs to stay open).
   function record(appearanceLabel) {
     if (!panel) return
-    if (panel.hosted === true && panel.showEnrol(view.name, appearanceLabel, view.label, false)) return
     panel.ask.ask(panel.ask.cardArgv(["record", view.name, String(appearanceLabel),
                                       view.label, ""]), "", function (result) {
       if (!result.ok) view.note = "The recording card could not be opened."

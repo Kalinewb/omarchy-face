@@ -43,13 +43,11 @@ Item {
   property string message: ""
   // foreground, secondary, accent (colours)
   property var colors: null
-  // Whether the hairline may run (a frame was accepted; the host sets it).
+  // Whether the hairline may run (a frame was accepted; the view sets it).
   property bool scanning: false
   // Counts accepted frames; the hairline re-arms on a change of this alone.
   property int scans: 0
   property bool reducedMotion: false
-  // Shrinks the whole ring (the notch gives a panel what height it has).
-  property real ringScale: 1
   // Round the preview/mask: true while something live is in the circle.
   property bool masked: false
 
@@ -63,8 +61,8 @@ Item {
 
   // 232 = 2 x (95 + 20 + 1): the done tick's outer end, plus a pixel.
   readonly property real full: 232
-  implicitWidth: full * ringScale
-  implicitHeight: full * ringScale
+  implicitWidth: full
+  implicitHeight: full
 
   readonly property bool active: phase === "centre" || phase === "lap1" || phase === "lap2" || phase === "trial"
   readonly property bool idle: phase === "idle"
@@ -129,7 +127,6 @@ Item {
     width: ring.full
     height: ring.full
     anchors.centerIn: parent
-    scale: ring.ringScale
 
     Repeater {
       model: Ring.TICKS

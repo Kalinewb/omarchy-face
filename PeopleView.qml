@@ -77,15 +77,13 @@ Column {
   // Hand the session to the Face service, which owns the recording card: it is
   // keepLoaded, so the card survives a plugins-folder reload, and it needs
   // exclusive keyboard focus, which a popup cannot give it (plan-gui.md §1).
-  // The popup closes, because the card is what the person is looking at now.
-  //
-  // Inside a surface host there is no window to put a card in, so the model
-  // shows the recording in place instead (FaceModel.showEnrol) and nothing
-  // closes.
+  // The popup closes, because the card is what the person is looking at now --
+  // and so does the notch's panel when it is the home: a scan is never drawn
+  // inside a host, because polkit's password dialog takes the focus the notch
+  // needs to stay open (plan-face-enroll.md doubt 11).
   function record(name, appearance, label, isNew) {
     if (!panel) return
     view.note = ""
-    if (panel.hosted === true && panel.showEnrol(name, appearance, label, isNew)) return
     panel.ask.ask(panel.ask.cardArgv(["record", String(name), String(appearance),
                                       String(label), isNew ? "new" : ""]), "",
       function (result) {

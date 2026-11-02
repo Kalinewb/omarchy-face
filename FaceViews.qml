@@ -9,7 +9,7 @@ import qs.Ui
 //
 // FacePanel.qml puts this inside the stock bar's popup and Surface.qml inside
 // the notch's panel; neither draws any of it. That is the point of the split --
-// the five views and the enrol view are written once, so the two homes cannot
+// the six views are written once, so the two homes cannot
 // drift (plan-face-enroll.md section 4). The home owns the window, the button
 // and the container animation; this owns the content and the keys.
 //
@@ -20,15 +20,6 @@ Item {
   id: root
 
   property var model: null
-
-  // Whether the home is showing the enrol view *now*. The recording view opens
-  // the RGB preview camera only while this is true (plan-face-enroll.md 6a.1):
-  // the card is on screen from the moment it exists; the notch's panel only
-  // while it is open, on its own screen. The home computes it.
-  property bool previewLive: false
-  // The most height the home will give the whole of this (the notch's
-  // `maxPanelHeight`); 0 when it is not limited. The enrol ring shrinks to fit.
-  property real maxHeight: 0
 
   // What the home hands the keyboard to.
   readonly property Item focusItem: keyCatcher
@@ -45,11 +36,11 @@ Item {
     anchors.fill: parent
 
     // Esc pops one view, and closes the popup only from the root view
-    // (plan-gui.md §2.2). The enrol view hands it to its session first.
+    // (plan-gui.md §2.2).
     onCloseRequested: if (root.model) root.model.back()
     onTabRequested: function (direction) { root.tabRequested(direction) }
     onReturnRequested: {
-      if (root.model && (root.model.view === "enrol" || root.model.view === "test") && body.item && body.item.activate)
+      if (root.model && root.model.view === "test" && body.item && body.item.activate)
         body.item.activate()
     }
 
@@ -115,7 +106,6 @@ Item {
                          : root.model.view === "person" ? personComponent
                          : root.model.view === "settings" ? settingsComponent
                          : root.model.view === "remove" ? removeComponent
-                         : root.model.view === "enrol" ? enrolComponent
                          : root.model.view === "test" ? testComponent
                          : setupComponent
           onLoaded: if (item && "panel" in item) item.panel = root.model
@@ -125,7 +115,7 @@ Item {
           textFormat: Text.PlainText
           width: parent.width
           topPadding: Style.space(2)
-          text: root.model ? (root.model.notice !== "" ? root.model.notice : root.model.chrome().hint) : ""
+          text: root.model ? root.model.chrome().hint : ""
           color: root.model ? root.model.dim : Commons.Color.muted
           font.family: root.model ? root.model.fontFamily : Style.font.family
           font.pixelSize: Style.font.caption
@@ -142,22 +132,4 @@ Item {
   Component { id: settingsComponent; SettingsView {} }
   Component { id: removeComponent;   RemoveView {} }
   Component { id: testComponent;     TestResultView {} }
-
-  // The enrol view, in place. Its session is the one the host's integration runs
-  // (FaceModel.enrolSession); its camera is fenced by `live`, which is true only
-  // while the home is showing the enrol view (6a.1). The palette is the model's,
-  // which is the host's inside a host.
-  Component {
-    id: enrolComponent
-    EnrolView {
-      session: root.model.enrolSession
-      colors: root.model
-      previewDevice: root.model.previewDevice
-      live: root.previewLive && root.model.view === "enrol"
-      maxHeight: root.maxHeight > 0 ? Math.max(0, root.maxHeight - Style.space(90)) : 0
-      notice: ""
-      recordedAppearances: root.model.enrol ? root.model.appearancesFor(root.model.enrol.name) : []
-      onCloseRequested: root.model.back()
-    }
-  }
 }

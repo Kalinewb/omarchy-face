@@ -7,11 +7,13 @@ import qs.Ui
 import "common"
 import "common/enrolring.js" as Ring
 
-// The enrol screen, in both homes (plan-face-enroll.md section 3): the ring around
-// the live circle, the line, the links. RecordCard.qml puts it in a window under
-// the stock bar; FaceViews.qml shows it in place inside the notch. It draws no
-// window, no background and no container animation, and it never reads
-// Commons.Color itself: the host gives it `colors` (foreground, secondary, accent, fontFamily, radiusFor, reducedMotion).
+// The enrol screen (plan-face-enroll.md section 3): the ring around the live
+// circle, the line, the links. RecordCard.qml puts it in its window under the
+// camera, in every home: a scan is never drawn inside the notch (Start brings up
+// polkit's password dialog, which takes the focus the notch needs to stay open;
+// the Phase 4 live gate, doubt 11). It draws no window, no background and no
+// container animation, and it takes its look from `colors` (foreground,
+// secondary, accent, urgent, fontFamily, radiusFor, reducedMotion), the card's.
 //
 // Everything about the scan is RecordSession.qml's (the state machine) and the
 // engine's (what is reached, filled, skipped); this file is what that looks like.
@@ -19,7 +21,7 @@ import "common/enrolring.js" as Ring
 // single-capture view it always had (RecordView.qml), drawn inside this one.
 //
 // This is the only file that names the RGB camera (RecordPreview.qml). The camera
-// exists only while `previewOn`: the host is showing this view AND the person has
+// exists only while `previewOn`: the card is showing this view AND the person has
 // pressed Start AND no verdict has come (plan-face-enroll.md 6a.1). In `idle`
 // there is no camera object at all.
 Item {
@@ -27,19 +29,16 @@ Item {
 
   property var session: null
   // foreground, secondary (or dim), accent, urgent, fontFamily, radiusFor(size),
-  // reducedMotion -- the card's, or the host's (FaceModel / surfaceHost).
+  // reducedMotion -- the card's (RecordCard.qml).
   property var colors: null
   // The RGB preview node from `omarchy-face-status` (`camera.rgb`), or "".
   property string previewDevice: ""
-  // The host is showing this view right now: the card while it is visible; the
-  // notch's panel while it is open, on its own screen, on the enrol view.
+  // The card is showing this view right now (its window is visible).
   property bool live: false
   property var appearanceLabels: ["No glasses", "Everyday glasses", "Reading glasses"]
   property var recordedAppearances: []
   // Something asked for root while this was up (Indicator.qml), as RecordView.
   property string notice: ""
-  // The most height the host will give; the ring shrinks to fit (circle >= 120 px).
-  property real maxHeight: 0
 
   signal closeRequested()
 
@@ -54,7 +53,7 @@ Item {
   readonly property string phase: view.session ? view.session.phase : "idle"
   readonly property string mode: view.session ? view.session.activeMode : "simple"
 
-  // --- the host's colours---------------------------------------------------------------
+  // --- the card's colours -------------------------------------------------------
   readonly property color fg: view.colors ? view.colors.foreground : Commons.Color.foreground
   readonly property color secondary: view.colors
       ? (view.colors.secondary !== undefined ? view.colors.secondary : view.colors.dim)
@@ -208,9 +207,6 @@ Item {
   }
 
   // --- the scan ---------------------------------------------------------------------
-  readonly property real chrome: Style.space(270)
-  readonly property real ringScale: view.maxHeight > 0
-      ? Math.max(0.75, Math.min(1, (view.maxHeight - view.chrome) / 232)) : 1
   property bool tilted: false
 
   Column {
@@ -262,7 +258,6 @@ Item {
         scanning: !!view.session && view.session.trackState === view.session.acceptedWord
         scans: view.session ? view.session.acceptedFrames : 0
         reducedMotion: view.reduced
-        ringScale: view.ringScale
         masked: previewLoader.active
 
         // The face glyph in its dotted ring, and nothing live: no camera object.

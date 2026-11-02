@@ -28,8 +28,8 @@ Item {
   id: root
 
   // The home this model lives in. `hosted` is true only inside a surface host's
-  // panel: colours then come from `surfaceHost`, and a request to record a face
-  // pushes the enrol view in place instead of asking the service for a card.
+  // panel: colours then come from `surfaceHost`, and a test is shown in place
+  // instead of in the service's card window.
   property bool hosted: false
   property var bar: null
   property var surfaceHost: null
@@ -60,10 +60,6 @@ Item {
   readonly property color accent: inHost ? surfaceHost.accent : Commons.Color.accent
   readonly property color urgent: inHost ? surfaceHost.accent : Commons.Color.urgent
   readonly property color dim: inHost ? surfaceHost.secondary : Qt.darker(foreground, 1.55)
-  // The enrol view's names for the same roles (plan-face-enroll.md section 3).
-  readonly property color secondary: dim
-  readonly property bool reducedMotion: Quickshell.env("OMARCHY_REDUCED_MOTION") === "1"
-                                        || Quickshell.env("NOTCH_REDUCED_MOTION") === "1"
   readonly property string fontFamily: inHost ? surfaceHost.fontFamily
                                      : (bar ? bar.fontFamily : Style.font.family)
 
@@ -272,9 +268,9 @@ Item {
     var v = String(viewName || "")
     var who = String(name || "")
     if (v !== "" && root.viewChrome[v] === undefined) return "unknown view: " + v
-    // The enrol view needs a person, an appearance and a label, which a view
-    // name and one string cannot carry: it is reached through showEnrol().
-    if (v === "enrol" || v === "test") return "unknown view: " + v
+    // The test view needs a person and a label, which a view name and one
+    // string cannot carry: it is reached through showTest().
+    if (v === "test") return "unknown view: test"
     if (v === "person" && who === "") {
       // A person view with no person is a page that can only say "No such
       // person: ". Open the popup where it was and say why, rather than
@@ -352,10 +348,6 @@ Item {
                   hint: "esc goes back" },
     "remove":   { title: "Remove Face",  meta: "What would be taken off this machine",
                   hint: "esc goes back" },
-    // Pushed in place by showEnrol(); only the hosted home ever shows it (the
-    // stock bar's popup hands a recording to the service's card instead).
-    "enrol":    { title: "",             meta: "Look at the camera",
-                  hint: "esc closes · nothing is saved until you finish" },
     // Pushed in place by showTest(), hosted only: the stock popup has the
     // service's card for it.
     "test":     { title: "",             meta: "Does it recognise them now?",
@@ -374,7 +366,6 @@ Item {
   }
 
   function viewTitle() {
-    if (root.view === "enrol" && root.enrol) return String(root.enrol.label || root.enrol.name)
     if (root.view === "test" && root.testRequest) return String(root.testRequest.label || root.testRequest.name)
     return root.view === "person" && root.personName !== "" ? root.personName : root.chrome().title
   }
@@ -518,73 +509,16 @@ Item {
     root.resumeWord = ""
   }
 
-  // --- recording a face (the hosted home) -------------------------------------
+  // --- recording a face ------------------------------------------------------------
   //
-  // The stock bar's popup asks the Face service for a card (PeopleView.record,
-  // PersonView.record). Inside a host there is no window to put a card in, so
-  // the same call lands here instead and the views show the recording in place:
-  // `enrol` holds who and which appearance, `enrolSession` is the session the
-  // host's integration runs for it (Surface.qml creates and destroys it).
-  property var enrol: null
-  property var enrolSession: null
-
-  // The RGB node the preview draws, from the status document. "" on a laptop
-  // with none. A read: asking for it opens nothing.
-  readonly property string previewDevice: status && status.camera && status.camera.rgb
-                                          ? String(status.camera.rgb) : ""
-
-  // Which appearances `name` already has a recording for, as the picker marks
-  // them (the Face service reads the same file for the card).
-  function appearancesFor(name) {
-    var who = String(name || "")
-    if (who === "") return []
-    var list = root.people && Array.isArray(root.people.people) ? root.people.people : []
-    for (var i = 0; i < list.length; i++) {
-      if (!list[i] || String(list[i].name) !== who) continue
-      var found = Array.isArray(list[i].appearances) ? list[i].appearances : []
-      var labels = []
-      for (var j = 0; j < found.length; j++)
-        if (found[j] && found[j].label !== undefined) labels.push(String(found[j].label))
-      return labels
-    }
-    return []
-  }
-
-  // How many templates `name`'s appearance `label` already holds (people.json
-  // `templates`); 0 when there is none. Rule R: Simple may not shrink a set.
-  function templatesFor(name, label) {
-    var who = String(name || "")
-    var list = root.people && Array.isArray(root.people.people) ? root.people.people : []
-    for (var i = 0; i < list.length; i++) {
-      if (!list[i] || String(list[i].name) !== who) continue
-      var found = Array.isArray(list[i].appearances) ? list[i].appearances : []
-      for (var j = 0; j < found.length; j++)
-        if (found[j] && String(found[j].label) === String(label)) return Number(found[j].templates) || 1
-    }
-    return 0
-  }
-
-  // A line for the view the person lands on after a scan that saved nothing,
-  // gone after 600 ms (plan-face-enroll.md section 3, Phases). One-shot.
-  property string notice: ""
-  function flash(text) {
-    root.notice = String(text)
-    flashTimer.restart()
-  }
-  Timer { id: flashTimer; interval: 600; onTriggered: root.notice = "" }
-
-  // True when the request was taken. Outside a host it is not, and the caller
-  // carries on with the service's card.
-  function showEnrol(name, appearance, label, isNew) {
-    if (!root.hosted || String(name || "") === "") return false
-    root.enrol = { name: String(name), appearance: String(appearance || "No glasses"),
-                   label: String(label || name), isNew: !!isNew }
-    if (root.view !== "enrol") root.pushView("enrol")
-    return true
-  }
+  // A scan is never drawn inside a host: Start brings up polkit's password dialog,
+  // the notch loses focus to it and collapses, and the scan dies with it (the Phase 4
+  // live gate, plan-face-enroll.md doubt 11). So in every home the views hand the
+  // recording to the Face service, which owns the standalone card (RecordCard.qml,
+  // a window of its own), and close this panel (PeopleView.record, PersonView.record).
 
   // Test, in place (plan-gui.md section 5.2): the check and its answer are a view
-  // of this home, not a window drawn over it. Hosted only, as showEnrol is; the
+  // of this home, not a window drawn over it. Hosted only; the
   // stock popup asks the service for its card.
   property var testRequest: null
 
@@ -595,21 +529,11 @@ Item {
     return true
   }
 
-  // Leaving the enrol view drops what it was for; whoever owns the session
-  // (the host's integration) watches `view` and ends it.
-  onViewChanged: {
-    if (view !== "enrol") root.enrol = null
-    if (view !== "test") root.testRequest = null
-  }
+  // Leaving the test view drops what it was for (its check stops with the view).
+  onViewChanged: if (view !== "test") root.testRequest = null
 
-  // Esc, in either home. The enrol view hands it to the session first, which
-  // decides between discarding and finishing (RecordSession.requestClose);
-  // every other view goes back one step and the root view closes.
+  // Esc, in either home: back one step, and close from the root view.
   function back() {
-    if (root.view === "enrol" && root.enrolSession) {
-      root.enrolSession.requestClose()
-      return
-    }
     if (root.viewStack.length > 1) root.navBack()
     else root.closeRequested()
   }
@@ -620,23 +544,6 @@ Item {
   function applyRoute(route) {
     var parsed = Route.parse(route)
     if (parsed === null) return "bad route: " + String(route)
-    if (parsed.view === "enrol")
-      return root.showEnrolAt(parsed) ? "ok" : "enrol needs a person"
     return root.openAt(parsed.view, parsed.name)
   }
-
-  // An `enrol` route from outside: the base is Setup, so Back and Esc have a
-  // place to go, exactly as openWithBase does for the other views.
-  function showEnrolAt(parsed) {
-    if (!root.hosted) return false
-    // The host calls open() for a route more than once while it loads the
-    // panel; the same request again must not tear down a session that is
-    // already running for it.
-    var now = root.enrol
-    if (root.view === "enrol" && now && now.name === parsed.name && now.appearance === parsed.appearance
-        && now.label === parsed.label && now.isNew === parsed.isNew) return true
-    root.resetView("setup")
-    return root.showEnrol(parsed.name, parsed.appearance, parsed.label, parsed.isNew)
-  }
-
 }

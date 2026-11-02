@@ -221,16 +221,6 @@ Item {
   Timer { id: testSafety; interval: root.testSafetyMs; onTriggered: root.closeTest() }
   Timer { id: testDismiss; interval: root.testDismissMs; onTriggered: root.closeTest() }
 
-  // `record` goes to the notch's panel when a notch is there to take it, and to
-  // the card otherwise (NotchRoute.qml has the rules).
-  NotchRoute {
-    id: notch
-    onCardRequested: function (name, appearance, label, isNew) {
-      root.openCard(name, appearance, label, isNew)
-    }
-  }
-
-
   // The preview device first, then the card: a card that opened before the read
   // answered would show "no preview on this laptop" for a second on a laptop
   // that has one.
@@ -272,7 +262,8 @@ Item {
       // a recording of another (plan-engine.md §12 risk 9). The same name is
       // the card that is already on screen, so it answers ok.
       if (root.card) return root.cardName === who ? "ok" : "busy"
-      return notch.record(who, appearance, label, fresh)
+      root.openCard(who, appearance, label, fresh)
+      return "ok"
     }
 
     // "Test — does it recognise Anna now?" (plan-gui.md §5.2).
@@ -316,11 +307,8 @@ Item {
         duties: (root.card ? ["record"] : [])
           .concat(root.testCard ? ["test"] : [])
           .concat(indicator.visibleNow ? ["indicator"] : []),
-        // The recording asked of the notch and not yet seen on screen (""
-        // when none), and the preview node a card would use. Both exist so a
-        // test can tell "the notch has it" from "the card is coming" and can
-        // prove the card is not given a camera in a sandbox.
-        notch: notch.notchPending ? notch.notchPending.name : "",
+        // The preview node a card would use, so a test can prove the card is not
+        // given a camera in a sandbox.
         previewDevice: root.previewDevice,
         // The lock duties have no window and no card, so this is the only way a
         // test can watch them: which phase the shell-start sequence reached, and

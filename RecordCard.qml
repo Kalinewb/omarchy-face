@@ -16,8 +16,12 @@ import "common/spring.js" as Spring
 //
 // This file is the window around the enrol view. What is inside it -- the ring,
 // the line, the links, and on an old helper the single capture's picker and
-// buttons -- is EnrolView.qml, which the notch shows in place when it is the
-// host; every decision about the session is in RecordSession.qml.
+// buttons -- is EnrolView.qml. This window is where every scan lives, whichever
+// home asked for it: Start brings up polkit's password dialog, and a scan drawn
+// inside the notch's panel died with the panel when the notch lost focus to it
+// (Phase 4's live gate). The card has no focus-loss handling of its own and
+// closes only on Esc, Cancel, a click on the scrim, Done or the session ending.
+// Every decision about the session is in RecordSession.qml.
 PanelWindow {
   id: card
 

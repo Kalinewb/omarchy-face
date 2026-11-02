@@ -94,12 +94,10 @@ Panel {
   // --- the press, and the IPC's open(), under the notch -------------------------
 
   // The route a (view, name) pair names, or "" for none (an unknown view, a
-  // person with no name, and `enrol`, which only the views themselves reach).
-  // An empty view is "just open, wherever the button points".
+  // person with no name). An empty view is "just open, wherever the button points".
   function routeFor(viewName, name) {
     var v = String(viewName || "")
     if (v === "") return root.barTarget
-    if (v === "enrol") return ""
     return Route.build(v, { name: String(name || "") })
   }
 
@@ -253,9 +251,6 @@ Panel {
       id: views
       anchors.fill: parent
       model: faceModel
-      // The popup never shows the enrol view (a recording is the service's
-      // card here), so the camera has no business with this home.
-      previewLive: false
       onTabRequested: function (direction) { root.switchPanel(direction) }
     }
   }

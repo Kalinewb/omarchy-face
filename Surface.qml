@@ -1,19 +1,23 @@
 import QtQuick
 import Quickshell
-import Quickshell.Io
 import qs.Commons
 
 // What Face gives a surface host (today: kalinewb.notch). Contract 1.
 //
-// One panel serves every Face route -- setup, people, person:<name>, settings,
-// remove and enrol:... -- and it is the stock popup's own views (FaceViews.qml)
-// on the host's colours, radius and surface. Face stays fully usable without a
-// host: nothing here is needed by the popup, and the widget opens the popup
+// One panel serves every Face route -- setup, people, person:<name>, settings
+// and remove -- and it is the stock popup's own views (FaceViews.qml) on the
+// host's colours, radius and surface. A scan is not one of them: Start brings up
+// polkit's password dialog, the notch loses focus to it and collapses, and the
+// scan dies with it (the Phase 4 live gate, plan-face-enroll.md doubt 11). So the
+// Scan buttons hand the recording to the Face service's standalone card
+// (RecordCard.qml, a window of its own) and close this panel.
+//
+// Face stays fully usable without a host: nothing here is needed by the popup, and the widget opens the popup
 // itself whenever the host does not say `opened` (FacePanel.qml).
 //
 // It exists once, however many monitors there are (SURFACE-HOSTING section 2),
 // so everything with a cost is here and not in the panel, which is created once
-// per screen: the one FaceModel, and the one enrolment session.
+// per screen: the one FaceModel.
 //
 // No IpcHandler (the widget owns `kalinewb.face`, the service
 // `kalinewb.face.card`), no window, and no write under
@@ -72,7 +76,7 @@ Item {
       }
 
       // The host tells the panel it closed before it takes the surface back;
-      // anything running on this panel's behalf stops here.
+      // a check running in the Test view stops here.
       function close() { surface.panelClosed() }
 
       // What the notch gives a panel is its own size and nothing else: its slot
@@ -98,10 +102,6 @@ Item {
         anchors.margins: hosted.inset
         model: faceModel
         focus: true
-        // The camera is allowed only here: this panel is open, on its screen,
-        // and showing the enrol view (RecordView also asks for the view itself).
-        previewLive: hosted.mine
-        maxHeight: hosted.maxHeight - 2 * hosted.inset
       }
 
       Connections {
@@ -124,156 +124,8 @@ Item {
     if (word !== "ok") console.warn("kalinewb.face", "panel route not applied:", word)
   }
 
-  // --- the one enrolment session -------------------------------------------------
-  //
-  // Created when the enrol view is on screen with a request behind it, and ended
-  // by anything else: the view popping, a route to another view, the panel
-  // closing, this file being unloaded (the user switching the integration off).
-  // Ending it means EOF to the root session -- discard, nothing written -- and
-  // never a commit (RecordSession.discard).
-
-  property var session: null
-  property string sessionKey: ""
-  property bool ending: false
-
-  function keyOf(request) {
-    return request ? [request.name, request.appearance, request.label, request.isNew].join("\u0001") : ""
-  }
-
-  // Read from the model, not from a binding on it: this runs inside the model's
-  // own change signals, where a binding that depends on the same property may
-  // not have been told yet.
-  function syncSession() {
-    var request = faceModel.enrol
-    if (!faceModel.opened || faceModel.view !== "enrol" || request === null) { surface.endSession(); return }
-    var key = surface.keyOf(request)
-    if (surface.session && surface.sessionKey === key) return
-    surface.endSession()
-    var made = sessionComponent.createObject(surface, {
-      name: request.name,
-      appearance: request.appearance,
-      label: request.label,
-      isNew: request.isNew,
-      ask: faceModel.ask,
-      scan: true,
-      stored: faceModel.templatesFor(request.name, request.appearance)
-    })
-    if (!made) return
-    surface.session = made
-    surface.sessionKey = key
-    faceModel.enrolSession = made
-    made.finished.connect(function (saved) { surface.sessionFinished(made, saved) })
-  }
-
-  function endSession() {
-    if (surface.ending) return
-    surface.ending = true
-    var going = surface.session
-    surface.session = null
-    surface.sessionKey = ""
-    faceModel.enrolSession = null
-    if (going) {
-      if (going.running) going.discard()
-      going.destroy()
-    }
-    surface.ending = false
-  }
-
-  // A session that ended by itself: saved, discarded, or expired. Saved goes to
-  // the person it recorded (after the read the popup's handoff does, so the
-  // count shown is the new one); anything else goes back one step.
-  function sessionFinished(which, saved) {
-    if (which !== surface.session) return
-    var who = faceModel.enrol ? faceModel.enrol.name : ""
-    surface.endSession()
-    if (saved && who !== "") faceModel.openAt("person", who)
-    else { faceModel.navBack(); faceModel.flash("Nothing was saved") }
-  }
-
-  // The panel closed. A session is never kept for a panel nobody is looking at,
-  // and the view is not left on a recording that no longer exists.
+  // The panel closed. The view is not left on a check that no longer runs.
   function panelClosed() {
-    surface.endSession()
-    if (faceModel.view === "enrol" || faceModel.view === "test") faceModel.navBack()
-  }
-
-  Connections {
-    target: faceModel
-    function onEnrolChanged() { surface.syncSession() }
-    function onViewChanged() { surface.syncSession() }
-    function onOpenedChanged() { surface.syncSession() }
-  }
-
-  Component { id: sessionComponent; RecordSession {} }
-
-  // --- "enrol started" (plan-face-enroll.md section 4.6) --------------------------
-  //
-  // The Face service, outside the shell, asked the host to open the enrol route.
-  // The host's answer is a forgeable file, so `opening` proves nothing; this is
-  // what does: this file, in the shell itself, says `open` only while the enrol
-  // view is actually on screen, every second, and `closed` when it leaves. The
-  // service reads it and opens the card if it does not appear (Service.qml). The
-  // same file is the busy flag across the two homes.
-  readonly property bool shown: !!surface.surfaceHost && surface.surfaceHost.panelOpen
-                                && faceModel.view === "enrol" && faceModel.enrol !== null
-  // OMARCHY_FACE_DEV_RUNTIME stands in for $XDG_RUNTIME_DIR in tests (Service.qml).
-  readonly property string runtimeDir: Quickshell.env("OMARCHY_FACE_DEV_RUNTIME")
-                                       || Quickshell.env("XDG_RUNTIME_DIR") || ""
-  readonly property string flagDir: runtimeDir !== "" ? runtimeDir + "/kalinewb.face" : ""
-  property string flagQueued: ""
-
-  function flagText(open) {
-    return JSON.stringify({ state: open ? "open" : "closed",
-                            name: open && faceModel.enrol ? faceModel.enrol.name : "",
-                            at: Date.now() })
-  }
-
-  // FileView will not create the folder, so make it first; the write then goes
-  // through FileView's atomic rename.
-  function writeFlag(open) {
-    if (surface.flagDir === "") return
-    surface.flagQueued = surface.flagText(open)
-    makeFlagDir.running = true
-  }
-
-  onShownChanged: surface.writeFlag(surface.shown)
-
-  Timer {
-    interval: 1000
-    repeat: true
-    running: surface.shown
-    onTriggered: surface.writeFlag(true)
-  }
-
-  Process {
-    id: makeFlagDir
-    command: ["mkdir", "-p", surface.flagDir]
-    onExited: function (code) {
-      if (code === 0 && surface.flagQueued !== "") flagFile.setText(surface.flagQueued)
-      surface.flagQueued = ""
-    }
-  }
-
-  FileView {
-    id: flagFile
-    path: surface.flagDir !== "" ? surface.flagDir + "/enrol.json" : ""
-    atomicWrites: true
-    // Only ever written here; the read Qt tries first fails until the first one.
-    printErrors: false
-  }
-
-  // The last word, written synchronously: the integration being switched off or
-  // the shell reloading must not leave `open` behind for the service to trust.
-  FileView {
-    id: lastFile
-    path: surface.flagDir !== "" ? surface.flagDir + "/enrol.json" : ""
-    atomicWrites: true
-    printErrors: false
-    blockWrites: true
-  }
-
-  Component.onDestruction: {
-    surface.endSession()
-    if (surface.flagDir !== "") lastFile.setText(surface.flagText(false))
+    if (faceModel.view === "test") faceModel.navBack()
   }
 }

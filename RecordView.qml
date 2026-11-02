@@ -5,10 +5,8 @@ import qs.Ui
 
 // What the recording card shows, without the card: the title, the preview in its
 // oval, the line saying what is happening, the appearance picker and the
-// buttons. It is the single-capture enrol view (plan-gui.md §5.3) and it is the
-// same item in both homes of Face's UI -- EnrolView.qml draws it inside whichever home
-// it is in (the card's window under the stock bar, the notch's panel) --
-// so the two cannot drift apart.
+// buttons. It is the single-capture enrol view (plan-gui.md §5.3); EnrolView.qml
+// draws it inside the recording card (RecordCard.qml).
 //
 // Every decision about the session is in RecordSession.qml; this file is what
 // that state machine looks like.
@@ -19,9 +17,8 @@ import qs.Ui
 Item {
   id: view
 
-  // The session this view draws. Created by the owner (the Face service for the
-  // card, the notch integration for the panel) so the view can be shown on a
-  // session that is already running, and on none yet.
+  // The session this view draws. Created by the owner (the Face service) so
+  // the view can be shown on a session that is already running, and on none yet.
   property var session: null
   property string fontFamily: Style.font.family
   // The preview, given by EnrolView.qml and nobody else: the only file that names
@@ -36,8 +33,7 @@ Item {
   // person view.
   property var appearanceLabels: ["No glasses", "Everyday glasses", "Reading glasses"]
 
-  // The palette: the card's (white on its black scrim) by default, the host's
-  // inside a host.
+  // The palette: the card's (white on its black scrim) by default.
   property color foreground: "white"
   property color dim: Qt.rgba(1, 1, 1, 0.6)
   property color urgent: "#ff6b6b"
