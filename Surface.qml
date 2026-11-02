@@ -75,8 +75,19 @@ Item {
       // anything running on this panel's behalf stops here.
       function close() { surface.panelClosed() }
 
-      implicitWidth: Math.min(hosted.maxWidth, Style.space(320))
-      implicitHeight: Math.min(hosted.maxHeight, views.contentHeight)
+      // What the notch gives a panel is its own size and nothing else: its slot
+      // for an integration (ExpandedHost) is exactly implicitWidth x implicitHeight,
+      // with no margin, and `maxWidth` is already net of the notch's side padding.
+      // The old path (hostedPanels) put the stock panel's content in a slot with a
+      // margin of `notchSidePadding` (Style.space(14), Bar.qml) on every side, and
+      // the stock popup pads its content by Style.spacing.popupPadding (also 14),
+      // so the panel adds it itself, on every side, inside its implicit size:
+      // content against the edge and a header glyph under the notch's rounded
+      // corner are what it looks like without. The content is Style.space(320)
+      // wide, as before.
+      readonly property real inset: Style.space(14)
+      implicitWidth: Math.min(hosted.maxWidth, Style.space(320) + 2 * hosted.inset)
+      implicitHeight: Math.min(hosted.maxHeight, views.contentHeight + 2 * hosted.inset)
 
       focus: true
       Keys.onEscapePressed: faceModel.back()
@@ -84,12 +95,13 @@ Item {
       FaceViews {
         id: views
         anchors.fill: parent
+        anchors.margins: hosted.inset
         model: faceModel
         focus: true
         // The camera is allowed only here: this panel is open, on its screen,
         // and showing the enrol view (RecordView also asks for the view itself).
         previewLive: hosted.mine
-        maxHeight: hosted.maxHeight
+        maxHeight: hosted.maxHeight - 2 * hosted.inset
       }
 
       Connections {
@@ -182,7 +194,7 @@ Item {
   // and the view is not left on a recording that no longer exists.
   function panelClosed() {
     surface.endSession()
-    if (faceModel.view === "enrol") faceModel.navBack()
+    if (faceModel.view === "enrol" || faceModel.view === "test") faceModel.navBack()
   }
 
   Connections {

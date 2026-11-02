@@ -5,6 +5,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "common/spring.js" as Spring
+import "common/testverdict.js" as Verdict
 
 // The Test card (plan-gui.md §5.2): "does it recognise Anna now?" -- a small
 // card under the webcam while `omarchy-face-identity verify <name>` runs, and
@@ -61,18 +62,7 @@ PanelWindow {
 
   // The copy of plan-gui.md §5.2, verbatim, as a property so a test can ask for
   // it without a screen.
-  readonly property string headline: {
-    if (card.phase !== "done") return "Look at the camera"
-    if (card.code === 0) return "Recognised " + card.who
-    if (card.code === 1) return "Did not recognise " + card.who
-    if (card.code === 2) return card.who + " is not set up"
-    if (card.code === 4) return "Checked too recently — try again in a moment"
-    if (card.code === 3) return "Face ID cannot check right now"
-    // Anything else is the helper not having run at all -- 126/127 from the
-    // launcher, or a code this version does not know. It is not an answer about
-    // a person, so it never reads like one.
-    return "Face ID cannot check right now"
-  }
+  readonly property string headline: Verdict.headline(card.phase, card.code, card.who)
 
   readonly property bool good: card.phase === "done" && card.code === 0
   readonly property bool bad: card.phase === "done" && card.code === 1
@@ -169,7 +159,7 @@ PanelWindow {
       Text {
         textFormat: Text.PlainText
         anchors.horizontalCenter: parent.horizontalCenter
-        text: card.good ? "✓" : card.bad ? "✕" : "\u{f0643}"
+        text: Verdict.glyph(card.phase, card.code)
         color: card.bad ? Commons.Color.polkit.textError : Commons.Color.polkit.accent
         font.family: card.fontFamily
         font.pixelSize: Style.font.display * 1.4
@@ -191,9 +181,7 @@ PanelWindow {
       Text {
         textFormat: Text.PlainText
         width: parent.width
-        text: card.phase === "done"
-              ? "Nothing was unlocked — this was only a test."
-              : "Checking who is in front of the camera."
+        text: Verdict.subline(card.phase)
         color: Commons.Color.muted
         font.family: card.fontFamily
         font.pixelSize: Style.font.caption

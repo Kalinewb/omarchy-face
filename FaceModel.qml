@@ -274,7 +274,7 @@ Item {
     if (v !== "" && root.viewChrome[v] === undefined) return "unknown view: " + v
     // The enrol view needs a person, an appearance and a label, which a view
     // name and one string cannot carry: it is reached through showEnrol().
-    if (v === "enrol") return "unknown view: enrol"
+    if (v === "enrol" || v === "test") return "unknown view: " + v
     if (v === "person" && who === "") {
       // A person view with no person is a page that can only say "No such
       // person: ". Open the popup where it was and say why, rather than
@@ -355,7 +355,11 @@ Item {
     // Pushed in place by showEnrol(); only the hosted home ever shows it (the
     // stock bar's popup hands a recording to the service's card instead).
     "enrol":    { title: "",             meta: "Look at the camera",
-                  hint: "esc closes · nothing is saved until you finish" }
+                  hint: "esc closes · nothing is saved until you finish" },
+    // Pushed in place by showTest(), hosted only: the stock popup has the
+    // service's card for it.
+    "test":     { title: "",             meta: "Does it recognise them now?",
+                  hint: "esc stops the check and goes back" }
   })
 
   function chrome() {
@@ -371,6 +375,7 @@ Item {
 
   function viewTitle() {
     if (root.view === "enrol" && root.enrol) return String(root.enrol.label || root.enrol.name)
+    if (root.view === "test" && root.testRequest) return String(root.testRequest.label || root.testRequest.name)
     return root.view === "person" && root.personName !== "" ? root.personName : root.chrome().title
   }
 
@@ -578,9 +583,24 @@ Item {
     return true
   }
 
+  // Test, in place (plan-gui.md section 5.2): the check and its answer are a view
+  // of this home, not a window drawn over it. Hosted only, as showEnrol is; the
+  // stock popup asks the service for its card.
+  property var testRequest: null
+
+  function showTest(name, label) {
+    if (!root.hosted || String(name || "") === "") return false
+    root.testRequest = { name: String(name), label: String(label || name) }
+    if (root.view !== "test") root.pushView("test")
+    return true
+  }
+
   // Leaving the enrol view drops what it was for; whoever owns the session
   // (the host's integration) watches `view` and ends it.
-  onViewChanged: if (view !== "enrol") root.enrol = null
+  onViewChanged: {
+    if (view !== "enrol") root.enrol = null
+    if (view !== "test") root.testRequest = null
+  }
 
   // Esc, in either home. The enrol view hands it to the session first, which
   // decides between discarding and finishing (RecordSession.requestClose);

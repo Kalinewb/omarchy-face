@@ -206,6 +206,9 @@ Column {
   function test() {
     if (!panel) return
     view.note = ""
+    // Inside a host there is no window to put the card in, and a card over the
+    // panel lands on the rows below it: the check is a view of this home.
+    if (panel.hosted === true && panel.showTest(view.name, view.shown)) return
     panel.ask.ask(panel.ask.cardArgv(["testMatch", view.name]), "", function (result) {
       if (!result.ok) { view.note = "The test card could not be opened."; return }
       if (String(result.stdout || "").trim() === "busy")

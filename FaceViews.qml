@@ -49,7 +49,7 @@ Item {
     onCloseRequested: if (root.model) root.model.back()
     onTabRequested: function (direction) { root.tabRequested(direction) }
     onReturnRequested: {
-      if (root.model && root.model.view === "enrol" && body.item && body.item.activate)
+      if (root.model && (root.model.view === "enrol" || root.model.view === "test") && body.item && body.item.activate)
         body.item.activate()
     }
 
@@ -116,6 +116,7 @@ Item {
                          : root.model.view === "settings" ? settingsComponent
                          : root.model.view === "remove" ? removeComponent
                          : root.model.view === "enrol" ? enrolComponent
+                         : root.model.view === "test" ? testComponent
                          : setupComponent
           onLoaded: if (item && "panel" in item) item.panel = root.model
         }
@@ -140,6 +141,7 @@ Item {
   Component { id: personComponent;   PersonView {} }
   Component { id: settingsComponent; SettingsView {} }
   Component { id: removeComponent;   RemoveView {} }
+  Component { id: testComponent;     TestResultView {} }
 
   // The enrol view, in place. Its session is the one the host's integration runs
   // (FaceModel.enrolSession); its camera is fenced by `live`, which is true only
