@@ -91,7 +91,7 @@ No mode, lap or target list is written to a record. Root has no code that opens 
 (`real_root()`: effective uid 0 and an identity `/proc/self/uid_map`; unreadable counts as real root), while the sandbox's root, a user-namespace root with a non-identity map, may use it.
 That is how `e1` runs the same code path in three seconds as in sixty. The plan names only the clamp; the root exclusion is the brief's, adapted so the sandbox can still use it.
 The child reads no environment: it is handed the clamped numbers as argv. pkexec drops the caller's environment anyway.
-`OMARCHY_FACE_SESSION_SECONDS` keeps its old behaviour (and now scales the scan bound to twice the plain one, so a test can watch a sweep outlive one and stop at the other).
+`OMARCHY_FACE_SESSION_SECONDS` keeps its old behaviour (it used to scale a 600 s scan bound too; that bound is gone, see "After SR1" below).
 Tested: `e1` unit (`1e9`, `NaN`, `inf`, `-1`, `-inf`, `0`, `abc` and empty lengthen nothing; `real_root()` true ignores it) and the session-bound step.
 
 **8. The legacy `capture` verb.**
@@ -122,9 +122,9 @@ the store program refuses (`engine_missing`).
 - **`pick`, caps and determinism:** `pick` itself is unchanged from Phase 1 and tested in `e0`; this phase makes `model_entries` use it (per person, under that person's cap,
   centres first in stored order, so a record without extras regenerates byte-for-byte: `f3`'s regenerate checks and `e1` "regenerate is byte-identical").
 - **`warning_for`** now takes the people, warns only when one sudo person's templates in the Sudo set exceed the default 4 (needs a deliberate `set-limits`).
-  `f3` was edited for it: five faces across three people no longer warn.
+  `f3` was edited for it: five faces across three people no longer warn. With `SUDO_POLICY = "centre"` (below) it cannot fire at all, because Sudo has only centres.
 - **Camera lock:** the whole lap holds `camera_lock()`; a busy camera is `camera_busy`.
-- **600 s:** `SESSION_SCAN_SECONDS`, from `ready`, applies from the first accepted `sweep`; idle stays 120 s and restarts after each handled command.
+- **600 s:** gone (SR1 S2, below). The whole-session bound stays 300 s from `ready`; idle stays 120 s and restarts after each handled command.
 
 ## Plan points that were unspecified, and what I chose (the reviewer should know)
 
@@ -134,3 +134,41 @@ the store program refuses (`engine_missing`).
 3. `limits` in `ready` is `{lock, sudo}` (the person's in-effect caps, or the defaults for a new person).
 4. A target skipped by patience is announced through `track.skipped` only; the child sends no separate event.
 5. The Simple lap's ceiling is rule L's: three filled and one unresolved saves, one filled is `too_few`. A Simple user at 60 s with the centre and one target loses the lap.
+
+## After SR1 (version 3.1.0): what changed, per finding
+
+`review-face-enroll-SR1.md` found one install blocker, two required changes, a stderr/path leak and some minors. All of it is in `system/omarchy-face-admin` unless named.
+
+**B1, version.** The system half and the plugin are bumped together to **3.1.0** (as 3.0.0 did): the `omarchy-face-version` header of the ten pinned files and `system/install.sh`,
+`common/Ask.qml` `systemVersion`, `manifest.json`, the four `bin/` markers. 2.1.0 and 2.2.0 changed only the plugin and left the system half at 2.0.4; this release changes the system half,
+so both move. `dev/update-pins.sh` rewrote the pins, `install.sh.sha256` and the README command. `dev/check-pins.sh` exits 0 and prints the note that `v3.1.0` is not tagged yet (a note, not an error).
+**Not tagged.** `dev/g10-rename.sh` asserted `kalinewb.face 3.0.0` after `install.sh`; it now reads the version from `manifest.json`.
+
+**S1, rule F.** `judge()` now takes the pending centre (lap 2: `captured[label]["encoding"]`; lap 1: the child's own, after the 128-finite check) and drops the lap (`timeout`) unless every template
+is within `HARD` of that centre and has `R_MIN <= r <= R_MAX`; lap 2 with no usable held centre is dropped. It still does not re-check `CHAIN` (nearest accepted template), which the child's order of capture makes
+awkward to reproduce from an unordered list; a connectivity check over the centre and templates is possible and was not added. Tested: `e1` unit (boundary 0.55 / 0.5501, r 1.0 / 2.2 / 0.99 / 2.21 / 3.9 / 4, NaN,
+lap 2 with a missing, short and far centre) and end to end through the real parent with a patched copy of the helper whose child guard passes everything (a stranger's four templates in lap 1, a stranger's lap 2)
+or reports r 3.9: all three dropped; before the fix the first two were saved (checked against the previous `judge`).
+
+**S2, 600 s.** Dropped: no sweep lengthens the session. `SESSION_SCAN_SECONDS` and the `ends_at` reset are removed, `session_bounds()` returns two numbers. Two Advanced laps are at most 180 s inside the 300 s. The credit formula
+for when `trial` and `usual` need more time is in the comment next to `SESSION_SECONDS` (`ends_at = began + 300 + min(camera seconds actually used, 300)`). Tested: `e1` session-bound step (a sweep sent at once or at 3 s of a 4 s session buys nothing; an abort inside the bound works).
+
+**S4, stderr and paths.** The child's stderr goes to `logger -t omarchy-face-sweep` (the journal), never to the helper's stderr; `DEVNULL` if `logger` cannot start. A session `error` event carries the code only: the record path of
+`store_corrupt` goes to the journal (`audit`); the other verbs still answer with `file`. Tested: `e1` (a child patched to write a path and a traceback to stderr; a corrupt record's session error has the one key set and no path).
+
+**m1, camera lock in the child.** The lock fd is passed to the child (`pass_fds`), and the parent now only *closes* its copy after killing the group: `LOCK_UN` would release the lock for the child's copy of the same open file.
+A wedged child or a SIGKILLed parent now keeps the lock while the sensor is open, as the daemon does for `compare.py`. Tested: the child and its `timeout` hold the lock file open while a lap runs, and the lock is free afterwards.
+
+**m2.** `RecursionError` is caught with `ValueError` at all three `json.loads` of client or child lines: a 60,000-bracket line is "not JSON", the session continues (tested, in `ready` and during a scan).
+**m5.** An invalid or missing label on a `sweep` is `bad_sweep`; `capture` still ends the session on a bad label, as before (tested: four more hostile lines in the bad_sweep step).
+**m8.** STORE_PY and SWEEP_PY keep their own copies of the four template numbers (single-sourcing would make every verb depend on the sweep text being present); `e1` asserts the copies are equal.
+
+**S3, decided by the user (2026-11-02): Sudo uses centres only.** `SUDO_POLICY = "centre"` in SWEEP_PY's constants block (the only other value is `"full"`; anything else counts as `"centre"`). `pick` for Sudo returns the centres of
+every appearance (a look is never dropped) and nothing else under `"centre"`; under `"full"` it is the previous rule, unchanged (cap 4, bit-reversal band order, `r <= 1.5`, within 0.40 of the centre). Enrolment still stores the whole
+pose set and `validate_record`, the caps, `set-limits` and Lock are untouched, so flipping the word needs no re-enrolment. `ready` and `people.json` carry `sudoPolicy`. `warning_for` is as the plan has it and counts what `pick` gives Sudo,
+so it fires only under `"full"`. `pure()` now hands out the namespace the functions run in (it was a copy), so a test can set the word. Tested: `e0` (both words, unknown words fail closed to centres) and `e1` unit (both words on the same record, both validate, Lock identical, model sets, warning).
+How to flip it: `dev/README.md`, "How to widen Sudo later"; SR1 must re-review the exposure with Phase 0 stranger data first. The constants `CHAIN` 0.40, `HARD` 0.55, `SUDO_CENTRE` 0.40 are still above the 0.35 threshold and uncalibrated; that matters for Lock now.
+
+**Not changed / notes.** m3 (every `sweep` line re-reads the store), m4 (rule R at `done`, and a non-int `stored`), m6 (`time.monotonic` across suspend), m7 (EPIPE on the reference write): not done. m9 (the sweep child runs unconfined; the daemon runs the same
+libraries under `ProtectSystem=strict`, seccomp and `DevicePolicy=closed`): a note only. The follow-up is a `systemd-run --pipe --wait` with the daemon's sandbox and `DeviceAllow` for the IR node only (plan 6a.5). m10 (Phase 5 `trial_result{best,threshold,margin}`
+would be a continuous distance oracle against stored templates and needs its own SR). m11 is process.
