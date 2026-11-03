@@ -68,10 +68,38 @@ Item {
   // exited emits `finished`, whose handler calls this function again.
   property bool closing: false
 
+  // --- notification toasts while the island is up -------------------------------------
+  //
+  // The notch draws a notification toast at the top centre, wider than the scan island, so
+  // the two overlapped and looked broken. The island is on the Overlay layer and the toast
+  // in the notch's own surface, so neither can be moved from here; what Omarchy's shell
+  // offers is its notifications service's do-not-disturb, over the same public IPC target
+  // `omarchy-toggle-notification-silencing` uses. While a card is up that is switched on
+  // (only if it was off), and switched off again when the card closes. A marker file in
+  // $XDG_RUNTIME_DIR records that this plugin turned it on, so a card that dies without
+  // closing (the shell restarting, a crash) cannot leave the person's notifications silenced:
+  // the next start of this service puts it back. Critical notifications bypass do-not-disturb
+  // in the shell itself, so a battery warning still shows.
+  readonly property string toastMarker: "${XDG_RUNTIME_DIR:-/tmp}/kalinewb.face/dnd-held"
+
+  function holdToasts() {
+    Quickshell.execDetached(["sh", "-c",
+      'marker="' + root.toastMarker + '"; '
+      + 'if [ ! -e "$marker" ] && [ "$(omarchy-shell -q notifications isDnd 2>/dev/null)" = off ]; then '
+      + 'mkdir -p "$(dirname "$marker")" && : >"$marker" && omarchy-shell -q notifications setDnd on >/dev/null 2>&1; fi'])
+  }
+
+  function releaseToasts() {
+    Quickshell.execDetached(["sh", "-c",
+      'marker="' + root.toastMarker + '"; '
+      + 'if [ -e "$marker" ]; then rm -f "$marker"; omarchy-shell -q notifications setDnd off >/dev/null 2>&1; fi'])
+  }
+
   function closeCard() {
     if (root.closing) return
     root.closing = true
     var goingCard = root.card
+    if (goingCard) root.releaseToasts()
     var goingSession = root.session
     root.card = null
     root.session = null
@@ -180,6 +208,7 @@ Item {
       root.closeCard()
       return "the card could not be created"
     }
+    root.holdToasts()
     root.card.dismissed.connect(function () { root.closeCard() })
     return "ok"
   }
@@ -781,7 +810,11 @@ Item {
 
   Component.onCompleted: {
     console.log("kalinewb.face", "service loaded")
+    // A card that died holding the toasts back (a restart): put them back.
+    root.releaseToasts()
     root.lockStartedAt = Date.now()
     root.finishRename()
   }
+
+  Component.onDestruction: root.releaseToasts()
 }

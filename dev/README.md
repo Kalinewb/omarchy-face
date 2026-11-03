@@ -456,7 +456,14 @@ below was run by the build. Install this branch (`./install.sh`; it restarts the
    four targets (a skipped target says so). Advanced: Done appears once enough is held; press
    it, then Done again. `omarchy-face-admin`'s helper must be 3.1.0 or newer (Setup offers the
    update); with an older one you should get the old single capture and a note.
-6. **The mode is remembered** between scans (`$XDG_STATE_HOME/omarchy-face/enrol-mode`).
+6. **The scan view's links.** A running scan has only Cancel (top-left) as its way out ("Start over" was
+   removed on 2026-11-03); after a failed lap, Try again. At the end of a Simple lap with only a little saved
+   (kept under 4) the line says "Enough to save." and one quiet "Add more" appears beside Done; with more
+   saved, only Done. **Notifications:** while the island is up, do-not-disturb is switched on (only if it was
+   off) so a notch toast cannot overlap it, and off again when it closes; check that a toast that arrives
+   during a scan is held, that your notifications are back afterwards, and that if you restart the shell
+   mid-scan they come back too (a marker in `$XDG_RUNTIME_DIR/kalinewb.face/dnd-held`).
+6b. **The mode is remembered** between scans (`$XDG_STATE_HOME/omarchy-face/enrol-mode`).
 7. **The idle demo.** Before Start (the camera is off) the circle plays a calm loop: a head
    silhouette holds still at the centre (the rim closes), then turns left, right, up and down while
    the matching arcs fill, with a caption under the line ("Turn your head to the left", ...);
@@ -1037,6 +1044,10 @@ child's stderr never reaching the client, the child holding the camera lock, a 6
 line, a bad label, a corrupt record's error carrying no path, the session bound no longer
 lengthened by a sweep, and the two copies of the template caps being equal.
 
+### Replaying a recording (3.1.3)
+
+`dev/replay-recording.py <recording dir> ...` (user-run; the recordings in `~/.cache/omarchy-face-enrol` are never committed) runs a recording through the real pure functions and the capture loop's decisions and prints, for the lit one-face frames, every `frame_word` result, each gate's failure count on its own, the accepted frames, when the centre would be held and, for a guided recording, how many accepted frames of each prompt land in the Simple wedge. `E0_ADMIN=<another omarchy-face-admin>` compares helper versions; `--step`, `--roll`, `--sharp` try other thresholds. It found that 3.1.2's head-steadiness test read a held head as moving 96% of the time; see `dev/SR1-notes.md` (3.1.3). Not replayed: the encoder (so no `other`/`changed`, and `supported` is approximated by frame spacing) and the child's own face detection.
+
 ### A strobing emitter (3.1.1, corrected in 3.1.2)
 
 This laptop's IR emitter strobes: every other frame is unlit. `SWEEP_PY` used to count those as `dark`
@@ -1059,7 +1070,11 @@ root never reads one, and the GUI cannot set a root file) makes the sweep child 
 at most 120 a lap, to the journal under the tag `omarchy-face-sweep`:
 `journalctl -t omarchy-face-sweep -f` during a scan shows `frames`, `strobe_off`, `black`, `lit`,
 `dark`, `none`, `multi`, the last word, the mean darkness of the lit frames and the refine candidate.
-Counts and words only, never a frame. `dev/SR1-notes.md` has the delta for SR1.
+Counts and words only, never a frame. From 3.1.3 it also has `accepted` (frames that passed every gate;
+`acc_s` for the last second), the per-gate failures (`closer farther edge darkgate blurry roll unsteady`),
+`other`, `over`, the pose relative to the neutral in degrees (`yaw pitch roll`), `centre_gate` (`in` / `out` /
+`-`), `centre_held`, `filled`, `target`, and `last_word` as `skip` (a strobe-off frame) or `ok` (an accepted
+one); those two words are in the trace only. `dev/SR1-notes.md` has the deltas for SR1.
 
 ### How to widen Sudo later
 
