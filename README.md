@@ -195,7 +195,7 @@ sudo /usr/bin/bash -c 'PATH=/usr/bin; set -o pipefail; t=$(mktemp -d) || exit 1
     bash "$t/install.sh" "$1" "$2"
   }
   run "$@"; s=$?; rm -rf -- "$t"; exit $s' \
-  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.1.1
+  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.1.2
 ```
 
 What it does, from the button or from a terminal: root copies the installer out of the
@@ -301,6 +301,17 @@ room being too dark ("Too dark here" with the emitter visibly blinking). It now 
 frame as the emitter's off phase, as howdy itself does, and says "dark" only of a lit frame. Setup
 shows the plugin is newer than the installed system files: **Update Face's system files**, one
 password. Nothing about who can unlock changes.
+
+### Updating from 3.1.1
+
+Face ID 3.1.2 changes the enrolment helper once more (root code): 3.1.1's test for the strobing
+emitter's dark frames assumed they were exactly black, and on this laptop's real camera they never are
+(99.8% dark, a raw mean of about 1.5, against 27-37% dark for a lit frame), so "Too dark here" stayed.
+The helper now recognises an unlit frame by being nearly all dark *and* almost without light, and says
+dark of a lit frame only. It also gains an off-by-default trace for diagnosing it: put `debug=true` in
+`/etc/omarchy-face/config` and `journalctl -t omarchy-face-sweep` shows one line a second during a
+scan (counts and words, never a picture). Setup shows the plugin is newer than the installed system
+files: **Update Face's system files**, one password.
 
 ## The views
 

@@ -1037,18 +1037,29 @@ child's stderr never reaching the client, the child holding the camera lock, a 6
 line, a bad label, a corrupt record's error carrying no path, the session bound no longer
 lengthened by a sweep, and the two copies of the template caps being equal.
 
-### A strobing emitter (3.1.1)
+### A strobing emitter (3.1.1, corrected in 3.1.2)
 
-This laptop's IR emitter strobes: every other frame is entirely black, the lit ones are fine. `SWEEP_PY`
-used to count a black frame as `dark`, so "Too dark here" showed with the emitter blinking. Now a fully
-black frame (no pixels, or every pixel in the darkest bin after CLAHE) is the emitter's off phase, as
-in howdy's own `add.py` and `compare.py`: it is skipped (no word, no `track`, no dwell, patience or
-stall tick, not a `dark` frame; it only counts as a frame, and the ceilings run on wall time), and
-`dark` is a property of a lit frame. A stream with no lit frame for `STROBE_SILENCE` (2 s) is a covered
-or dead camera and says `dark` as before. `refine` (`black_frames` / `too_dark` / ...) is decided over
-lit frames only (`refine_for`). `e0` covers the pure functions; `e1` has `simple-strobe`,
-`advanced-strobe`, `strobe-black`, `dim` and `strobe-dim` (a "dim" frame is lit, about 80% in the
-darkest bin; the old "dark" kind is 100% and so is black). `dev/SR1-notes.md` has the delta for SR1.
+This laptop's IR emitter strobes: every other frame is unlit. `SWEEP_PY` used to count those as `dark`
+("Too dark here" with the emitter blinking). An unlit frame is **not exactly black** on real hardware
+(`dev/fixtures/ir-strobe-stats.json`, measured from 60 raw frames: lit 26.7-37.3% dark with a raw mean
+of 31-65; unlit 99.76-99.96% dark with a mean of 1.2-1.7; the first unlit frames of a stream 89.3%,
+mean 6.3), which is what 3.1.1 got wrong (it tested for exactly 100%). Now a frame is the emitter's off
+phase when it is at least `STROBE_DARKNESS` (85%) dark after CLAHE **and** its raw mean is under
+`STROBE_MEAN` (12): `is_strobe`. It is skipped (no word, no `track`, no dwell, patience or stall tick,
+not a `dark` frame; it only counts as a frame, and the ceilings run on wall time), and `dark` is a
+property of a lit frame. A stream with no lit frame for `STROBE_SILENCE` (2 s: `strobe_phase`), a covered
+or dead camera or a room too dark for the emitter, says `dark` as before and ends `black_frames`.
+`refine` is decided over lit frames only (`refine_for`). `e0` covers the pure functions against the
+measured numbers; `e1`'s fake camera produces frames with the measured distribution (`unlit`,
+`unlit-start`, `lit`; a step checks them against the fixture) and has `simple-strobe`,
+`advanced-strobe`, `unlit-room`, `strobe-black`, `dim` and `strobe-dim`.
+
+**The debug trace.** `debug=true` in root's `/etc/omarchy-face/config` (not an environment variable:
+root never reads one, and the GUI cannot set a root file) makes the sweep child log one line a second,
+at most 120 a lap, to the journal under the tag `omarchy-face-sweep`:
+`journalctl -t omarchy-face-sweep -f` during a scan shows `frames`, `strobe_off`, `black`, `lit`,
+`dark`, `none`, `multi`, the last word, the mean darkness of the lit frames and the refine candidate.
+Counts and words only, never a frame. `dev/SR1-notes.md` has the delta for SR1.
 
 ### How to widen Sudo later
 

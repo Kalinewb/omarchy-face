@@ -18,6 +18,7 @@ Exit 0 when every check passes, 1 otherwise.
 """
 
 import ast
+import json
 import math
 import os
 import random
@@ -25,6 +26,8 @@ import re
 import subprocess
 import sys
 import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ADMIN = os.path.join(REPO, "system", "omarchy-face-admin")
@@ -392,12 +395,40 @@ def test_gates():
 
 # --- 2b. the strobing emitter: a black frame is not a dark one ---------------------
 def test_strobe():
-    print("a strobing IR emitter: black frames are skipped, `dark` is a property of lit frames (3.1.1)")
-    check("a frame with no pixels is the emitter's off phase", sw.is_strobe(0, 100.0))
-    check("a frame entirely in the darkest bin is too", sw.is_strobe(160000.0, 100.0))
-    check("one pixel above the darkest bin is lit, however dark", not sw.is_strobe(160000.0, 99.99))
-    check("an ordinary lit frame is not", not sw.is_strobe(160000.0, 12.0))
-    check("the silence after which an all-black stream stops being a strobe is 2 s", sw.STROBE_SILENCE == 2.0)
+    print("a strobing IR emitter: unlit frames are skipped, `dark` is a property of lit frames (3.1.2)")
+    stats = json.load(open(os.path.join(HERE, "fixtures", "ir-strobe-stats.json")))
+    lit, unlit, start = stats["lit"], stats["unlit"], stats["first_unlit_frames_of_the_stream"]
+    check("the measured data leave a wide gap between the two classes (the rule's margin)",
+          lit["darkness"]["max"] < 50 < sw.STROBE_DARKNESS < start["darkness"]["min"]
+          and lit["mean"]["min"] > sw.STROBE_MEAN > start["mean"]["max"],
+          "%s %s" % (lit, start))
+    check("the rule's constants are 85 percent and a raw mean of 12", (sw.STROBE_DARKNESS, sw.STROBE_MEAN) == (85.0, 12.0))
+
+    def strobe_of(d, m, total=160000.0):
+        return sw.is_strobe(total, d, m)
+
+    check("every measured UNLIT frame is the off phase (min, median, max darkness; max mean)",
+          all(strobe_of(d, unlit["mean"]["max"]) for d in (unlit["darkness"]["min"], unlit["darkness"]["median"], unlit["darkness"]["max"])))
+    check("...the first unlit frames of a stream (89.3% dark, mean 6.3) too", strobe_of(start["darkness"]["min"], start["mean"]["max"]))
+    check("...and an exactly black frame, and one with no pixels", strobe_of(100.0, 0.0) and sw.is_strobe(0, 100.0, 0.0))
+    check("no measured LIT frame is (worst case: 37.3% dark, mean 31.4)",
+          not strobe_of(lit["darkness"]["max"], lit["mean"]["min"]) and not strobe_of(lit["darkness"]["max"], lit["mean"]["max"]))
+    check("regression (3.1.1 tested only exactly black frames): a real unlit frame, 99.8% dark with a mean of 1.5, is the off phase",
+          strobe_of(99.8, 1.5))
+    check("the rule is not an equality test: the pure text has no `darkness >= 100` or `== 100`",
+          not re.search(r"darkness\s*(>=|==)\s*100", SOURCE))
+    check("a dim LIT frame (80% dark, mean 25) is a dark frame, not a strobe frame", not strobe_of(80.0, 25.0))
+    check("so is one that is dark but has some light (95% dark, mean 20) and one bright but flat (60% dark, mean 8)",
+          not strobe_of(95.0, 20.0) and not strobe_of(60.0, 8.0))
+    check("both halves of the rule are strict at their edges: darkness 85 passes, 84.99 does not; mean 12 does not, 11.99 does",
+          (strobe_of(85.0, 5.0), strobe_of(84.99, 5.0), strobe_of(99.0, 12.0), strobe_of(99.0, 11.99)) == (True, False, False, True))
+
+    # SR1 minor M3: the 2 s rule, as a pure function with its boundary
+    check("the silence after which an all-blank stream stops being a strobe is 2 s", sw.STROBE_SILENCE == 2.0)
+    check("a blank frame within 2 s of a lit one is the off phase; at exactly 2 s it is not (it is dark)",
+          (sw.strobe_phase(True, 11.99, 10.0), sw.strobe_phase(True, 12.0, 10.0), sw.strobe_phase(True, 15.0, 10.0)) == (True, False, False))
+    check("a lit frame is never skipped, and a blank one with nothing lit seen yet is not skipped either",
+          (sw.strobe_phase(False, 10.5, 10.0), sw.strobe_phase(True, 10.5, None)) == (False, False))
 
     def refine(frames, strobe=0, black=0, dark=0, none=0, multi=0):
         return sw.refine_for({"frames": frames, "strobe": strobe, "black": black, "dark": dark, "none": none, "multi": multi})

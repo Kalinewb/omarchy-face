@@ -182,6 +182,21 @@ class VideoCapture:
             gray = cv2.GaussianBlur(gray, (0, 0), 25)
         elif kind == "black":
             gray = np.zeros((400, 400), np.uint8)
+        elif kind == "unlit":
+            # The strobing emitter's off phase as MEASURED (dev/fixtures/ir-strobe-stats.json): never
+            # exactly black. A mean of about 1.3, a few hundred pixels that survive CLAHE, so about
+            # 99.8% in the darkest bin.
+            gray = rng.poisson(1.2, (400, 400)).astype(np.uint8)
+            gray.flat[rng.randint(0, 160000, 900)] = rng.randint(8, 26, 900)
+        elif kind == "unlit-start":
+            # the first unlit frames of a stream, measured at 89% dark with a mean of 6
+            gray = rng.poisson(5.0, (400, 400)).astype(np.uint8)
+            gray.flat[rng.randint(0, 160000, 14000)] = rng.randint(10, 57, 14000)
+        elif kind == "lit":
+            # a lit frame as measured: 27-37% dark, a mean of 31-65 (not the 10% of "ok")
+            gray = np.clip(rng.normal(80, 35, (400, 400)), 1, 253).astype(np.uint8)
+            dim = rng.random_sample((400, 400)) < 0.3
+            gray[dim] = rng.randint(0, 12, int(dim.sum())).astype(np.uint8)
         elif kind == "dim":
             # lit but dim: mostly the darkest values with a fifth of the pixels brighter, so that
             # after CLAHE about 80% sit in the darkest bin (over DARK_MAX, under 100: not black)
@@ -430,7 +445,37 @@ out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE"
 same "...and all-black frames are named black_frames" '"black_frames"' "$(q "$out" 'last("capture_failed")["code"]')"
 same "...and a covered or dead camera still says dark, after 2 s with nothing lit (the strobe rule does not silence it)" 'true' "$(q "$out" 'any(t["state"] == "dark" for t in tracks)')"
 
-step "a strobing emitter (3.1.1): every other frame is black, and that is not the room being dark"
+step "the fake camera's strobe frames have the MEASURED distribution (dev/fixtures/ir-strobe-stats.json), not exactly black"
+scenario calibrate
+check "unlit frames are 99.5-99.99% dark with a mean under 2.5, the start ones 85-97% with a mean under 8, lit ones 25-40% with a mean of 40-70; none is exactly 100" python3 - "$REPO/dev/fixtures/ir-strobe-stats.json" <<'PY'
+import json, sys
+sys.path.insert(0, "/usr/lib/security/howdy")
+import cv2, numpy as np
+from recorders.video_capture import VideoCapture
+stats = json.load(open(sys.argv[1]))
+class Config:
+    def get(self, *a):
+        return "/dev/null"
+camera = VideoCapture(Config())
+clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+rows = {"unlit": [], "unlit-start": [], "lit": []}
+for kind in ("unlit", "unlit-start", "lit"):
+    for _ in range(30):
+        frame, gray = camera.read_frame()
+        hist = cv2.calcHist([clahe.apply(gray)], [0], None, [8], [0, 256])
+        rows[kind].append((float(hist[0] / np.sum(hist) * 100), float(gray.mean())))
+def span(kind, axis):
+    values = [r[axis] for r in rows[kind]]
+    return min(values), max(values)
+ok = (99.5 <= span("unlit", 0)[0] and span("unlit", 0)[1] < 99.99 and span("unlit", 1)[1] < 2.5
+      and 85 <= span("unlit-start", 0)[0] and span("unlit-start", 0)[1] <= 97 and span("unlit-start", 1)[1] < 8
+      and 25 <= span("lit", 0)[0] and span("lit", 0)[1] <= 40 and 40 <= span("lit", 1)[0] and span("lit", 1)[1] <= 70)
+print({k: (tuple(round(x, 2) for x in span(k, 0)), tuple(round(x, 2) for x in span(k, 1))) for k in rows}, file=sys.stderr)
+print("measured on the laptop:", stats["unlit"]["darkness"], stats["lit"]["darkness"], file=sys.stderr)
+sys.exit(0 if ok else 1)
+PY
+
+step "a strobing emitter (3.1.2): every other frame is unlit, and that is not the room being dark"
 reset_store
 scenario simple-strobe
 out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
@@ -454,6 +499,42 @@ scenario strobe-dim
 out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
 same "...and behind a strobe it is too_dark still, not black_frames (the off phases are not evidence)" '"too_dark"' "$(q "$out" 'last("capture_failed")["code"]')"
 same "...the strobe frames still count towards the ceiling (it ended at 18 s of frame time, not 18 s of lit frames)" 'true' "$(q "$out" 'len([e for e in evs if e.get("event") == "capture_failed"]) >= 1')"
+reset_store
+scenario unlit-room
+out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
+same "a room too dark for the emitter (every frame unlit, no strobe) still ends: black_frames, and says dark after the 2 s of silence" '["black_frames",true]' "$(q "$out" '[last("capture_failed")["code"], any(t["state"] == "dark" for t in tracks)]')"
+
+step "the debug trace (3.1.2): off by default; with debug=true in root's config, one line a second, no frame data"
+# A stand-in for `logger`: only the sweep child's own (tag omarchy-face-sweep, no message, lines on
+# stdin) is kept; every other call has its message in argv and must not read the caller's stdin.
+cat >"$LAB/logger-stub" <<'LOGGER'
+#!/bin/bash
+if [[ $# -eq 4 && $2 == omarchy-face-sweep ]]; then cat >>/run/omarchy-face-stub/logger.out; else echo "$*" >>/run/omarchy-face-stub/logger.other; fi
+LOGGER
+chmod +x "$LAB/logger-stub"
+mount --bind "$LAB/logger-stub" /usr/bin/logger || exit 1
+: >/run/omarchy-face-stub/logger.out
+reset_store
+scenario simple-strobe
+out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
+check "off by default: the child logs no debug line" bash -c "! grep -q '^debug ' /run/omarchy-face-stub/logger.out"
+printf 'debug=true\n' >>/etc/omarchy-face/config
+reset_store
+scenario simple-strobe
+out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
+lines=$(grep -c '^debug ' /run/omarchy-face-stub/logger.out)
+check "with debug=true it logs, at most 120 lines for the lap, about one per second of frame time" bash -c "[[ $lines -ge 5 && $lines -le 120 ]]"
+check "...each line has the counts, the last word, the mean darkness of the lit frames and the refine candidate" bash -c "grep '^debug ' /run/omarchy-face-stub/logger.out | tail -1 | grep -qE '^debug t=[0-9.]+ frames=[0-9]+ strobe_off=[0-9]+ black=0 lit=[0-9]+ dark=0 none=[0-9]+ multi=[0-9]+ last_word=[a-z]+ lit_darkness_mean=[0-9.]+ refine=(None|[a-z_]+)$'"
+same "...the strobe-off frames are counted, about as many as the lit ones" 'true' "$(python3 -c "
+import re
+last = [l for l in open('/run/omarchy-face-stub/logger.out') if l.startswith('debug ')][-1]
+f = dict(re.findall(r'(\w+)=(\S+)', last))
+off, lit = int(f['strobe_off']), int(f['lit'])
+print(str(off > 0 and 0.7 <= off / max(1, lit) <= 1.3).lower())
+")"
+check "...and no frame data: every line is words and numbers, under 200 characters" bash -c "! grep '^debug ' /run/omarchy-face-stub/logger.out | grep -qvE '^debug [A-Za-z_=0-9. ]+\$' && ! grep '^debug ' /run/omarchy-face-stub/logger.out | awk 'length(\$0) > 200 { bad = 1 } END { exit !bad }'"
+sed -i '/^debug=true$/d' /etc/omarchy-face/config
+umount /usr/bin/logger
 
 step "finish: below the floor it is not_enough and the lap goes on; at it the lap ends"
 reset_store

@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 3.1.1
+# omarchy-face-version: 3.1.2
 #
 # Every privileged thing Face does, behind one polkit action
 # (plan-engine.md §8.2, plan-merged.md §2.3).
@@ -2282,7 +2282,7 @@ def run_sweep(reader, mode, lap, targets, bounds, reference, eye, ends_at):
         argv = ["timeout", "-k", "2", str(int(ceiling) + 15), "python3", "-I", "-c", text,
                 mode, str(lap), ",".join(str(k) for k in targets), repr(float(ceiling)),
                 repr(float(bounds["patience"])), repr(float(bounds["lead"])),
-                repr(float(bounds["stall"])), str(rfd)]
+                repr(float(bounds["stall"])), str(rfd), "1" if config_get("debug") == "true" else "0"]
         err, logger = sweep_stderr()
         # The camera lock goes down with the reference pipe, as the daemon hands its lock
         # fd to compare.py (omarchy-faced:484-499): the lock then lives as long as the
@@ -2819,6 +2819,13 @@ GATE_WORDS = ("hold", "dark", "blurry", "closer", "farther", "edge", "multiple",
 ACCEPTED_WORD = "hold"       # the plan names no word for a frame that passed (see SR1-notes)
 STROBE_SILENCE = 2.0         # s: a strobing emitter lights a frame every few hundred ms at worst, so a
                              # stream with no lit frame for this long is a covered or dead camera, not a strobe
+# The emitter's off phase, as measured on this laptop (dev/fixtures/ir-strobe-stats.json, 60 raw
+# frames): the lit frames are 26.7-37.3% dark with a raw mean of 31-65; the unlit ones are
+# 99.76-99.96% dark with a mean of 1.2-1.7 (never exactly 100: sensor noise survives CLAHE in a few
+# hundred pixels), and the first unlit frames of a stream 89.3% with a mean of 6.3. So an unlit frame
+# is one that is nearly all in the darkest bin AND has almost no light in it.
+STROBE_DARKNESS = 85.0       # percent in the darkest bin after CLAHE, at least
+STROBE_MEAN = 12.0           # raw mean brightness (0-255), under
 CODES = ("black_frames", "too_dark", "multiple_faces", "no_face", "timeout", "camera_busy",
          "changed", "sweep_stalled", "lap_timeout", "bad_sweep", "not_enough", "too_few")
 
@@ -3002,13 +3009,22 @@ def frame_word(faces, eye, box, size, dark, saturated, sharp, roll, steady):
 
 
 
-def is_strobe(total, darkness):
-    """A frame that is entirely black (no pixels, or every pixel in the darkest bin) is the
-    emitter's off phase on a strobing IR camera, not evidence about the room: on this
-    laptop every other frame is, and the lit ones are fine. It is howdy's own rule
-    (`add.py` and `compare.py` skip such a frame as "a bad camera read" and count a frame
-    as dark only if it is lit), so `dark` is a property of a LIT frame, never of a black one."""
-    return total == 0 or darkness >= 100
+def is_strobe(total, darkness, mean):
+    """Is this frame the emitter's off phase, and so not evidence about the room? On a strobing
+    IR camera every other frame is unlit: nearly every CLAHE pixel in the darkest bin
+    (STROBE_DARKNESS) and almost no light in the raw frame (STROBE_MEAN). Never an exact test
+    for 100%: a real unlit frame is 99.8% (sensor noise survives CLAHE in a few hundred
+    pixels). It is howdy's rule in spirit (`add.py` and `compare.py` skip a black frame as "a bad
+    camera read" and count a frame as dark only if it is lit). A frame with no pixels is one too."""
+    return total == 0 or (darkness >= STROBE_DARKNESS and mean < STROBE_MEAN)
+
+
+def strobe_phase(blank, now, last_lit):
+    """Skip this frame as the emitter's off phase? Only a blank frame, and only while something
+    lit was seen within STROBE_SILENCE (a strobe lights a frame every few hundred ms at worst):
+    after that the camera is covered, dead or in a room too dark for its own emitter, and the
+    frame is called dark. `last_lit` is when a lit frame was last seen (the first frame counts as one)."""
+    return bool(blank) and last_lit is not None and now - last_lit < STROBE_SILENCE
 
 
 def refine_for(seen):
@@ -3440,9 +3456,9 @@ def say(obj):
 
 
 def parse_args(argv):
-    """(mode, lap, targets, [ceiling, patience, lead, stall], reference fd) or None."""
+    """(mode, lap, targets, [ceiling, patience, lead, stall], reference fd, debug) or None."""
     try:
-        mode, lap, targets, ceiling, patience, lead, stall, refd = argv
+        mode, lap, targets, ceiling, patience, lead, stall, refd, debug = argv
         lap = int(lap)
         targets = [int(k) for k in targets.split(",")] if targets else []
         bounds = [float(x) for x in (ceiling, patience, lead, stall)]
@@ -3454,7 +3470,9 @@ def parse_args(argv):
         "kept_laps": [1], "centre": True, "stored": 0})
     if why or mode == "usual" or not all(finite(x) and x > 0 for x in bounds) or not 3 <= refd <= 64:
         return None
-    return mode, lap, canonical, bounds, refd
+    if debug not in ("0", "1"):
+        return None
+    return mode, lap, canonical, bounds, refd, debug == "1"
 
 
 def read_reference(fd):
@@ -3482,7 +3500,7 @@ def read_reference(fd):
     return (reference, eye) if ok else (None, None)
 
 
-def run(mode, lap, targets, bounds, reference, ref_eye):
+def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
     import configparser
     import os
     import select
@@ -3521,6 +3539,8 @@ def run(mode, lap, targets, bounds, reference, ref_eye):
     sharp_seen, eyes = [], []
     seen = {"frames": 0, "black": 0, "strobe": 0, "dark": 0, "none": 0, "multi": 0}
     last_lit = None
+    lit_dark = 0.0
+    debug_at, debug_lines = None, 0
     last_emit, last_key = None, None
     sup_total, sup_at, stalled = 0, None, False
     started = None
@@ -3546,8 +3566,8 @@ def run(mode, lap, targets, bounds, reference, ref_eye):
         # frame is called dark as it always was.
         if last_lit is None:
             last_lit = now
-        blank = is_strobe(total, darkness)
-        strobe = blank and now - last_lit < STROBE_SILENCE
+        blank = is_strobe(total, darkness, float(np.mean(gray_in)))
+        strobe = strobe_phase(blank, now, last_lit)
 
         # rule P's clock starts at the first frame after a target becomes current
         cur_top = None
@@ -3564,10 +3584,12 @@ def run(mode, lap, targets, bounds, reference, ref_eye):
                 seen["black"] += 1
         elif darkness > dark_threshold:
             last_lit = now
+            lit_dark += darkness
             word = "dark"
             seen["dark"] += 1
         else:
             last_lit = now
+            lit_dark += darkness
             native_h, native_w = frame.shape[0], frame.shape[1]
             factor = (max_height / native_h) if max_height > 0 else 1.0
             if factor != 1.0:
@@ -3701,6 +3723,20 @@ def run(mode, lap, targets, bounds, reference, ref_eye):
                      "skipped": sorted(skipped), "canFinish": can_finish(mode, centre_held, filled)})
                 last_emit, last_key = now, key
 
+        # The debug trace (the root helper's config key `debug=true`, handed down as the last argument):
+        # one line a second at most, 120 a lap, counts and a word, never a frame, to this child's
+        # stderr, which is the journal under the tag omarchy-face-sweep.
+        if debug and debug_lines < 120 and (debug_at is None or now - debug_at >= 1.0):
+            debug_at = now
+            debug_lines += 1
+            lit_n = seen["frames"] - seen["strobe"] - seen["black"]
+            sys.stderr.write("debug t=%.1f frames=%d strobe_off=%d black=%d lit=%d dark=%d none=%d multi=%d "
+                             "last_word=%s lit_darkness_mean=%.1f refine=%s\n" % (
+                                 now - started, seen["frames"], seen["strobe"], seen["black"], lit_n,
+                                 seen["dark"], seen["none"], seen["multi"], word or ACCEPTED_WORD,
+                                 (lit_dark / lit_n) if lit_n else 0.0, refine_for(seen)))
+            sys.stderr.flush()
+
         # `finish`: the only thing the parent ever writes here, judged after this frame
         if select.select([0], [], [], 0)[0]:
             chunk = os.read(0, 256)
@@ -3743,12 +3779,12 @@ def main(argv):
     if parsed is None:
         sys.stderr.write("sweep: not started by omarchy-face-admin\n")
         return 2
-    mode, lap, targets, bounds, refd = parsed
+    mode, lap, targets, bounds, refd, debug = parsed
     reference, eye = read_reference(refd)
     if reference is None:
         sys.stderr.write("sweep: no reference\n")
         return 2
-    return run(mode, lap, targets, bounds, reference, eye)
+    return run(mode, lap, targets, bounds, reference, eye, debug)
 
 
 if __name__ == "__main__":

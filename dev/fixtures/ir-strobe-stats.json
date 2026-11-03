@@ -1,0 +1,55 @@
+{
+ "about": "Measured from 60 raw IR frames (GREY 400x400) of this laptop's HP IR camera, 2026-11-02, with the helper's own CLAHE (clipLimit 2, 8x8 tiles) and 8-bin histogram. Darkness is the share of CLAHE pixels in the darkest bin (the helper's 'darkness'); mean is the raw frame's mean (0-255). The emitter strobes: every other frame is unlit. The raw frames are not committed.",
+ "lit": {
+  "frames": 30,
+  "darkness": {
+   "min": 26.75,
+   "median": 27.42,
+   "max": 37.34
+  },
+  "mean": {
+   "min": 31.41,
+   "median": 64.21,
+   "max": 65.27
+  },
+  "max_pixel": {
+   "min": 255,
+   "max": 255
+  }
+ },
+ "unlit": {
+  "frames": 28,
+  "darkness": {
+   "min": 99.76,
+   "median": 99.85,
+   "max": 99.96
+  },
+  "mean": {
+   "min": 1.17,
+   "median": 1.54,
+   "max": 1.69
+  },
+  "max_pixel": {
+   "min": 19,
+   "max": 28
+  }
+ },
+ "first_unlit_frames_of_the_stream": {
+  "frames": 2,
+  "darkness": {
+   "min": 89.29,
+   "median": 89.34,
+   "max": 89.4
+  },
+  "mean": {
+   "min": 6.25,
+   "median": 6.27,
+   "max": 6.29
+  },
+  "max_pixel": {
+   "min": 56,
+   "max": 56
+  }
+ },
+ "note": "no unlit frame is exactly 100% dark: sensor noise survives CLAHE in a few hundred pixels"
+}

@@ -78,12 +78,14 @@ def build(segments):
 
 
 def strobe(frames):
-    """A strobing emitter: every other frame is fully black (the off phase), the lit ones
-    unchanged, so the lit frames arrive at half the rate. That is this laptop's IR camera."""
+    """A strobing emitter as measured on this laptop (dev/fixtures/ir-strobe-stats.json): every
+    other frame is unlit (about 99.8% dark, mean 1.3; the first one 89% dark, mean 6) and the lit
+    ones come at half the rate and are 27-37% dark. `unlit` frames are never exactly black."""
     out = []
-    for frame in frames:
-        out.append(frame)
-        out.append(dict(frame, kind="black", hold=False))
+    for i, frame in enumerate(frames):
+        lit = frame["kind"] == "ok"
+        out.append(dict(frame, kind="lit") if lit else frame)
+        out.append(dict(frame, kind="unlit-start" if i == 0 else "unlit", hold=False))
     return out
 
 
@@ -122,6 +124,11 @@ SCENARIOS = {
     # every frame lit but too dark (80% in the darkest bin: kind "dark" is 100%, which is black); and the same behind a strobe
     "dim": lambda: build([dict(n=900, kind="dim")]),
     "strobe-dim": lambda: strobe(build([dict(n=450, kind="dim")])),
+    # a room too dark for the emitter's own light: every frame unlit (no strobe at all)
+    "unlit-room": lambda: build([dict(n=900, kind="unlit")]),
+    # one frame of each real-like kind, 30 of each, for e1's check of the fake camera's distribution
+    "calibrate": lambda: [dict(entry(0.0, 0.0), kind=kind) for kind in ("unlit", "unlit-start", "lit") for _ in range(30)],
+    # the unlit frames of a strobe whose lit frames are exactly black too
     "strobe-black": lambda: strobe(build([dict(n=450, kind="black")])),
     "advanced-idle": lambda: build([dict(n=40), dict(n=900)]),
     "simple-wrong-long": lambda: build([dict(n=40), dict(at=6, n=900)]),
