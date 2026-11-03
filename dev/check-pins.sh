@@ -50,6 +50,27 @@ elif [[ $qml_version != "$sh_version" ]]; then
   echo "check-pins: common/Ask.qml says $qml_version, system/install.sh says $sh_version" >&2; bad=1
 fi
 
+# Every file that carries the version says the same one (SR1 minor M1): the header of each
+# file in system/ and bin/, and the manifest. A helper left at the old version beside a new
+# installer would be installed as "updated" and still be the old bytes' header, and the
+# panel's staleness check (it compares the installed header with the plugin's) would lie.
+if [[ -n ${sh_version:-} ]]; then
+  for f in system/* bin/*; do
+    [[ -f $f ]] || continue
+    case $f in *.sha256) continue ;; esac
+    header=$(grep -m1 -oE 'omarchy-face-version: *[0-9][0-9A-Za-z.+-]*' "$f" | sed 's/^[^:]*: *//')
+    if [[ -z $header ]]; then
+      echo "check-pins: $f has no omarchy-face-version header" >&2; bad=1
+    elif [[ $header != "$sh_version" ]]; then
+      echo "check-pins: $f says $header, system/install.sh says $sh_version" >&2; bad=1
+    fi
+  done
+  manifest_version=$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' manifest.json | head -1)
+  if [[ $manifest_version != "$sh_version" ]]; then
+    echo "check-pins: manifest.json says ${manifest_version:-nothing}, system/install.sh says $sh_version" >&2; bad=1
+  fi
+fi
+
 # The README's command is what a suspicious reader compares the panel's script
 # against, so it has to be the panel's command exactly.
 qml_command=$(dev/install-command.py) || bad=1
