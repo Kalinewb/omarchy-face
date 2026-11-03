@@ -123,7 +123,7 @@ Item {
     if (s.scanState === "swept") {
       if (s.activeMode === "advanced")
         return s.filled.length >= 12 ? "The circle is complete." : "All set."
-      return s.kept >= 4 ? "All set." : "Enough to save. Start over for more."
+      return s.kept >= 4 ? "All set." : "Enough to save."
     }
     if (view.gateText[s.trackState] !== undefined) return view.gateText[s.trackState]
     if (view.skipNote) return "We will skip that one"
@@ -444,14 +444,20 @@ Item {
         onClicked: view.session.tryAgain()
       }
 
+      // After a lap that saved only a little (three templates, under four): one quiet
+      // way to take the lap again for more. It is lap 1 on the same session and in the
+      // same mode, no second password; the one way out of a running scan is Cancel
+      // ("Start over" was taken out of the live view on the user's request, 2026-11-03).
       EnrolLink {
-        id: overLink
-        objectName: "overLink"
+        id: moreLink
+        objectName: "moreLink"
         anchors.horizontalCenter: parent.horizontalCenter
-        text: "Start over"
-        accentColor: view.accent
+        text: "Add more"
+        quiet: true
+        quietColor: view.secondary
         fontFamily: view.fontFamily
-        visible: links.scanLive && (view.phase === "centre" || view.phase === "lap1")
+        fontSize: Style.font.caption
+        visible: links.scanLive && links.scanState === "swept" && view.session.kept < 4
         onClicked: view.session.startOver()
       }
 

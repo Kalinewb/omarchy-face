@@ -253,7 +253,7 @@ ShellRoot {
   }
   function linkState(name) { var l = named(name); return l ? (l.visible ? "1" : "0") : "-" }
   function links() {
-    return ["cancelLink", "startLink", "doneLink", "againLink", "overLink", "modeLink"]
+    return ["cancelLink", "startLink", "doneLink", "againLink", "moreLink", "modeLink"]
       .map(function (n) { return n.replace("Link", "") + "=" + linkState(n) }).join(" ")
   }
   function line() { return named("line").text }
@@ -455,7 +455,9 @@ ShellRoot {
       log("swept-state", session.scanState + " " + session.captures)
       log("swept-filled", [9, 3, 0, 6].map(function (k) { return binLook(k).split(" ")[0] }).join(" "))
       log("swept-check", named("check").visible + " " + named("check").width + " " + named("check").drawn + " " + named("check").x + "," + named("check").y)
-      // Start over after the lap ended: lap 1 at once, same mode.
+      // Kept 5 (all four targets): no "Add more", only Done. A second lap is begun through the
+      // session (test plumbing: there is no link for it here) to reach the kept-3 ending.
+      log("kept5-more", linkState("moreLink"))
       view.session.startOver()
     })
     at(function () {
@@ -463,22 +465,25 @@ ShellRoot {
       log("again-ring", binLook(9) + " | " + session.phase)
       log("again-violations", violations)
       track({state: "hold", centre: 1, target: 9})
-    })
-    at(function () {
-      // Start over while a lap runs: abort, wait for aborted, then lap 1.
-      var before = sent.length
-      session.startOver()
-      log("over-while-running", sent.slice(before).map(function (c) { return c.cmd + (c.mode ? ":" + c.mode : "") }).join(","))
-    })
-    at(function () {
-      log("over-after-aborted", sent.slice(-2).map(function (c) { return c.cmd + (c.mode ? ":" + c.mode : "") }).join(","))
-      track({state: "hold", centre: 1, target: 9})
       feed({event: "swept", mode: "simple", lap: 1, filled: [0, 3, 9], skipped: [6], centreHeld: true, kept: 3})
     })
     at(function () {
       log("kept3-line", line())
+      log("kept3-links", links())
+      log("kept3-more-text", named("moreLink").text)
       log("kept3-skipped-rest", binLook(6))
+      // "Add more": lap 1 again at once, same mode, no second password; the ring empties.
+      named("moreLink").clicked()
+    })
+    at(function () {
+      log("more-sent", JSON.stringify(sent.slice(-1)))
+      log("more-ring", binLook(9) + " | " + session.phase + " | " + links())
+      track({state: "hold", centre: 1, target: 9})
+      feed({event: "swept", mode: "simple", lap: 1, filled: [0, 3, 6, 9], skipped: [], centreHeld: true, kept: 5})
+    })
+    at(function () {
       // Done on swept sends done, which ends the session.
+      log("kept5-again", links())
       view.activate()
     })
     at(function () {

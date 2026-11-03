@@ -132,7 +132,6 @@ Item {
   // non-terminal one (`not_enough`, `sweep_stalled`) leaves the lap running.
   property string notice: ""
   property bool discarding: false
-  property bool restartAfterAbort: false
   readonly property string acceptedWord: "hold"
 
   // Whether the RGB preview may be open: from the moment Start is pressed until
@@ -450,7 +449,6 @@ Item {
     session.message = ""
     session.verdict = ""
     session.failCode = ""
-    session.restartAfterAbort = false
     // A lap 1 replaces the appearance's pending set, so nothing is held until it
     // sweeps again.
     session.captures = 0
@@ -464,17 +462,11 @@ Item {
                   targets: session.activeMode === "simple" ? [9, 3, 0, 6] : all})
   }
 
-  // "Start over" while a lap runs is `abort`, then lap 1 once `aborted` is in;
-  // after the lap has ended it is lap 1 at once. Same session, same mode, no
-  // second password.
+  // "Add more" after a lap that has ended (`swept`): lap 1 again at once, which
+  // replaces the pending set (root's rule). Same session, same mode, no second
+  // password. There is no way to restart a lap that is running: Cancel is EOF.
   function startOver() {
-    if (!session.sweepFlow) return
-    if (session.scanState === "running") {
-      session.restartAfterAbort = true
-      session.send({cmd: "abort"})
-    } else {
-      session.sendSweep()
-    }
+    if (session.sweepFlow && session.scanState === "swept") session.sendSweep()
   }
 
   // Try again after a lap that ended without a result.
@@ -532,7 +524,6 @@ Item {
     }
     if (event.event === "aborted") {
       session.scanState = "ready"
-      if (session.restartAfterAbort) session.sendSweep()
       return true
     }
     if (event.event === "capture_failed") {

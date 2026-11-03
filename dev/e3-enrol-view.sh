@@ -140,13 +140,13 @@ check "idle: Simple's other eight bins are 5 px at 0.2 (inactive)" "5/0.2 5/0.2 
 check "idle: the demo is playing in the circle (the static glyph is hidden) with a caption under the line" "false demo true true caption Look at the camera" "$(field idle-glyph "$out")"
 check "idle: no camera exists, previewOn is false, the preview Loader holds nothing" "0 false true" "$(field idle-cameras "$out")"
 check "idle: the line is 'Fit your face in the circle.'" "Fit your face in the circle." "$(field idle-line "$out")"
-check "idle: Cancel, Start and the mode link; no Done, Try again or Start over" \
-  "cancel=1 start=1 done=0 again=0 over=0 mode=1" "$(field idle-links "$out")"
+check "idle: Cancel, Start and the mode link; no Done, Try again or Add more" \
+  "cancel=1 start=1 done=0 again=0 more=0 mode=1" "$(field idle-links "$out")"
 check "idle: the mode link names the OTHER mode" "Advanced" "$(field idle-modelink "$out")"
 check "idle: nothing was sent and the helper was not started" "ready 0" "$(field idle-state "$out")"
 check "authorising: the camera comes on (previewOn) and the line says why we wait" "1 true Waiting for authorisation…" \
   "$(field auth-cameras "$out") $(field auth-line "$out")"
-check "authorising: only Cancel; the mode link is gone" "cancel=1 start=0 done=0 again=0 over=0 mode=0" "$(field auth-links "$out")"
+check "authorising: only Cancel; the mode link is gone" "cancel=1 start=0 done=0 again=0 more=0 mode=0" "$(field auth-links "$out")"
 check "the mode is fixed from Start: the link and setMode change nothing" "true simple" "$(field mode-after-start "$out") $(field mode-inert-after-start "$out")"
 check "ready with verbs: the view sends sweep, lap 1, mode simple, exactly [9,3,0,6], and nothing else" \
   '[{"cmd":"sweep","appearance":"No glasses","mode":"simple","lap":1,"targets":[9,3,0,6]}]' "$(field centre-sent "$out")"
@@ -155,7 +155,7 @@ check "centre: 'Look straight at the circle', then 'Hold still' once the dwell r
   "Look straight at the circle|Look straight at the circle|Hold still" "$(field centre-line "$out")|$(field centre0-line "$out")|$(field centre50-line "$out")"
 check "centre: the rim arc is half swept at centre 0.5" "0.5" "$(field centre50-arc "$out")"
 check "centre: near the middle the head dot is absent (opacity 0)" "0" "$(jq -r .op <<<"$(field centre50-dot "$out")")"
-check "centre: Start over appears from the centre on" "cancel=1 start=0 done=0 again=0 over=1 mode=0" "$(field centre50-links "$out")"
+check "centre: only Cancel is on offer (no Start over in the live view)" "cancel=1 start=0 done=0 again=0 more=0 mode=0" "$(field centre50-links "$out")"
 check "lap1: the phase moves on and the rim is closed" "lap1 1" "$(field lap1-phase "$out") $(field lap1-arc "$out")"
 check "lap1: the engine's first target (left) is current: 14 px, foreground, 1.0, static" \
   "14/1 14/1 14/1 14/1 14/1 | current,current,current,current,current" "$(field lap1-cur "$out")"
@@ -163,7 +163,7 @@ check "lap1: the other three targets stay at rest, the eight others inactive" \
   "8/0.7 8/0.7 8/0.7 8/0.7 8/0.7 | 8/0.7 8/0.7 8/0.7 8/0.7 8/0.7 | 8/0.7 8/0.7 8/0.7 8/0.7 8/0.7" "$(field lap1-rest "$out")"
 check "…and the inactive ones never change" "5/0.2 5/0.2 5/0.2 5/0.2 5/0.2 | 5/0.2 5/0.2 5/0.2 5/0.2 5/0.2" "$(field lap1-inactive "$out")"
 check "lap1: the line names the target" "Turn your head to the left" "$(field lap1-line "$out")"
-check "lap1: Done is hidden while a Simple lap runs" "cancel=1 start=0 done=0 again=0 over=1 mode=0" "$(field lap1-links "$out")"
+check "lap1: Done is hidden while a Simple lap runs" "cancel=1 start=0 done=0 again=0 more=0 mode=0" "$(field lap1-links "$out")"
 check "progress 0.4: two of the five ticks are covered (20 px accent look), three still current" \
   "done,done,current,current,current | 20/0.9 20/0.9 14/1 14/1 14/1" "$(field p40-kinds "$out") | $(field p40-look "$out")"
 check "…and the line says 'Hold still' while the wedge is held" "Hold still" "$(field p40-line "$out")"
@@ -179,15 +179,19 @@ check "state words: over, edge" "A little less|Centre your face" "$(field over-l
 check "a skipped bin goes back to the rest look and the line says so" "We will skip that one | 8/0.7 8/0.7 8/0.7 8/0.7 8/0.7 | rest,rest,rest,rest,rest" \
   "$(field skip-line "$out") | $(field skip-rest "$out")"
 check "a track with every bin full and canFinish shows no Done in Simple (Done arrives with swept)" \
-  "cancel=1 start=0 done=0 again=0 over=1 mode=0" "$(field allfull-links "$out")"
-check "swept with kept 5: 'All set.' and Done" "All set. | cancel=1 start=0 done=1 again=0 over=1 mode=0" "$(field swept-line "$out") | $(field swept-links "$out")"
+  "cancel=1 start=0 done=0 again=0 more=0 mode=0" "$(field allfull-links "$out")"
+check "swept with kept 5: 'All set.' and Done" "All set. | cancel=1 start=0 done=1 again=0 more=0 mode=0" "$(field swept-line "$out") | $(field swept-links "$out")"
 check "…the ring stays full (four covered arcs) and the session holds one capture" "20/0.9 20/0.9 20/0.9 20/0.9 | swept 1" \
   "$(field swept-filled "$out") | $(field swept-state "$out")"
-check "Start over after the lap ended sends lap 1 at once, in the same mode, and the ring empties" \
-  '[{"cmd":"sweep","appearance":"No glasses","mode":"simple","lap":1,"targets":[9,3,0,6]}] | 8/0.7 8/0.7 8/0.7 8/0.7 8/0.7 | centre' \
-  "$(field again-sent "$out") | $(field again-ring "$out")"
-check "Start over while a lap runs sends abort, then (on aborted) lap 1 in the same mode" "abort,sweep:simple" "$(field over-after-aborted "$out")"
-check "swept with kept 3: 'Enough to save. Start over for more.'" "Enough to save. Start over for more." "$(field kept3-line "$out")"
+check "swept with kept 5: only Done (no Add more), and the next lap begins at once through the session" \
+  'more=0 | [{"cmd":"sweep","appearance":"No glasses","mode":"simple","lap":1,"targets":[9,3,0,6]}] | 8/0.7 8/0.7 8/0.7 8/0.7 8/0.7 | centre' \
+  "$(field kept5-more "$out" | sed 's/^/more=/;s/^more=1$/more=1/') | $(field again-sent "$out") | $(field again-ring "$out")"
+check "swept with kept 3: the line is a plain 'Enough to save.', Done and one quiet 'Add more'" \
+  "Enough to save. | cancel=1 start=0 done=1 again=0 more=1 mode=0 | Add more" "$(field kept3-line "$out") | $(field kept3-links "$out") | $(field kept3-more-text "$out")"
+check "Add more is lap 1 again on the same session and mode (no second password), the ring empties and nothing is offered" \
+  '[{"cmd":"sweep","appearance":"No glasses","mode":"simple","lap":1,"targets":[9,3,0,6]}] | 8/0.7 8/0.7 8/0.7 8/0.7 8/0.7 | centre | cancel=1 start=0 done=0 again=0 more=0 mode=0' \
+  "$(field more-sent "$out") | $(field more-ring "$out" | sed 's/ | centre | / | centre | /')"
+check "after the second lap kept 5 offers Done only" "cancel=1 start=0 done=1 again=0 more=0 mode=0" "$(field kept5-again "$out")"
 check "Done on swept sends done and the session ends saved" "done 1 true" "$(field done-sent "$out") $(field done-finished "$out" | tr -d '\n')" 2>/dev/null
 check "the view never triggered a bad_sweep (the fake enforces table V)" "0" "$(field violations "$out")"
 check "…never sent capture when the helper lists sweep" "true" "$(field capture-never "$out")"
@@ -218,11 +222,11 @@ check "the sweep names all twelve bins in ascending order, mode advanced" \
   '[{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":1,"targets":[0,1,2,3,4,5,6,7,8,9,10,11]}]' "$(field adv-sent "$out")"
 check "lap1 with no target under the head: no highlight at all" "rest,rest,rest,rest,rest" "$(field adv-no-current "$out")"
 check "the reference's line, kept" "lap1 | Move your head slowly to complete the circle." "$(field adv-phase "$out") | $(field adv-line "$out")"
-check "no Done while canFinish is false" "cancel=1 start=0 done=0 again=0 over=1 mode=0" "$(field adv-links "$out")"
+check "no Done while canFinish is false" "cancel=1 start=0 done=0 again=0 more=0 mode=0" "$(field adv-links "$out")"
 check "a wedge being held: highlight on it, 'Hold still'" "Hold still | done,current,current,current,current | 20/0.9 14/1 14/1 14/1 14/1" \
   "$(field adv-hold-line "$out") | $(field adv-current "$out")"
 check "any fill order renders (5 full, 2 partial)" "done,done,done,done,done | done,done,current,current,current | 20/0.9 20/0.9 14/1 14/1 14/1" "$(field adv-any-order "$out")"
-check "Done appears once canFinish is true" "cancel=1 start=0 done=1 again=0 over=1 mode=0" "$(field adv-done-shown "$out")"
+check "Done appears once canFinish is true" "cancel=1 start=0 done=1 again=0 more=0 mode=0" "$(field adv-done-shown "$out")"
 check "…and sends finish; swept then offers Done again (done), twice by design" "finish | All set. | done" \
   "$(field adv-finish-sent "$out") | $(field adv-swept-line "$out") | $(field adv-done-sent "$out")"
 check "accessibility: one ProgressBar for the ring plus one per target (13 in Advanced)" "13" "$(field adv-target-items "$out")"
@@ -253,7 +257,7 @@ for code in too_few lap_timeout bad_sweep changed; do
     changed) text="That was not you" ;;
   esac
   check "$code: verdict, its line, Try again, the circle shakes, the ring is empty, no camera" \
-    "verdict | $text | cancel=1 start=0 done=0 again=1 over=0 mode=0 | shake true | ring 8/0.7 | cameras 0 | ready" "$(field fail-$code "$out")"
+    "verdict | $text | cancel=1 start=0 done=0 again=1 more=0 mode=0 | shake true | ring 8/0.7 | cameras 0 | ready" "$(field fail-$code "$out")"
   check "$code: Try again is lap 1 again, same mode, and the camera is back" \
     'centre | {"cmd":"sweep","appearance":"No glasses","mode":"simple","lap":1,"targets":[9,3,0,6]} | cameras 1' "$(field retry-$code "$out")"
 done
@@ -261,7 +265,7 @@ check "'other' is a word: its line, no shake, the lap goes on" "Face the circle 
 check "not_enough leaves the lap running with its line" "lap1 | A few more positions first. | running" "$(field not-enough "$out")"
 check "sweep_stalled leaves the lap running with its line" "lap1 | Try turning a little further." "$(field stalled "$out")"
 check "polkit refused: back to idle with the reason, a shake, no camera, Start offered again" \
-  "idle | Fit your face in the circle. | Not authorised. | shake true | previewOn false | cameras 0 | cancel=1 start=1 done=0 again=0 over=0 mode=1" "$(field declined "$out")"
+  "idle | Fit your face in the circle. | Not authorised. | shake true | previewOn false | cameras 0 | cancel=1 start=1 done=0 again=0 more=0 mode=1" "$(field declined "$out")"
 check "no failure case made the view send a verb the table refuses" "0" "$(field fail-violations "$out")"
 
 step "Version skew: a helper older than 3.1.0 gets the existing single capture"
