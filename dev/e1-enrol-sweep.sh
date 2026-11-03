@@ -524,7 +524,13 @@ scenario simple-strobe
 out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
 lines=$(grep -c '^debug ' /run/omarchy-face-stub/logger.out)
 check "with debug=true it logs, at most 120 lines for the lap, about one per second of frame time" bash -c "[[ $lines -ge 5 && $lines -le 120 ]]"
-check "...each line has the counts, the last word, the mean darkness of the lit frames and the refine candidate" bash -c "grep '^debug ' /run/omarchy-face-stub/logger.out | tail -1 | grep -qE '^debug t=[0-9.]+ frames=[0-9]+ strobe_off=[0-9]+ black=0 lit=[0-9]+ dark=0 none=[0-9]+ multi=[0-9]+ last_word=[a-z]+ lit_darkness_mean=[0-9.]+ refine=(None|[a-z_]+)$'"
+check "...each line has the counts, the per-gate failures, the target and what is held, the last word, the mean darkness of the lit frames and the refine candidate" bash -c "grep '^debug ' /run/omarchy-face-stub/logger.out | tail -1 | grep -qE '^debug t=[0-9.]+ frames=[0-9]+ strobe_off=[0-9]+ black=0 lit=[0-9]+ dark=0 none=[0-9]+ multi=[0-9]+ accepted=[0-9]+ acc_s=[0-9]+ closer=[0-9]+ farther=[0-9]+ edge=[0-9]+ darkgate=[0-9]+ blurry=[0-9]+ roll=[0-9]+ unsteady=[0-9]+ other=[0-9]+ over=[0-9]+ yaw=-?[0-9a-z/]+ pitch=-?[0-9a-z/]+ roll=-?[0-9a-z/]+ centre_gate=(in|out|-) centre_held=[01] filled=[0-9]+ target=[a-z0-9]+ last_word=(skip|ok|hold|dark|blurry|closer|farther|edge|multiple|other|searching|over) lit_darkness_mean=[0-9.]+ refine=(None|[a-z_]+)\$'"
+same "...the lap's accepted frames are counted (the engine filled four targets from them), and the last word of a strobe-off frame is skip or of an accepted one ok (words that are never on the wire)" 'true' "$(python3 -c "
+import re
+rows = [dict(re.findall(r'(\w+)=(\S+)', l)) for l in open('/run/omarchy-face-stub/logger.out') if l.startswith('debug ')]
+words = {r['last_word'] for r in rows}
+print(str(int(rows[-1]['accepted']) > 20 and int(rows[-1]['centre_held']) == 1 and bool(words & {'skip', 'ok'})).lower())
+")"
 same "...the strobe-off frames are counted, about as many as the lit ones" 'true' "$(python3 -c "
 import re
 last = [l for l in open('/run/omarchy-face-stub/logger.out') if l.startswith('debug ')][-1]
@@ -532,8 +538,14 @@ f = dict(re.findall(r'(\w+)=(\S+)', last))
 off, lit = int(f['strobe_off']), int(f['lit'])
 print(str(off > 0 and 0.7 <= off / max(1, lit) <= 1.3).lower())
 ")"
-check "...and no frame data: every line is words and numbers, under 200 characters" bash -c "! grep '^debug ' /run/omarchy-face-stub/logger.out | grep -qvE '^debug [A-Za-z_=0-9. ]+\$' && ! grep '^debug ' /run/omarchy-face-stub/logger.out | awk 'length(\$0) > 200 { bad = 1 } END { exit !bad }'"
-sed -i '/^debug=true$/d' /etc/omarchy-face/config
+check "...and no frame data: every line is words and numbers, under 400 characters" bash -c "! grep '^debug ' /run/omarchy-face-stub/logger.out | grep -qvE '^debug [A-Za-z_=0-9./ -]+\$' && ! grep '^debug ' /run/omarchy-face-stub/logger.out | awk 'length(\$0) > 400 { bad = 1 } END { exit !bad }'"
+printf 'debug=false\n' >>/etc/omarchy-face/config
+: >/run/omarchy-face-stub/logger.out
+reset_store
+scenario simple-strobe
+out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
+check "the last debug line in the config wins, as in the shell side (debug=true then debug=false: no trace)" bash -c "! grep -q '^debug ' /run/omarchy-face-stub/logger.out"
+sed -i '/^debug=/d' /etc/omarchy-face/config
 umount /usr/bin/logger
 
 step "finish: below the floor it is not_enough and the lap goes on; at it the lap ends"

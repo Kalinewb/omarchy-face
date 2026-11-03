@@ -195,7 +195,7 @@ sudo /usr/bin/bash -c 'PATH=/usr/bin; set -o pipefail; t=$(mktemp -d) || exit 1
     bash "$t/install.sh" "$1" "$2"
   }
   run "$@"; s=$?; rm -rf -- "$t"; exit $s' \
-  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.1.2
+  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.1.3
 ```
 
 What it does, from the button or from a terminal: root copies the installer out of the
@@ -312,6 +312,19 @@ dark of a lit frame only. It also gains an off-by-default trace for diagnosing i
 `/etc/omarchy-face/config` and `journalctl -t omarchy-face-sweep` shows one line a second during a
 scan (counts and words, never a picture). Setup shows the plugin is newer than the installed system
 files: **Update Face's system files**, one password.
+
+### Updating from 3.1.2
+
+Face ID 3.1.3 changes the enrolment helper again (root code). With "Too dark" gone, the scan still
+sat on "Look straight at the circle": replaying your own recordings through the helper's real
+functions showed the head-steadiness test read a *held* head as moving 96% of the time (a still
+head wanders by about six degrees; the test allowed a fraction of one degree between smoothed
+frames), so the centre could not be held. It now smooths over five lit frames and allows 0.20
+(still head: 4% steady before, 88% after; centre held in about 2.5 s instead of never). The
+off-by-default trace (`debug=true` in `/etc/omarchy-face/config`, `journalctl -t omarchy-face-sweep`)
+now also counts frames that passed every gate and each gate that failed (closer, farther, edge,
+dark, blurry, roll, unsteady), and prints the pose and the centre gate. Setup shows the plugin is
+newer than the installed system files: **Update Face's system files**, one password.
 
 ## The views
 

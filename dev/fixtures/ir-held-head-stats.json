@@ -1,0 +1,22 @@
+{
+ "about": "Held-head jitter measured from dev/enrol-record.py's `still` recording (10 s, head held, 2026-11-02): the spread of the five-point pose indices across its lit one-face frames. Statistics only; the frames and landmarks are not committed.",
+ "frames": 73,
+ "eye_px_mean": 69.9,
+ "eye_px_sd": 1.44,
+ "yaw_index_sd": 0.0457,
+ "pitch_index_sd": 0.0256,
+ "roll_deg_sd": 1.1,
+ "amp_yaw": 0.11,
+ "amp_pitch": 0.06,
+ "u_sd": 0.416,
+ "v_sd": 0.427,
+ "share_steady_on_this_recording": {
+  "3.1.2 (mean of 3 lit frames, step 0.05)": 0.04,
+  "3.1.3 (mean of 5, step 0.20)": 0.88
+ },
+ "lag1_autocorrelation": {
+  "u": 0.91,
+  "v": 0.74
+ },
+ "note": "a held head drifts slowly (lag-1 autocorrelation 0.91 on u), it is not white noise: the replay of this recording is steady in 98% of frames at 3.1.3's constants and in 4% at 3.1.2's"
+}

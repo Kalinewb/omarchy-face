@@ -30,7 +30,8 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ADMIN = os.path.join(REPO, "system", "omarchy-face-admin")
+# E0_ADMIN: another copy of the helper (dev/replay-recording.py compares two versions)
+ADMIN = os.environ.get("E0_ADMIN") or os.path.join(REPO, "system", "omarchy-face-admin")
 
 PASS, FAIL = [], []
 
@@ -182,6 +183,23 @@ def test_pure():
                               cwd=scratch, stdin=subprocess.DEVNULL)
         check("run as a program with no arguments it declines (exit 2, no traceback)",
               done.returncode == 2 and "Traceback" not in done.stderr, done.stderr.strip()[-200:])
+        # SR1 m6: the ninth argument (the debug flag) is 0 or 1 and nothing else, like every other argument
+        good = ["simple", "1", "9,3,0,6", "60.0", "13.0", "3.0", "20.0", "5"]
+
+        def run_child(arguments):
+            return subprocess.run([sys.executable, "-I", "-c", SOURCE] + arguments, capture_output=True, text=True,
+                                  cwd=scratch, stdin=subprocess.DEVNULL, pass_fds=())
+
+        refused = [run_child(good + [value]) for value in ("2", "yes", "", "01", "true", "-1")]
+        check("a ninth argument that is not 0 or 1 is refused before anything starts (exit 2, 'not started by omarchy-face-admin')",
+              all(d.returncode == 2 and "not started by omarchy-face-admin" in d.stderr for d in refused),
+              str([d.stderr.strip()[-60:] for d in refused]))
+        check("so is a missing one (the old eight-argument form)",
+              run_child(good).returncode == 2 and "not started by omarchy-face-admin" in run_child(good).stderr)
+        accepted = [run_child(good + [value]) for value in ("0", "1")]
+        check("0 and 1 are accepted (they get past argument parsing, to the reference descriptor the test does not provide)",
+              all("not started by omarchy-face-admin" not in d.stderr for d in accepted),
+              str([d.stderr.strip()[-60:] for d in accepted]))
         check("it left nothing behind in its directory", os.listdir(scratch) == ["sweep_py.txt"])
 
 
@@ -371,19 +389,62 @@ def test_gates():
     check("not steady is 'hold'", word(steady=False) == "hold")
     check("a face too small to see wins over an edge it also touches", word(eye=30, box=(0, 0, 40, 40)) == "closer")
 
-    still = [(0.0, 0.0)] * 6
-    check("six still lit frames are steady", sw.is_steady(still))
-    check("five frames are not enough history (three to smooth, three steps)", not sw.is_steady(still[:5]))
-    for step, expect in ((0.049, True), (0.051, False)):
-        check("steps of %.3f are %s" % (step, "steady" if expect else "not steady"),
-              sw.is_steady([(i * step, 0.0) for i in range(6)]) == expect)
-    check("one jump in the last steps is not steady",
-          not sw.is_steady([(0, 0)] * 4 + [(0.3, 0)] * 2))
+    need = sw.SMOOTH_FRAMES + sw.STEADY_FRAMES
+    still = [(0.0, 0.0)] * need
+    check("%d still lit frames are steady (SMOOTH_FRAMES %d + STEADY_FRAMES %d)" % (need, sw.SMOOTH_FRAMES, sw.STEADY_FRAMES),
+          sw.is_steady(still))
+    check("one frame fewer is not enough history", not sw.is_steady(still[:-1]))
+    for factor, expect in ((0.98, True), (1.02, False)):
+        step = sw.STEADY_STEP * factor
+        check("smoothed steps of %.3f (STEADY_STEP x %.2f) are %s" % (step, factor, "steady" if expect else "not steady"),
+              sw.is_steady([(i * step, 0.0) for i in range(need)]) == expect)
+    check("one jump in the last frames is not steady",
+          not sw.is_steady([(0, 0)] * (need - 3) + [(1.0, 0)] * 3))
     check("an old jump that has left the window does not count",
-          sw.is_steady([(0, 0), (0.5, 0)] + [(0.5, 0)] * 6))
-    jitter = [(0.06 * (-1) ** i, 0.0) for i in range(6)]
-    check("rule J: jitter whose raw steps are 0.12 is steady once the mean of three is taken (0.04)",
-          sw.is_steady(jitter) and not sw.is_steady(jitter, step=0.03))
+          sw.is_steady([(0, 0), (0.5, 0)] + [(0.5, 0)] * need))
+    jitter = [(0.12 * (-1) ** i, 0.0) for i in range(need)]
+    check("rule J: jitter whose raw steps are 0.24 is steady once the mean of %d is taken, and is not at a step of 0.02" % sw.SMOOTH_FRAMES,
+          sw.is_steady(jitter) and not sw.is_steady(jitter, step=0.02))
+
+    # 3.1.3: the held-head jitter MEASURED (dev/fixtures/ir-held-head-stats.json, the `still` recording):
+    # a head held still wanders by 0.4 u (about 6 degrees), slowly, which 3.1.2's mean of 3 and
+    # step of 0.05 read as a moving head 96% of the time, so no Simple lap could leave the centre.
+    held = json.load(open(os.path.join(HERE, "fixtures", "ir-held-head-stats.json")))
+    rng = random.Random(11)
+
+    def ar1(rho, sd, n):
+        x, out, k = 0.0, [], sd * math.sqrt(1 - rho * rho)
+        for _ in range(n):
+            x = rho * x + rng.gauss(0, k)
+            out.append(x)
+        return out
+
+    # the measured spread and the measured lag-1 autocorrelation (a held head drifts, it is not white noise)
+    noise = list(zip(ar1(held["lag1_autocorrelation"]["u"], held["u_sd"], 6000),
+                     ar1(held["lag1_autocorrelation"]["v"], held["v_sd"], 6000)))
+
+    def share(width, step):
+        steady = 0
+        for i in range(10, len(noise)):
+            window = noise[i - (width + sw.STEADY_FRAMES) + 1:i + 1]
+            means = [(sum(p[0] for p in window[j:j + width]) / width, sum(p[1] for p in window[j:j + width]) / width)
+                     for j in range(len(window) - width + 1)]
+            steady += all(math.hypot(b[0] - a[0], b[1] - a[1]) < step for a, b in zip(means, means[1:]))
+        return steady / float(len(noise) - 10)
+
+    check("regression: a held head with the measured spread and drift is steady under 20%% of the time at 3.1.2's constants (mean of 3, 0.05): %.2f" % share(3, 0.05),
+          share(3, 0.05) < 0.20)
+    check("the helper's constants (mean of %d, step %.2f) read the same modelled head as steady at least 70%% of the time (the recording itself: 98%%): %.2f" % (sw.SMOOTH_FRAMES, sw.STEADY_STEP, share(sw.SMOOTH_FRAMES, sw.STEADY_STEP)),
+          share(sw.SMOOTH_FRAMES, sw.STEADY_STEP) >= 0.70)
+    # ...without calling a real turn steady: a head sweeping 0.3 u a frame (about 4.5 degrees, 34 degrees a second at 7.5 Hz)
+    sweep = [(0.3 * i, 0.0) for i in range(need)]
+    check("a head turning at 0.3 u per lit frame is not steady", not sw.is_steady(sweep))
+    failing = sw.gate_failures(30, (0, 0, 10, 10), (400, 400), 60.0, 7.0, 0.4, 30.0, False)
+    check("the debug trace's gate_failures names every gate a frame fails, in frame_word's order",
+          failing == ["closer", "edge", "dark", "blurry", "roll", "unsteady"], str(failing))
+    check("...none for a frame that passes all of them", sw.gate_failures(80, (60, 60, 340, 340), (400, 400), 10, 1, 1.0, 0, True) == [])
+    check("...and the word frame_word gives is the first of them",
+          sw.frame_word(1, 30, (0, 0, 10, 10), (400, 400), 60.0, 7.0, 0.4, 30.0, False) == "closer")
 
     check("lap 2 wants farther from a 100 px lap 1 (80 px)", sw.lap2_want(100) == "far")
     check("lap 2 wants closer when farther would fall under the gate", sw.lap2_want(45) == "near")
@@ -399,7 +460,7 @@ def test_strobe():
     stats = json.load(open(os.path.join(HERE, "fixtures", "ir-strobe-stats.json")))
     lit, unlit, start = stats["lit"], stats["unlit"], stats["first_unlit_frames_of_the_stream"]
     check("the measured data leave a wide gap between the two classes (the rule's margin)",
-          lit["darkness"]["max"] < 50 < sw.STROBE_DARKNESS < start["darkness"]["min"]
+          lit["darkness"]["max"] < sw.DARK_MAX < sw.STROBE_DARKNESS < start["darkness"]["min"]
           and lit["mean"]["min"] > sw.STROBE_MEAN > start["mean"]["max"],
           "%s %s" % (lit, start))
     check("the rule's constants are 85 percent and a raw mean of 12", (sw.STROBE_DARKNESS, sw.STROBE_MEAN) == (85.0, 12.0))
@@ -710,7 +771,7 @@ def test_plain_turns():
             history.append(uv_of(noisy, neutral))
         found = None
         for step in (0.05, 0.075, 0.10, 0.125, 0.15, 0.20, 0.25, 0.30):
-            share = sum(sw.is_steady(history[max(0, i - 5):i + 1], step=step) for i in range(5, 4000)) / 3995.0
+            share = sum(sw.is_steady(history[max(0, i - 7):i + 1], step=step) for i in range(7, 4000)) / 3993.0
             if share >= 0.8:
                 found = (step, share)
                 break

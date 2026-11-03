@@ -58,7 +58,9 @@ if [[ -n ${sh_version:-} ]]; then
   for f in system/* bin/*; do
     [[ -f $f ]] || continue
     case $f in *.sha256) continue ;; esac
-    header=$(grep -m1 -oE 'omarchy-face-version: *[0-9][0-9A-Za-z.+-]*' "$f" | sed 's/^[^:]*: *//')
+    # read exactly as the runtime does (bin/omarchy-face-status, the admin helper): the top 40 lines,
+    # the line anchored, any non-alphanumeric prefix ("# " in a script, two spaces in the policy's XML)
+    header=$(head -40 "$f" | sed -n 's/^[^[:alnum:]]*omarchy-face-version:[[:space:]]*\([0-9A-Za-z.+-]*\).*/\1/p' | head -1)
     if [[ -z $header ]]; then
       echo "check-pins: $f has no omarchy-face-version header" >&2; bad=1
     elif [[ $header != "$sh_version" ]]; then
