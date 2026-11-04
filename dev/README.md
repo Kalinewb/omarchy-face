@@ -458,11 +458,12 @@ below was run by the build. Install this branch (`./install.sh`; it restarts the
    update); with an older one you should get the old single capture and a note.
 6. **The scan view's links.** A running scan has only Cancel (top-left) as its way out ("Start over" was
    removed on 2026-11-03); after a failed lap, Try again. At the end of a Simple lap with only a little saved
-   (kept under 4) the line says "Enough to save." and one quiet "Add more" appears beside Done; with more
+   (kept under 4) the line says "Enough to save." and one quiet "Scan again" appears beside Done; with more
    saved, only Done. **Notifications:** while the island is up, do-not-disturb is switched on (only if it was
    off) so a notch toast cannot overlap it, and off again when it closes; check that a toast that arrives
    during a scan is held, that your notifications are back afterwards, and that if you restart the shell
    mid-scan they come back too (a marker in `$XDG_RUNTIME_DIR/kalinewb.face/dnd-held`).
+6c. **Toast hold, details.** `bin/omarchy-face-toasts` (tested by `dev/e5-toasts.sh`) does the hold. A do-not-disturb you had already switched on is never touched. If something goes wrong, `$XDG_RUNTIME_DIR/kalinewb.face/dnd-held` exists only while Face believes it turned do-not-disturb on; `omarchy-shell notifications isDnd` says what the shell thinks (`omarchy-toggle-notification-silencing` toggles it by hand).
 6b. **The mode is remembered** between scans (`$XDG_STATE_HOME/omarchy-face/enrol-mode`).
 7. **The idle demo.** Before Start (the camera is off) the circle plays a calm loop: a head
    silhouette holds still at the centre (the rim closes), then turns left, right, up and down while
@@ -476,6 +477,18 @@ below was run by the build. Install this branch (`./install.sh`; it restarts the
 Still ahead, not done by this phase: **SR2** (the UI-side security review, plan section 6), the
 **design-reviewer round** (UI, Code, Minimalism, Apple HIG, 7 or more), and your approval of the
 look (PNG strip + GIF, saved by `E3_KEEP`) before Phase 5.
+
+## E5 — the toast hold, headless
+
+```sh
+./dev/e5-toasts.sh
+```
+
+`bin/omarchy-face-toasts` switches the notch's notification do-not-disturb on while the scan island is up
+and off after (`Service.qml` calls it with a generation on every call). `e5` runs it against a stub
+`omarchy-shell` in a scratch `XDG_RUNTIME_DIR`: hold and release, a release the shell did not honour (marker
+kept, recovered by the next start), a do-not-disturb that was already on, ordering and races, no runtime
+directory. It cannot reach the real shell or its persisted setting, or `Service.qml`.
 
 ## F4 — sudo's PAM stack
 

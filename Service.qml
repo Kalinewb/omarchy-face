@@ -70,30 +70,37 @@ Item {
 
   // --- notification toasts while the island is up -------------------------------------
   //
-  // The notch draws a notification toast at the top centre, wider than the scan island, so
-  // the two overlapped and looked broken. The island is on the Overlay layer and the toast
-  // in the notch's own surface, so neither can be moved from here; what Omarchy's shell
-  // offers is its notifications service's do-not-disturb, over the same public IPC target
-  // `omarchy-toggle-notification-silencing` uses. While a card is up that is switched on
-  // (only if it was off), and switched off again when the card closes. A marker file in
-  // $XDG_RUNTIME_DIR records that this plugin turned it on, so a card that dies without
-  // closing (the shell restarting, a crash) cannot leave the person's notifications silenced:
-  // the next start of this service puts it back. Critical notifications bypass do-not-disturb
-  // in the shell itself, so a battery warning still shows.
-  readonly property string toastMarker: "${XDG_RUNTIME_DIR:-/tmp}/kalinewb.face/dnd-held"
+  // The notch draws a notification toast at the top centre, wider than the scan island,
+  // so the two overlapped. The island is on the Overlay layer and the toast in the notch's
+  // own surface, so neither can be moved from here, and the notch offers no hold. What
+  // Omarchy's shell offers is its notifications do-not-disturb (the IPC target that
+  // omarchy-toggle-notification-silencing uses), so while a card is up
+  // bin/omarchy-face-toasts switches it on, only if it was off, and off again after.
+  //
+  // Do-not-disturb is not cosmetic: the shell persists it, and it silences Face's own
+  // alerts too (health: omarchy-notification-send --app-name "Face ID"; the lock screen:
+  // notify-send -a "Face ID"): only omarchy-action, and notify-send at critical urgency,
+  // bypass it (NotificationLogic.js shouldBypassDnd). So the helper is careful: one
+  // lock, a generation on every call (below) so a late hold after a release is ignored,
+  // a marker that is removed only once the shell says `off`, and a retry at the next
+  // start of this service. It does nothing under a development harness (OMARCHY_FACE_DEV_BIN)
+  // or without a runtime directory of the user's own.
+  property int toastCounter: 0
 
-  function holdToasts() {
-    Quickshell.execDetached(["sh", "-c",
-      'marker="' + root.toastMarker + '"; '
-      + 'if [ ! -e "$marker" ] && [ "$(omarchy-shell -q notifications isDnd 2>/dev/null)" = off ]; then '
-      + 'mkdir -p "$(dirname "$marker")" && : >"$marker" && omarchy-shell -q notifications setDnd on >/dev/null 2>&1; fi'])
+  // Milliseconds since the epoch times 1000, plus a counter: it grows across restarts of
+  // this service and between two calls in the same millisecond.
+  function toastGeneration() {
+    root.toastCounter += 1
+    return String(Date.now() * 1000 + (root.toastCounter % 1000))
   }
 
-  function releaseToasts() {
-    Quickshell.execDetached(["sh", "-c",
-      'marker="' + root.toastMarker + '"; '
-      + 'if [ -e "$marker" ]; then rm -f "$marker"; omarchy-shell -q notifications setDnd off >/dev/null 2>&1; fi'])
+  function toasts(verb) {
+    if (engine.dev) return
+    Quickshell.execDetached([engine.pluginBin + "/omarchy-face-toasts", verb, root.toastGeneration()])
   }
+
+  function holdToasts() { root.toasts("hold") }
+  function releaseToasts() { root.toasts("release") }
 
   function closeCard() {
     if (root.closing) return

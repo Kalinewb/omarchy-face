@@ -140,7 +140,7 @@ check "idle: Simple's other eight bins are 5 px at 0.2 (inactive)" "5/0.2 5/0.2 
 check "idle: the demo is playing in the circle (the static glyph is hidden) with a caption under the line" "false demo true true caption Look at the camera" "$(field idle-glyph "$out")"
 check "idle: no camera exists, previewOn is false, the preview Loader holds nothing" "0 false true" "$(field idle-cameras "$out")"
 check "idle: the line is 'Fit your face in the circle.'" "Fit your face in the circle." "$(field idle-line "$out")"
-check "idle: Cancel, Start and the mode link; no Done, Try again or Add more" \
+check "idle: Cancel, Start and the mode link; no Done, Try again or Scan again" \
   "cancel=1 start=1 done=0 again=0 more=0 mode=1" "$(field idle-links "$out")"
 check "idle: the mode link names the OTHER mode" "Advanced" "$(field idle-modelink "$out")"
 check "idle: nothing was sent and the helper was not started" "ready 0" "$(field idle-state "$out")"
@@ -183,12 +183,12 @@ check "a track with every bin full and canFinish shows no Done in Simple (Done a
 check "swept with kept 5: 'All set.' and Done" "All set. | cancel=1 start=0 done=1 again=0 more=0 mode=0" "$(field swept-line "$out") | $(field swept-links "$out")"
 check "…the ring stays full (four covered arcs) and the session holds one capture" "20/0.9 20/0.9 20/0.9 20/0.9 | swept 1" \
   "$(field swept-filled "$out") | $(field swept-state "$out")"
-check "swept with kept 5: only Done (no Add more), and the next lap begins at once through the session" \
+check "swept with kept 5: only Done (no Scan again), and the next lap begins at once through the session" \
   'more=0 | [{"cmd":"sweep","appearance":"No glasses","mode":"simple","lap":1,"targets":[9,3,0,6]}] | 8/0.7 8/0.7 8/0.7 8/0.7 8/0.7 | centre' \
   "$(field kept5-more "$out" | sed 's/^/more=/;s/^more=1$/more=1/') | $(field again-sent "$out") | $(field again-ring "$out")"
-check "swept with kept 3: the line is a plain 'Enough to save.', Done and one quiet 'Add more'" \
-  "Enough to save. | cancel=1 start=0 done=1 again=0 more=1 mode=0 | Add more" "$(field kept3-line "$out") | $(field kept3-links "$out") | $(field kept3-more-text "$out")"
-check "Add more is lap 1 again on the same session and mode (no second password), the ring empties and nothing is offered" \
+check "swept with kept 3: the line is a plain 'Enough to save.', Done and one quiet 'Scan again'" \
+  "Enough to save. | cancel=1 start=0 done=1 again=0 more=1 mode=0 | Scan again" "$(field kept3-line "$out") | $(field kept3-links "$out") | $(field kept3-more-text "$out")"
+check "Scan again is lap 1 again on the same session and mode (no second password), the ring empties and nothing is offered" \
   '[{"cmd":"sweep","appearance":"No glasses","mode":"simple","lap":1,"targets":[9,3,0,6]}] | 8/0.7 8/0.7 8/0.7 8/0.7 8/0.7 | centre | cancel=1 start=0 done=0 again=0 more=0 mode=0' \
   "$(field more-sent "$out") | $(field more-ring "$out" | sed 's/ | centre | / | centre | /')"
 check "after the second lap kept 5 offers Done only" "cancel=1 start=0 done=1 again=0 more=0 mode=0" "$(field kept5-again "$out")"

@@ -445,14 +445,15 @@ Item {
       }
 
       // After a lap that saved only a little (three templates, under four): one quiet
-      // way to take the lap again for more. It is lap 1 on the same session and in the
-      // same mode, no second password; the one way out of a running scan is Cancel
+      // way to take the lap again. It is a new lap 1, not an addition: root replaces the
+      // appearance's pending set with the new one (hence "Scan again", not "Add more").
+      // Same session and mode, no second password; the one way out of a running scan is Cancel
       // ("Start over" was taken out of the live view on the user's request, 2026-11-03).
       EnrolLink {
         id: moreLink
         objectName: "moreLink"
         anchors.horizontalCenter: parent.horizontalCenter
-        text: "Add more"
+        text: "Scan again"
         quiet: true
         quietColor: view.secondary
         fontFamily: view.fontFamily

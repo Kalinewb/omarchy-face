@@ -455,7 +455,7 @@ ShellRoot {
       log("swept-state", session.scanState + " " + session.captures)
       log("swept-filled", [9, 3, 0, 6].map(function (k) { return binLook(k).split(" ")[0] }).join(" "))
       log("swept-check", named("check").visible + " " + named("check").width + " " + named("check").drawn + " " + named("check").x + "," + named("check").y)
-      // Kept 5 (all four targets): no "Add more", only Done. A second lap is begun through the
+      // Kept 5 (all four targets): no "Scan again", only Done. A second lap is begun through the
       // session (test plumbing: there is no link for it here) to reach the kept-3 ending.
       log("kept5-more", linkState("moreLink"))
       view.session.startOver()
@@ -472,7 +472,7 @@ ShellRoot {
       log("kept3-links", links())
       log("kept3-more-text", named("moreLink").text)
       log("kept3-skipped-rest", binLook(6))
-      // "Add more": lap 1 again at once, same mode, no second password; the ring empties.
+      // "Scan again": lap 1 again at once, same mode, no second password; the ring empties.
       named("moreLink").clicked()
     })
     at(function () {

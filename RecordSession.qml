@@ -462,7 +462,7 @@ Item {
                   targets: session.activeMode === "simple" ? [9, 3, 0, 6] : all})
   }
 
-  // "Add more" after a lap that has ended (`swept`): lap 1 again at once, which
+  // "Scan again" after a lap that has ended (`swept`): lap 1 again at once, which
   // replaces the pending set (root's rule). Same session, same mode, no second
   // password. There is no way to restart a lap that is running: Cancel is EOF.
   function startOver() {

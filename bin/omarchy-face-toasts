@@ -1,0 +1,84 @@
+#!/bin/bash
+#
+# omarchy-face v2
+# omarchy-face-version: 3.1.3
+#
+# Hold the notch's notification toasts back while the scan island is up, and put
+# them back after (Service.qml calls this; nothing else does).
+#
+#   omarchy-face-toasts hold <generation>
+#   omarchy-face-toasts release <generation>
+#
+# The island is on the Overlay layer and the notch draws a toast in its own surface,
+# wider than the island, so the two overlapped. The notch offers no hold, so this
+# switches the shell's notifications do-not-disturb on over its public IPC
+# (`omarchy-shell notifications isDnd | setDnd`, what omarchy-toggle-notification-silencing
+# uses), and only if it was off. It is not a cosmetic setting to leave behind: the
+# shell persists it, and Face's own alerts (omarchy-notification-send --app-name
+# "Face ID", notify-send -a "Face ID") are NOT among the ones that bypass it (only
+# omarchy-action, and notify-send at critical urgency, do), so a do-not-disturb left on
+# silences Face's own health alerts. Hence:
+#
+#   - one lock (flock) serialises every call, so a hold and a release never interleave;
+#   - every call carries a generation (Service.qml: milliseconds since the epoch times
+#     1000 plus a counter, so it grows across restarts) and a call older than the last
+#     one seen is ignored, so a hold that runs after the release that followed it does
+#     nothing;
+#   - the marker file says "this plugin turned it on", and is removed only once
+#     `isDnd` answers exactly `off` after `setDnd off`. `omarchy-shell` fails silently
+#     (and -q hides even the answer), so a release that did not take keeps the marker
+#     and the next start of the service retries it;
+#   - a do-not-disturb that was already on, or whose state cannot be read, is never touched;
+#   - with no $XDG_RUNTIME_DIR of the user's own there is nowhere safe to keep the
+#     marker, so nothing is done.
+
+set -u
+
+verb=${1:-}
+generation=${2:-}
+[[ $verb == hold || $verb == release ]] || exit 2
+[[ $generation =~ ^[0-9]{1,18}$ ]] || exit 2
+
+runtime=${XDG_RUNTIME_DIR:-}
+[[ -n $runtime && -d $runtime && -O $runtime ]] || exit 0
+dir=$runtime/kalinewb.face
+mkdir -p -m 700 -- "$dir" 2>/dev/null || exit 0
+[[ -O $dir ]] || exit 0
+
+marker=$dir/dnd-held
+last=$dir/dnd-generation
+exec 9>"$dir/dnd.lock" || exit 0
+flock 9 || exit 0
+
+seen=$(cat -- "$last" 2>/dev/null)
+[[ $seen =~ ^[0-9]{1,18}$ ]] || seen=0
+# An older call than one already run is stale; the same generation is a repeat.
+(( 10#$generation > 10#$seen )) || exit 0
+printf '%s\n' "$generation" >"$last"
+
+state() { omarchy-shell notifications isDnd 2>/dev/null | tr -d '[:space:]'; }
+refresh() { omarchy-shell -q omarchy.indicators refresh >/dev/null 2>&1; }
+
+if [[ $verb == hold ]]; then
+  [[ -e $marker ]] && exit 0                    # already held by this plugin
+  [[ $(state) == off ]] || exit 0               # on already, or unreadable: not ours to touch
+  : >"$marker" || exit 0
+  omarchy-shell notifications setDnd on >/dev/null 2>&1
+  # Only an answer of `off` proves it did not take. `on`, or an answer that cannot be
+  # read (the shell going away mid-call), keeps the marker so a release will try.
+  if [[ $(state) == off ]]; then
+    rm -f -- "$marker"
+  else
+    refresh
+  fi
+  exit 0
+fi
+
+# release
+[[ -e $marker ]] || exit 0
+omarchy-shell notifications setDnd off >/dev/null 2>&1
+if [[ $(state) == off ]]; then
+  rm -f -- "$marker"
+  refresh
+fi
+exit 0
