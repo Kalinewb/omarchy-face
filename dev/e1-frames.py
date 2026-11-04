@@ -81,14 +81,37 @@ def build(segments):
     return frames
 
 
-def _alternating():
-    """The owner's lap with a stranger's frame after every owner frame of the holds (never five in a row)."""
-    frames = []
-    for frame in build([dict(n=40)] + visit(SIMPLE)):
-        frames.append(frame)
-        if frame["who"] == 0.0 and len(frames) > 60:
-            frames.append(dict(frame, who=0.9))
-    return frames
+def _lap():
+    return build([dict(n=40)] + visit(SIMPLE))
+
+
+def _identity(frames, start, gap, wobble, pattern=None, seed=7):
+    """From frame `start`, the frames `pattern` picks (all of them by default) are somebody else: their
+    descriptor is `gap` from the owner's plus a per-frame wobble of up to +-`wobble`, as a real stranger's
+    would vary (a constant gap makes a test that cannot see a stranger who is only sometimes close)."""
+    import random
+    rng = random.Random(seed)
+    out = []
+    for i, frame in enumerate(frames):
+        frame = dict(frame)
+        if i >= start and (pattern is None or pattern(i - start)):
+            frame["who"] = gap + rng.uniform(-wobble, wobble)
+        out.append(frame)
+    return out
+
+
+def _foothold():
+    import random
+    rng = random.Random(3)
+    out = []
+    for i, frame in enumerate(_lap()):
+        frame = dict(frame)
+        if i == 45:
+            frame["who"] = 0.38
+        elif i > 45:
+            frame["who"] = 0.46 + rng.uniform(-0.02, 0.02)
+        out.append(frame)
+    return out
 
 
 def strobe(frames):
@@ -144,13 +167,23 @@ SCENARIOS = {
     "calibrate": lambda: [dict(entry(0.0, 0.0), kind=kind) for kind in ("unlit", "unlit-start", "lit") for _ in range(30)],
     # the unlit frames of a strobe whose lit frames are exactly black too
     "strobe-black": lambda: strobe(build([dict(n=450, kind="black")])),
-    # the OWNER turning to each Simple target, whose descriptor drifts 0.46 from the straight-on one at the
-    # target (over CHAIN, under HARD) but by small steps from frame to frame: it must complete (3.1.4)
+    # the OWNER turning to each Simple target, whose descriptor is 0.46 from the straight-on one at the target (over
+    # CHAIN, under HARD) by small steps. 3.1.3's guard refuses it (`changed`), and so does this one: a sliding
+    # chain that would let it through was tried in 3.1.4 and withdrawn (SR1: it admits strangers). Kept as the
+    # regression of that behaviour; the live trace says how often a real owner meets it.
     "simple-owner-turn": lambda: build([dict(n=40)] + [dict(at=k, n=30, drift=0.46, travel=14) for k in SIMPLE]),
-    # a stranger 0.50 from the owner (inside HARD, outside CHAIN of everything accepted) after the centre
-    "simple-lookalike": lambda: build([dict(n=40)] + visit(SIMPLE, who=0.5)),
-    # the owner's frames alternating with a stranger's, from the first target on
-    "simple-alternating": lambda: _alternating(),
+    # STRANGERS WITH PER-FRAME SPREAD (identity gap from the owner + wobble, after the centre): the limit, pinned
+    "simple-gap-046": lambda: _identity(_lap(), 45, 0.46, 0.04),
+    "simple-gap-050": lambda: _identity(_lap(), 45, 0.50, 0.08),
+    "simple-gap-054": lambda: _identity(_lap(), 45, 0.54, 0.04),
+    "simple-midswap": lambda: _identity(_lap(), 70, 0.50, 0.06),
+    "simple-two-of-three": lambda: _identity(_lap(), 45, 0.46, 0.04, pattern=lambda i: i % 3 != 0),
+    "simple-strict-alternation": lambda: _identity(_lap(), 45, 0.46, 0.04, pattern=lambda i: i % 2 == 0),
+    # ONE stranger frame inside CHAIN of the centre (a foothold), then frames 0.46 from the centre but near that
+    # one: refused with a chain of templates (`changed`), accepted with a chain of accepted frames
+    "simple-foothold": lambda: _foothold(),
+    # a stranger wholly inside CHAIN of the centre (0.38): the documented limit, nothing in the guard refuses it
+    "simple-limit-038": lambda: _identity(_lap(), 45, 0.38, 0.02),
     "advanced-idle": lambda: build([dict(n=40), dict(n=900)]),
     "simple-wrong-long": lambda: build([dict(n=40), dict(at=6, n=900)]),
     # the camera waits on its first frame for a line on stdin (for the session-bound test)

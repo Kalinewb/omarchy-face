@@ -61,6 +61,11 @@ if [[ -n ${sh_version:-} ]]; then
     # read exactly as the runtime does (bin/omarchy-face-status, the admin helper): the top 40 lines,
     # the line anchored, any non-alphanumeric prefix ("# " in a script, two spaces in the policy's XML)
     header=$(head -40 "$f" | sed -n 's/^[^[:alnum:]]*omarchy-face-version:[[:space:]]*\([0-9A-Za-z.+-]*\).*/\1/p' | head -1)
+    # The runtime (has_v2_marker in the admin helper) refuses a snapshot file without the `omarchy-face v2`
+    # marker in its top 40 lines (snapshot_unmarked), so every file it installs must carry it.
+    if [[ $f == system/* ]] && ! head -40 "$f" | grep -q 'omarchy-face v2'; then
+      echo "check-pins: $f has no 'omarchy-face v2' marker in its first 40 lines (the installer would refuse it)" >&2; bad=1
+    fi
     if [[ -z $header ]]; then
       echo "check-pins: $f has no omarchy-face-version header" >&2; bad=1
     elif [[ $header != "$sh_version" ]]; then

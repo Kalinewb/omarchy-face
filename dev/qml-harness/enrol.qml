@@ -181,6 +181,14 @@ ShellRoot {
       presence: shellRoot.island ? shellRoot.island.presence : 0
     }
 
+    // A scrim that has nothing to dim: it must take no input.
+    Face.ScrimLayer {
+      id: idleScrim
+      anchors.fill: parent
+      visible: false
+      presence: 0
+    }
+
     Loader {
       id: viewLoader
       active: sessionLoader.item !== null
@@ -943,6 +951,8 @@ ShellRoot {
       at(function () {
         if (shellRoot.retractedCount > 0 && shellRoot.t1 === 0) {
           log("retracted", r1(find(scrimLayer, "scrim").opacity) + " " + r1(island.presence))
+          log("input-after", find(scrimLayer, "scrimInput").width + "x" + find(scrimLayer, "scrimInput").height)
+          log("input-idle", find(idleScrim, "scrimInput").width + "x" + find(idleScrim, "scrimInput").height)
           shellRoot.t1 = 1
         }
       }, 100)

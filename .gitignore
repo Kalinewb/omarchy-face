@@ -7,3 +7,10 @@ dev/fixtures/*/install.log
 dev/fixtures/*/verbs.log
 dev/fixtures/*/session.log
 dev/fixtures/*/purged
+
+# a person's face, never committed: the recorder's output and anything computed from it
+.cache/
+omarchy-face-enrol/
+dev/*cache*/
+dev/**/descriptors*.json
+dev/**/*.raw

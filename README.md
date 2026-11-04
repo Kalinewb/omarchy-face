@@ -328,16 +328,15 @@ newer than the installed system files: **Update Face's system files**, one passw
 
 ### Updating from 3.1.3
 
-Face ID 3.1.4 changes the enrolment helper once more (root code). The scan now progressed but ended
-"That was not you": the same-person guard compared each frame with the centre and the templates so far,
-and an owner's frames at a moderate turn are up to 0.46 from the straight-on one (over the 0.40 chain
-limit), because a template is only added when a target fills. Measured with the real face model on your
-own recordings (`dev/measure-guard.py`), the guard's chain now also follows the latest accepted frames,
-which sit 0.1-0.3 from each other as the head turns; the bound against a stranger (0.55 from the centre) is
-unchanged. The off-by-default trace (`debug=true` in `/etc/omarchy-face/config`) also prints the guard's
-distances and the run of refused frames. While the scan island is up the screen behind it is dimmed.
-Setup shows the plugin is newer than the installed system files: **Update Face's system files**, one
-password.
+Face ID 3.1.4 changes the enrolment helper's debug trace only (root code; the same-person guard is exactly
+3.1.3's). The scan now progressed but ended "That was not you". Measured with the real face model on your own
+recordings (`dev/measure-guard.py`), an owner's frames at a moderate turn are up to 0.46 from the straight-on
+one, which the guard's 0.40 chain limit refuses until a target fills; a sliding chain that would have let them
+through was tried and withdrawn, because it admits strangers too. The off-by-default trace (`debug=true` in
+`/etc/omarchy-face/config`, `journalctl -t omarchy-face-sweep`) now prints the guard's distances, the run of
+refused frames and a final line when the lap ends, so the next failure explains itself. While the scan island is
+up the screen behind it is dimmed. Setup shows the plugin is newer than the installed system files: **Update
+Face's system files**, one password.
 
 ## The views
 

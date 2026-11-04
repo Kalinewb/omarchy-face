@@ -243,7 +243,8 @@ def main(argv):
         elif argv[i] == "--landmarks":
             landmarks = argv[i + 1]; i += 2
         elif argv[i] == "--cache":
-            cache_dir = argv[i + 1]; os.makedirs(cache_dir, exist_ok=True); i += 2
+            # descriptors are a person's face: a private directory and private files
+            cache_dir = argv[i + 1]; os.makedirs(cache_dir, mode=0o700, exist_ok=True); os.chmod(cache_dir, 0o700); i += 2
         elif argv[i] == "--jobs":
             jobs = int(argv[i + 1]); i += 2
         elif argv[i] == "--json":
@@ -266,7 +267,10 @@ def main(argv):
                 with multiprocessing.Pool(jobs, init, (model, landmarks)) as pool:
                     encodings = pool.map(encode, [(f["path"], f["box"]) for f in frames], chunksize=8)
                 if cache:
-                    json.dump(encodings, open(cache, "w"))
+                    fd = os.open(cache, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                    with os.fdopen(fd, "w") as handle:
+                        json.dump(encodings, handle)
+                    os.chmod(cache, 0o600)
             rows = analyse(frames, encodings)
             sims = {v: simulate(frames, encodings, v) for v in ("current", "slide", "slide+r")}
             if rows is None:

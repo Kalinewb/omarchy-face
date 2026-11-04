@@ -18,7 +18,12 @@ PanelWindow {
   WlrLayershell.layer: WlrLayer.Overlay
   WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
 
+  // The input region is the layer's absorber: the whole screen while the island is up, nothing
+  // before it drops and after it is gone, so this window never blocks a click it does not dim.
+  mask: Region { item: layer.input }
+
   ScrimLayer {
+    id: layer
     anchors.fill: parent
     presence: scrim.presence
   }

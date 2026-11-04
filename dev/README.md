@@ -1066,10 +1066,11 @@ lengthened by a sweep, and the two copies of the template caps being equal.
 `dev/measure-guard.py --model <dlib_face_recognition_resnet_model_v1.dat[.bz2]> <recording dirs...>` computes the
 helper's own 128-d descriptors with real dlib for a person's recordings (user-run; never committed) and prints, by how far
 off-centre the head is, the percentiles of the owner's distance to the centre template and to the chain, and replays the
-guard (the 3.1.3 constants, a sliding chain, and one with HARD growing with r) over the frames that reach it. The helper's
+guard (the shipped constants, a sliding chain, and one with HARD growing with r: both variants withdrawn, see
+`dev/SR1-notes.md`) over the frames that reach it. The helper's
 own model is in `/usr/lib/security/howdy/dlib-data/`, root-only, so the script takes the same upstream file from where
 you can read it (`~/.cache/yay/howdy/dlib_face_recognition_resnet_model_v1.dat.bz2`). `--cache <dir>` keeps the
-descriptors in a scratch directory so a rerun takes seconds. The tables and the decision are in `dev/SR1-notes.md` (3.1.4).
+descriptors in a scratch directory so a rerun takes seconds. The descriptor cache is a private (0700) directory. The tables and the decision are in `dev/SR1-notes.md` (3.1.4).
 
 ### Replaying a recording (3.1.3)
 

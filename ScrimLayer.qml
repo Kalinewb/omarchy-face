@@ -20,10 +20,17 @@ Item {
     opacity: layer.shown
   }
 
+  // The part of the screen that takes the pointer: all of it while the island is there, NONE
+  // before it has started to drop and once it is gone (a mask of zero size, so the window does
+  // not block clicks that nothing is dimming).
+  readonly property Item input: absorber
+
   // Absorbs the pointer: no pass-through, and nothing closes the card.
   MouseArea {
+    id: absorber
     objectName: "scrimInput"
-    anchors.fill: parent
+    width: layer.presence > 0.01 ? layer.width : 0
+    height: layer.presence > 0.01 ? layer.height : 0
     acceptedButtons: Qt.AllButtons
     hoverEnabled: true
     onWheel: function (wheel) { wheel.accepted = true }

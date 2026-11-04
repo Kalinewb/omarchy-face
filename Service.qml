@@ -106,6 +106,15 @@ Item {
   // under it, and gone when the card is.
   property bool scrimOn: false
 
+  // If the card never gets as far as dropping (it failed to map, or was destroyed half way), the
+  // screens must not stay dimmed behind nothing: after 2 s without the island's presence the
+  // scrims go. (ScrimLayer's input region is empty until then, so nothing is blocked meanwhile.)
+  Timer {
+    id: scrimWatchdog
+    interval: 2000
+    onTriggered: if (root.scrimOn && (!root.card || root.card.presence <= 0)) root.scrimOn = false
+  }
+
   Variants {
     model: root.scrimOn ? Quickshell.screens : []
     ScanScrim {
@@ -120,6 +129,7 @@ Item {
     root.closing = true
     var goingCard = root.card
     root.scrimOn = false
+    scrimWatchdog.stop()
     if (goingCard) root.releaseToasts()
     var goingSession = root.session
     root.card = null
@@ -212,6 +222,7 @@ Item {
     indicator.clearSuppressedNotice()
     var shape = root.notchShape()
     root.scrimOn = true
+    scrimWatchdog.restart()
     root.card = cardComponent.createObject(root, {
       session: root.session,
       previewDevice: root.previewDevice,

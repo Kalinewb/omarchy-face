@@ -523,23 +523,28 @@ def test_guard():
     check("the chain is the NEAREST template, not every one",
           sw.guard_ok(enc(0.50), [centre, enc(0.20), enc(0.35)], centre))
 
-    # 3.1.4, measured on the owner's recordings (dev/measure-guard.py): at a moderate turn the owner's
-    # frames sit up to 0.46 from the CENTRE (over CHAIN) but 0.1-0.3 from the frame before them
-    check("the chain also follows the latest accepted frames: 0.46 from the centre is a pass when a recent frame is 0.20 away",
-          sw.guard_ok(enc(0.46), [centre], centre, recent=[enc(0.26)]) and not sw.guard_ok(enc(0.46), [centre], centre))
-    check("...and refused when no recent frame is within CHAIN of it either (a jump is not a chain step)",
-          not sw.guard_ok(enc(0.46), [centre], centre, recent=[enc(0.0), enc(0.02), enc(0.90)]))
-    check("HARD still bounds it, however near a recent frame is (the stranger's bound does not move)",
-          not sw.guard_ok(enc(0.56), [centre], centre, recent=[enc(0.55)]) and sw.guard_ok(enc(0.55), [centre], centre, recent=[enc(0.50)]))
+    # 3.1.4: the guard is 3.1.3's. A sliding chain of the latest accepted frames was tried and withdrawn:
+    # SR1 showed an accepted stranger frame becomes the chain (dev/SR1-notes.md)
+    check("an owner frame 0.46 from the centre and over CHAIN of every template is refused (the documented cost)",
+          not sw.guard_ok(enc(0.46), [centre], centre))
+    try:
+        sw.guard_ok(enc(0.46), [centre], centre, recent=[enc(0.26)])
+        has_recent = True
+    except TypeError:
+        has_recent = False
+    check("regression: guard_ok takes no `recent` frames (a chain of accepted frames must not come back; e1 pins it end to end)",
+          not has_recent and "recent" not in SOURCE.lower().replace("recently", ""))
+    check("a stranger who gets ONE frame in (0.38 from the centre) does not make 0.46 a chain step",
+          sw.guard_ok(enc(0.38), [centre], centre) and not sw.guard_ok(enc(0.46), [centre], centre))
+    check("HARD is unchanged: 0.55 passes the centre test, 0.56 does not (chain wide open)",
+          sw.guard_ok(enc(0.55), [enc(0.50)], centre) and not sw.guard_ok(enc(0.56), [enc(0.50)], centre))
+    check("guard_distances returns what the guard compares: the centre and the nearest template (and nothing before a centre)",
+          [round(x, 3) for x in sw.guard_distances(enc(0.46), [centre, enc(0.30)], centre)] == [0.46, 0.16]
+          and sw.guard_distances(enc(0.1), [], None) == (None, None))
     check("the pose history cap is derived from SMOOTH_FRAMES + STEADY_FRAMES, not a literal 8 (SR1 m4)",
           "[-(SMOOTH_FRAMES + STEADY_FRAMES):]" in SOURCE and "[-8:]" not in SOURCE)
-    check("a stranger 0.50 from the owner's frames is refused even with them all in the chain",
-          not sw.guard_ok(enc(0.50), [centre], centre, recent=[enc(0.05), enc(0.0), enc(0.02)]))
-    check("guard_distances returns what the guard compares (and nothing before a centre)",
-          [round(x, 3) for x in sw.guard_distances(enc(0.46), [centre], centre, [enc(0.26)])] == [0.46, 0.2],
-          str(sw.guard_distances(enc(0.46), [centre], centre, [enc(0.26)])))
-    check("...with no centre yet it is (None, None)", sw.guard_distances(enc(0.1), [], None) == (None, None))
-    check("RECENT_FRAMES 6 and RECENT_SECONDS 1.5 are the window", (sw.RECENT_FRAMES, sw.RECENT_SECONDS) == (6, 1.5))
+    check("the debug trace is written by one function that is also called when the lap ends (SR1 S3: guard_run reaches its real value)",
+          "def trace_line(lap_end):" in SOURCE and SOURCE.count("trace_line(") >= 3)
 
     run, ended, history = 0, False, []
     for failed in (True, True, True, True, False, True, True, True, True):
