@@ -519,59 +519,66 @@ for path in glob.glob('$STORE/people/emil.json'):
 print(str(n >= ${1:-5} and bad == 0).lower())
 "
 }
-# A stranger every frame of whom is in the band (0.40-0.55 from the owner's): nothing is accepted (so nothing is
-# stored), nothing is a stranger frame by the counter (so the lap is not ended `changed`), the targets run out.
-for sc in simple-gap-046 simple-gap-050 simple-gap-054 simple-midswap simple-foothold; do
+# While nothing is filled (the centre is the only template) a frame over CHAIN counts towards `changed` exactly as in
+# 3.1.3: a stranger in the band, straddling CHAIN, or past HARD is ended after five in a row, and nothing is stored.
+for sc in simple-gap-046 simple-gap-050 simple-gap-054 simple-foothold simple-straddle simple-gap-058 simple-gap-062 simple-band-beyond-mix simple-stranger; do
   reset_store
   scenario $sc
   out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
-  same "$sc: a stranger in the band (0.40-0.55 from the owner's, with wobble; or one foothold frame then frames near it) after the centre: not accepted, not stored, the lap ends too_few (3.1.5; 3.1.3 ended it changed)" '["too_few",false]' "$(q "$out" '[last("capture_failed")["code"], first("swept") is not None]')"
+  same "$sc: a stranger after the centre -- in the band (0.40-0.55 from the owner's, with wobble), straddling CHAIN (0.46 +-0.08), one foothold frame then frames near it, past HARD, or band and beyond alternating -- with nothing filled yet ends changed, as in 3.1.3, and nothing is stored" '["changed",false]' "$(q "$out" '[last("capture_failed")["code"], first("swept") is not None]')"
   check "...$sc: and nothing was written" bash -c "[[ ! -e $STORE/people/emil.json ]]"
 done
-for sc in simple-gap-058 simple-gap-062 simple-band-beyond-mix simple-stranger; do
-  reset_store
-  scenario $sc
-  out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
-  same "$sc: a stranger past HARD (0.55) from the owner's, or beyond-HARD frames alternating with band ones (band frames neither count nor reset the run), ends changed, nothing stored" '["changed",false]' "$(q "$out" '[last("capture_failed")["code"], first("swept") is not None]')"
-  check "...$sc: and nothing was written" bash -c "[[ ! -e $STORE/people/emil.json ]]"
-done
+reset_store
+scenario simple-midswap
+out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
+same "simple-midswap: the owner fills the first target and a stranger wholly in the band (0.46-0.54) takes over mid-hold: the band is transparent once something is filled, none of his frames is ok, so no changed, nothing more fills: too_few, nothing stored" '["too_few",false]' "$(q "$out" '[last("capture_failed")["code"], first("swept") is not None]')"
+check "...simple-midswap: and nothing was written" bash -c "[[ ! -e $STORE/people/emil.json ]]"
 for sc in simple-two-of-three simple-strict-alternation; do
   reset_store
   scenario $sc
   out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
-  same "$sc: the stranger's frames come two of three (or every other one) in the band: the owner's frames fill every target, no changed" '[[0,3,6,9],false]' "$(q "$out" '[first("swept")["filled"], any(c.get("code") == "changed" for c in evs)]')"
+  same "$sc: the stranger's frames come two of three (or every other one) in the band: the owner's frames fill every target and reset the run, no changed" '[[0,3,6,9],false]' "$(q "$out" '[first("swept")["filled"], any(c.get("code") == "changed" for c in evs)]')"
   same "...$sc: and not one stranger frame is in anything that was stored (every stored descriptor is the owner's)" 'true' "$(stored_all_owner)"
 done
 reset_store
 scenario simple-limit-038
 out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
-same "THE KNOWN LIMIT: a stranger wholly inside CHAIN of the centre (0.38) is accepted: the lap completes (no stranger data; this pins it so a change is deliberate)" '[[0,3,6,9],false]' "$(q "$out" '[first("swept")["filled"], any(c.get("code") == "changed" for c in evs)]')"
-reset_store
-scenario simple-straddle
-out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 150" "send $DONE" "await saved 30")
-same "NEW IN 3.1.5, THE COST, pinned: a stranger who STRADDLES CHAIN (0.46 +-0.08 from the owner's, so one frame in eight is 0.40 or less) is no longer ended by five refusals in a row: the lap completes (3.1.3 ended it changed)" '[[0,3,6,9],false]' "$(q "$out" '[first("swept")["filled"], any(c.get("code") == "changed" for c in evs)]')"
-same "...what is stored passed the per-frame guard, as before, and the chain of TEMPLATES carries it: once one stranger template (0.39) is filled, the stranger's other frames are within CHAIN of it, so the stored descriptors reach past 0.40 but never past HARD (0.55) from the owner's centre" 'true' "$(python3 -c "
+same "THE KNOWN LIMIT, unchanged: a stranger wholly inside CHAIN of the centre (0.38) is accepted: the lap completes" '[[0,3,6,9],false]' "$(q "$out" '[first("swept")["filled"], any(c.get("code") == "changed" for c in evs)]')"
+same "...and it stores the stranger: the stored descriptors are 0.30-0.40 from the owner's centre (no stranger data; this pins the limit so a change is deliberate)" 'true' "$(python3 -c "
 import json, glob
 d = []
 for path in glob.glob('$STORE/people/emil.json'):
     for appearance in json.load(open(path)).get('appearances', []):
         d += [abs(e[0]) for e in [appearance['encoding']] + [x['encoding'] for x in appearance.get('extra', [])]]
-print(str(len(d) >= 5 and 0.40 < max(d) <= 0.55 + 1e-9).lower())
+print(str(len(d) >= 5 and 0.30 < max(d) <= 0.40 + 1e-9).lower())
+")"
+# Once a target is filled the band is transparent: an owner far off-centre after the first fill does not end the lap.
+reset_store
+scenario simple-owner-band-updown
+out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 150" "send $DONE" "await saved 30")
+same "THE LIVE-TRACE LAP (regression): the centre, left and right fill, up and down are banded (0.46) and skipped by patience: swept with two filled and two skipped, and saved" '[[3,9],[0,6],true]' "$(q "$out" '[first("swept")["filled"], first("swept")["skipped"], any(e.get("event") == "saved" for e in evs)]')"
+same "...with only the owner's descriptors stored" 'true' "$(stored_all_owner 3)"
+same "...and the scan said so while it was happening: some track events said over (the band)" 'true' "$(q "$out" 'any(t["state"] == "over" for t in tracks) and not any(c.get("code") == "changed" for c in evs)')"
+reset_store
+scenario simple-owner-band-after-fill
+out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
+same "the owner far off-centre AFTER the first target filled (left 0.30, then right, up, down at 0.46): no changed; the targets run out with one filled, too_few" '"too_few"' "$(q "$out" 'last("capture_failed")["code"]')"
+reset_store
+scenario simple-late-stranger
+out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 150" "send $DONE" "await saved 30")
+same "THE REMAINING COST, pinned: a stranger straddling CHAIN (0.46 +-0.08) who takes over AFTER the owner's first target filled is not ended by the run (the band is transparent then) and his frames within 0.40 of the centre fill the rest: the lap completes" '[[0,3,6,9],false]' "$(q "$out" '[first("swept")["filled"], any(c.get("code") == "changed" for c in evs)]')"
+same "...and he is stored: besides the owner's centre and left template there are descriptors 0.30-0.55 from the owner's centre (HARD still bounds them)" 'true' "$(python3 -c "
+import json, glob
+d = []
+for path in glob.glob('$STORE/people/emil.json'):
+    for appearance in json.load(open(path)).get('appearances', []):
+        d += [abs(e[0]) for e in [appearance['encoding']] + [x['encoding'] for x in appearance.get('extra', [])]]
+print(str(len(d) >= 5 and 0.30 < max(d) <= 0.55 + 1e-9).lower())
 ")"
 reset_store
 scenario simple-owner-turn
 out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
-same "the OWNER far off-centre (0.46 from the centre at every target) is not refused as a stranger any more: no changed; every target runs out and the lap ends too_few (3.1.3's behaviour was changed, the live \"That was not you\")" '"too_few"' "$(q "$out" 'last("capture_failed")["code"]')"
-same "...and the scan said so while it was happening: some track events said over (the band), and every target was skipped" 'true' "$(q "$out" 'any(t["state"] == "over" for t in tracks) and sorted(evs[-1].get("skipped", [])) in ([], [0,3,6,9]) or any(sorted(t.get("skipped", [])) == [0,3,6,9] for t in tracks)')"
-reset_store
-scenario simple-owner-band-updown
-out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 150" "send $DONE" "await saved 30")
-same "THE USER'S LAP: left and right fill, up and down are banded (0.46) and skipped by patience: the lap is swept with two filled and two skipped, and saved" '[[3,9],[0,6],true]' "$(q "$out" '[first("swept")["filled"], first("swept")["skipped"], any(e.get("event") == "saved" for e in evs)]')"
-same "...and every stored descriptor is the owner's, no stranger frame was credited" 'true' "$(stored_all_owner 3)"
-reset_store
-scenario simple-stranger
-out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 90" "eof")
-same "a whole lap by somebody else after the centre still ends changed" '"changed"' "$(q "$out" 'last("capture_failed")["code"]')"
+same "THE COST OF (a), pinned: an owner whose FIRST target is 0.46 from the centre (nothing filled) is ended changed, as in 3.1.3 -- a first target that far off is the one case the band does not cover" '"changed"' "$(q "$out" 'last("capture_failed")["code"]')"
 
 step "the debug trace (3.1.2): off by default; with debug=true in root's config, one line a second, no frame data"
 # A stand-in for `logger`: only the sweep child's own (tag omarchy-face-sweep, no message, lines on
@@ -625,14 +632,14 @@ last = rows[-1]
 print(str(last['guard_run'] == '5' and last['lap_end'] == 'changed' and float(last['hard_max']) > 0.55 and max(int(r['guard_run']) for r in rows) == 5).lower())
 ")"
 reset_store
-scenario simple-owner-turn
+scenario simple-owner-band-updown
 : >/run/omarchy-face-stub/logger.out
-out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
-same "...and the owner far off-centre: hard_max under 0.55 and chain_max over 0.40 (the band), band counted, guard_run never above 0, last word band, the lap ends by running out of targets (resolved)" 'true' "$(python3 -c "
+out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 150" "send $DONE" "await saved 30")
+same "...and the owner far off-centre after two fills: chain_max over 0.40 with hard_max under 0.55 (the band), band counted, guard_run never above 0, last word band, the lap ends by running out of targets (resolved)" 'true' "$(python3 -c "
 import re
 rows = [dict(re.findall(r'(\w+)=(\S+)', l)) for l in open('/run/omarchy-face-stub/logger.out') if l.startswith('debug ')]
 last = rows[-1]
-print(str(float(last['hard_max']) < 0.55 and max(float(r['chain_max']) for r in rows) > 0.40 and int(last['band']) > 5
+print(str(max(float(r['hard_max']) for r in rows[-20:]) < 0.55 and max(float(r['chain_max']) for r in rows) > 0.40 and int(last['band']) > 5
           and max(int(r['guard_run']) for r in rows) == 0 and 'band' in {r['last_word'] for r in rows} and last['lap_end'] == 'resolved').lower())
 ")"
 printf 'debug=false\n' >>/etc/omarchy-face/config

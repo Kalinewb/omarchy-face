@@ -3104,10 +3104,14 @@ def guard_verdict(encoding, accepted, centre, chain=CHAIN, hard=HARD):
     """"ok", "band" or "beyond", per frame:
 
       ok      within HARD of the centre and within CHAIN of the nearest accepted template
-      band    within HARD of the centre but over CHAIN of every template: not accepted (not stored,
-              not credited, no dwell) but not evidence of another person either; the loop neither
+      band    within HARD of the centre but over CHAIN of every template, and AT LEAST ONE TARGET
+              IS FILLED (`accepted` holds more than the centre): not accepted (not stored, not
+              credited, no dwell) but not evidence of another person either; the loop neither
               counts it towards `changed` nor lets it break a run
-      beyond  over HARD of the centre: the stranger bound, the only verdict that counts
+      beyond  over HARD of the centre: the stranger bound. Also a frame over CHAIN while the centre
+              is the only template (nothing filled yet): that is 3.1.3's rule, kept where a
+              stranger is cheapest to stop, because the first filled template is what a stranger's
+              later frames chain to
 
     Without a centre yet this frame is the centre (ok).
     """
@@ -3117,7 +3121,7 @@ def guard_verdict(encoding, accepted, centre, chain=CHAIN, hard=HARD):
     if hard_distance > hard:
         return "beyond"
     if chain_distance is not None and chain_distance > chain:
-        return "band"
+        return "band" if len(accepted) > 1 else "beyond"
     return "ok"
 
 
@@ -3142,8 +3146,9 @@ def changed_step(run, failed):
     """The run of consecutive lit frames that failed the guard, and whether it ends the lap.
 
     Called only for frames that reached an encoding: a frame the gates turned away
-    neither extends the run nor breaks it. `failed` is "beyond HARD" (3.1.5): a frame in
-    the band between CHAIN and HARD is not passed here at all, so it is neither.
+    neither extends the run nor breaks it. `failed` is the verdict "beyond" (3.1.5): over
+    HARD, or over CHAIN while nothing is filled. A frame in the band (over CHAIN, within
+    HARD, something filled) is not passed here at all, so it is neither.
     """
     run = run + 1 if failed else 0
     return run, run >= CHANGED_FRAMES

@@ -332,10 +332,11 @@ Face ID 3.1.5 changes the enrolment helper (root code, so Setup offers **Update 
 password) in two places, both found in your own trace. First, turning your head sideways read as tilting it down
 by about three quarters of the turn, so a right turn landed outside the right target and never filled; the
 position the scan reads is now corrected for that (it changes only which target a pose counts for, not who the
-face is). Second, a frame that is over the 0.40 chain limit but still well inside the 0.55 centre limit (you,
-far from straight on) is no longer counted towards "That was not you": it is simply not used, and the scan
-says "A little less". Only frames beyond 0.55 from your first one can end the scan that way. The ring and the
-caption already show a target that is skipped (the tick stays empty and the line says "We will skip that one").
+face is). Second, once one target has filled, a frame that is over the 0.40 chain limit but still well inside the 0.55
+centre limit (you, far from straight on) is no longer counted towards "That was not you": it is simply not
+used, and the scan says "A little less". Before the first target fills, and for any frame beyond 0.55 from your
+first one, the old rule stands. The ring and the caption already show a target that is skipped (the tick stays
+empty and the line says "We will skip that one").
 
 ### Updating from 3.1.3
 

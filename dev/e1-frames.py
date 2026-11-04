@@ -184,25 +184,28 @@ SCENARIOS = {
     # the unlit frames of a strobe whose lit frames are exactly black too
     "strobe-black": lambda: strobe(build([dict(n=450, kind="black")])),
     # the OWNER at each Simple target with a descriptor 0.46 from the straight-on one (over CHAIN, under HARD) by small
-    # steps, held long enough for the patience of every target to run out. 3.1.3 ended this lap `changed` (the live
-    # "That was not you"); 3.1.5 takes those frames for what they are -- not accepted, not a stranger -- and the lap
-    # ends with every target skipped (`too_few`), nothing stored.
+    # steps: the FIRST target is already that far, so nothing is filled and the run of refusals ends the lap `changed`,
+    # as in 3.1.3 (the cost of the strictness while only the centre exists; the live trace's failure was after two fills).
     # (each turn moves the descriptor along its own axis, as turning to different sides does: the left turn is not near the up one)
     "simple-owner-turn": lambda: build([dict(n=40)] + [dict(at=k, n=240, drift=0.46, travel=14, axis=2 + i) for i, k in enumerate(SIMPLE)]),
-    # the user's lap as the live trace showed it: left and right fill (0.30), up and down are 0.46 from the centre
-    # (banded) and are skipped by patience: two filled is enough for Simple
+    # left fills (0.30), then right, up and down are 0.46 from the centre: the band is transparent once something is filled
+    "simple-owner-band-after-fill": lambda: build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2)]
+                                                  + [dict(at=k, n=240, drift=0.46, travel=14, axis=3 + i) for i, k in enumerate((3, 0, 6))]),
+    # a stranger straddling CHAIN who takes over after the owner's left target has filled: the band is transparent by then, so
+    # nothing ends it and his frames within CHAIN of the centre fill the rest (the cost that remains after 3.1.5's (a))
+    "simple-late-stranger": lambda: _identity(build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2)] + visit((3, 0, 6))), 100, 0.46, 0.08),
     "simple-owner-band-updown": lambda: build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2), dict(at=3, n=40, drift=0.30, travel=14, axis=3),
                                                dict(at=0, n=240, drift=0.46, travel=14, axis=4), dict(at=6, n=240, drift=0.46, travel=14, axis=5)]),
-    # STRANGERS WITH PER-FRAME SPREAD (identity gap from the owner + wobble, after the centre). In the band between CHAIN
-    # and HARD (every frame 0.40-0.55 from the owner's) nothing is accepted and nothing ends the lap but the targets
-    # running out: `too_few`, nothing stored. Past HARD five in a row end it `changed`, as before.
+    # STRANGERS WITH PER-FRAME SPREAD (identity gap from the owner + wobble, after the centre). With only the centre
+    # filled, every frame over CHAIN counts towards `changed` (3.1.3's rule): the band (0.40-0.55), straddling CHAIN and
+    # past HARD all end the lap `changed` and store nothing.
     "simple-gap-046": lambda: _identity(_lap(), 45, 0.46, 0.04),
     "simple-gap-050": lambda: _identity(_lap(), 45, 0.50, 0.04),
     "simple-gap-054": lambda: _identity(_lap(), 45, 0.54, 0.01),
     "simple-midswap": lambda: _identity(_lap(), 70, 0.50, 0.04),
     "simple-gap-058": lambda: _identity(_lap(), 45, 0.58, 0.02),
     "simple-gap-062": lambda: _identity(_lap(), 45, 0.62, 0.03),
-    # band and beyond frames alternating: the band frames neither count nor break the run, so five beyond frames end it
+    # band and beyond frames alternating
     "simple-band-beyond-mix": lambda: _identity_mixed(_lap(), 45, (0.48, 0.60)),
     "simple-two-of-three": lambda: _identity(_lap(), 45, 0.46, 0.04, pattern=lambda i: i % 3 != 0),
     "simple-strict-alternation": lambda: _identity(_lap(), 45, 0.46, 0.04, pattern=lambda i: i % 2 == 0),
