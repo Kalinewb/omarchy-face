@@ -49,6 +49,12 @@ Item {
   readonly property bool reduced: root.colors && root.colors.reducedMotion !== undefined
                                   ? !!root.colors.reducedMotion : false
 
+  // How far the island has dropped, 0 to 1 (clamped: the spring overshoots): the dimming behind it
+  // (ScrimLayer.qml) follows this and nothing else.
+  readonly property real presence: Math.max(0, Math.min(1, root.heightP))
+  // False when the window around it drops it itself, once it is mapped (RecordCard.qml).
+  property bool autoDrop: true
+
   signal closeRequested()
   // The retract has finished: the owner may destroy the window.
   signal retracted()
@@ -100,7 +106,7 @@ Item {
     leaveAnim.start()
   }
 
-  Component.onCompleted: root.drop()
+  Component.onCompleted: if (root.autoDrop) root.drop()
 
   ParallelAnimation {
     id: enterAnim

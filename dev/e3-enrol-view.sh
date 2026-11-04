@@ -452,6 +452,21 @@ check "reduced motion: reduced is on, and it is simply there (1, 1)" "reduced tr
 check "reduced motion: it never leaves its place while it 'drops' (no frames of motion: the peak is exactly 1)" "1" "$(field drop-peak "$out")"
 check "reduced motion: retracting is immediate (answered, closed) well inside 120 ms" "1 0" "$(field retract-early "$out" | awk '{print $1" "$2}')"
 
+step "The dimming behind the island: 55% black, following the drop, instant under reduced motion, taking every click"
+out=$(run scrim)
+check "it follows the island's drop exactly (55% of the clamped drop at every sample), never over 55%, and settles at 0.55" \
+  "within 0.0001 of 0.55 x the drop over 17 samples|0.55 settled 0.55" "$(field follows "$out")|$(field peak "$out")"
+check "it is true #000000 and absorbs the pointer: every button, hover, covering the whole screen" "#000000 true true covers true" \
+  "$(field colour "$out") $(field input "$out")"
+check "retracting fades it out with the island (it is gone when the island is)" "0 0" "$(field retracted "$out")"
+out=$(run scrim-reduced)
+check "reduced motion: 55% from the very first frame (no fade of its own), and 0 the moment the island leaves" "0.55 reduced true|0" "$(field first "$out")|$(field retract-first "$out")"
+scrim_shape=no
+if grep -q 'PanelWindow' "$REPO/ScanScrim.qml" && grep -q 'WlrKeyboardFocus.None' "$REPO/ScanScrim.qml" \
+   && ! grep -q 'mask:' "$REPO/ScanScrim.qml" && ! sed -E 's#//.*$##' "$REPO/ScrimLayer.qml" | grep -q 'PanelWindow'; then scrim_shape=yes; fi
+scrim_namers=$(cd "$REPO" && for f in *.qml; do sed -E 's#//.*$##' "$f" | grep -q 'ScanScrim' && echo "$f"; done | tr '\n' ' ')
+check "the files: ScrimLayer is no window; ScanScrim is one (Overlay, no keyboard, no mask) named only by the service" "yes Service.qml " "$scrim_shape $scrim_namers"
+
 step "The ring on the island, rendered (Simple and Advanced), a strip and a short GIF"
 mkdir -p "$root/strip"
 for m in simple advanced; do

@@ -66,6 +66,15 @@ PanelWindow {
   // Leave: retract into the top edge, then `retracted`.
   function retract() { island.retract() }
 
+  // How far the island has dropped, 0 to 1: the screens' dimming follows it (Service.qml).
+  readonly property real presence: island.presence
+
+  // The dimming windows are made first, and a window mapped later is stacked above on the same
+  // layer, so this one maps a moment after them (and drops only once it is on screen).
+  property bool mapped: false
+  Timer { running: true; interval: 80; onTriggered: card.mapped = true }
+  onMappedChanged: if (mapped) island.drop()
+
   // The card's palette: white on its black surface, the theme's accent.
   QtObject {
     id: cardColors
@@ -95,6 +104,7 @@ PanelWindow {
   // because resizing a layer surface makes the compositor stretch its old buffer
   // for a few frames. Clicks anywhere outside the island go to whatever is there.
   anchors { top: true; left: true; right: true }
+  visible: card.mapped
   implicitHeight: Style.space(700)
   color: "transparent"
   mask: Region { item: island.shape }
@@ -119,6 +129,7 @@ PanelWindow {
     ScanIsland {
       id: island
       anchors.fill: parent
+      autoDrop: false
 
       session: card.session
       colors: cardColors

@@ -130,7 +130,7 @@ echo "${BOLD}Hosting${RESET}"
 hosted_files=(Surface.qml FaceViews.qml FaceModel.qml TestResultView.qml
               PeopleView.qml PersonView.qml SetupView.qml SettingsView.qml RemoveView.qml common/Ask.qml)
 window_type() { sed -E 's#//.*$##' | grep -nE '\b(PanelWindow|PopupWindow|FloatingWindow)\b'; }
-card_name() { sed -E 's#//.*$##' | grep -nE '\bRecordCard\b'; }
+card_name() { sed -E 's#//.*$##' | grep -nE '\b(RecordCard|ScanScrim)\b'; }
 if ! printf 'Item {\n  // PanelWindow in a comment\n  PanelWindow { }\n}\n' | window_type | grep -q 'PanelWindow { }' \
    || printf '// PanelWindow, PopupWindow, FloatingWindow\n' | window_type | grep -q .; then
   echo "  ${RED}FAIL${RESET}  the window check's own self-test (a planted PanelWindow must match, a comment must not)"
@@ -144,15 +144,15 @@ for f in "${hosted_files[@]}"; do
   # A scan is never drawn inside a host: polkit's dialog takes the focus the notch
   # needs to stay open (the Phase 4 live gate), so nothing the panel is made of
   # may make an EnrolView or a session.
-  sed -E 's#//.*$##' "$f" | grep -qE '\b(ScanIsland|EnrolView|EnrolRing|RecordSession|RecordView|RecordPreview)\b' && named+=("$f hosts a scan")
+  sed -E 's#//.*$##' "$f" | grep -qE '\b(ScanIsland|ScrimLayer|EnrolView|EnrolRing|RecordSession|RecordView|RecordPreview)\b' && named+=("$f hosts a scan")
 done
 # The card is the one window of a scan: the island and everything in it draw
 # inside it (so a test can draw them with no compositor) and open none.
-for f in ScanIsland.qml EnrolView.qml EnrolRing.qml; do
+for f in ScanIsland.qml ScrimLayer.qml EnrolView.qml EnrolRing.qml; do
   window_type <"$f" | grep -q . && named+=("$f opens a window")
 done
 for f in *.qml; do
-  [[ $f == Service.qml || $f == RecordCard.qml ]] && continue
+  [[ $f == Service.qml || $f == RecordCard.qml || $f == ScanScrim.qml ]] && continue
   card_name <"$f" | grep -q . && named+=("$f names RecordCard")
 done
 if (( ${#named[@]} )); then

@@ -102,10 +102,24 @@ Item {
   function holdToasts() { root.toasts("hold") }
   function releaseToasts() { root.toasts("release") }
 
+  // The dimming behind the island: one ScanScrim per screen, made BEFORE the card so it is stacked
+  // under it, and gone when the card is.
+  property bool scrimOn: false
+
+  Variants {
+    model: root.scrimOn ? Quickshell.screens : []
+    ScanScrim {
+      required property var modelData
+      screen: modelData
+      presence: root.card ? root.card.presence : 0
+    }
+  }
+
   function closeCard() {
     if (root.closing) return
     root.closing = true
     var goingCard = root.card
+    root.scrimOn = false
     if (goingCard) root.releaseToasts()
     var goingSession = root.session
     root.card = null
@@ -197,6 +211,7 @@ Item {
     // says so on the surface the person is actually looking at.
     indicator.clearSuppressedNotice()
     var shape = root.notchShape()
+    root.scrimOn = true
     root.card = cardComponent.createObject(root, {
       session: root.session,
       previewDevice: root.previewDevice,

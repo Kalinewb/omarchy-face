@@ -32,9 +32,9 @@ ShellRoot {
   readonly property int stored: Number(Quickshell.env("E3_STORED") || "0")
   readonly property string outDir: Quickshell.env("E3_OUT") || "/tmp"
   readonly property string accentEnv: Quickshell.env("E3_ACCENT") || ""
-  readonly property bool reducedCase: caseName === "reduced" || caseName === "island-reduced" || caseName === "demo-reduced"
+  readonly property bool reducedCase: caseName === "reduced" || caseName === "island-reduced" || caseName === "demo-reduced" || caseName === "scrim-reduced"
   // The island cases draw the whole card body (ScanIsland.qml), no window around it.
-  readonly property bool islandCase: caseName === "strip" || caseName === "island" || caseName === "island-reduced"
+  readonly property bool islandCase: caseName === "strip" || caseName === "island" || caseName === "island-reduced" || caseName === "scrim" || caseName === "scrim-reduced"
 
   function log(key, value) { console.log("HARNESS " + key, value) }
 
@@ -172,6 +172,14 @@ ShellRoot {
     height: 760
     // The strip draws on a grey "desktop" so the black silhouette reads.
     color: shellRoot.islandCase ? "#3a3a46" : "#000000"
+
+    // The dimming behind the island (the cases "scrim" and "scrim-reduced"): ScrimLayer follows the island's drop.
+    Face.ScrimLayer {
+      id: scrimLayer
+      anchors.fill: parent
+      visible: shellRoot.caseName.indexOf("scrim") === 0
+      presence: shellRoot.island ? shellRoot.island.presence : 0
+    }
 
     Loader {
       id: viewLoader
@@ -342,6 +350,7 @@ ShellRoot {
     else if (c === "mode") buildMode()
     else if (c === "strip") buildStrip()
     else if (c === "island" || c === "island-reduced") buildIsland()
+    else if (c === "scrim" || c === "scrim-reduced") buildScrim()
   }
 
   // ---- Simple ----------------------------------------------------------------------------------------
@@ -907,6 +916,36 @@ ShellRoot {
       if (act === "none") session.start()
     }, 300)
     at(function () { log("mode-start-works", session.phase) }, 1200)
+  }
+
+  // ---- the dimming behind the island -------------------------------------------------------------
+  function buildScrim() {
+    var worst = 0, peak = 0, samples = 0
+    function look() {
+      var shown = find(scrimLayer, "scrim").opacity
+      worst = Math.max(worst, Math.abs(shown - 0.55 * Math.max(0, Math.min(1, island.heightP))))
+      peak = Math.max(peak, shown)
+      samples++
+    }
+    at(function () { look(); log("first", r1(find(scrimLayer, "scrim").opacity) + " reduced " + island.reduced) }, 5)
+    for (var i = 0; i < 16; i++) at(function () { look() }, 40)
+    at(function () {
+      log("follows", "within " + (worst < 0.0001 ? "0.0001" : r1(worst)) + " of 0.55 x the drop over " + samples + " samples")
+      log("peak", r1(peak) + " settled " + r1(find(scrimLayer, "scrim").opacity))
+      var input = find(scrimLayer, "scrimInput")
+      log("input", (input.acceptedButtons === Qt.AllButtons) + " " + input.hoverEnabled + " covers " + (input.width === scrimLayer.width && input.height === scrimLayer.height))
+      log("colour", String(find(scrimLayer, "scrim").color))
+      shellRoot.retractedCount = 0
+      island.retract()
+      log("retract-first", r1(find(scrimLayer, "scrim").opacity))
+    }, 10)
+    for (var w = 0; w < 40; w++)
+      at(function () {
+        if (shellRoot.retractedCount > 0 && shellRoot.t1 === 0) {
+          log("retracted", r1(find(scrimLayer, "scrim").opacity) + " " + r1(island.presence))
+          shellRoot.t1 = 1
+        }
+      }, 100)
   }
 
   // ---- the island: the notch's silhouette, the drop and the retract --------------------

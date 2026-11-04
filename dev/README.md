@@ -463,6 +463,10 @@ below was run by the build. Install this branch (`./install.sh`; it restarts the
    off) so a notch toast cannot overlap it, and off again when it closes; check that a toast that arrives
    during a scan is held, that your notifications are back afterwards, and that if you restart the shell
    mid-scan they come back too (a marker in `$XDG_RUNTIME_DIR/kalinewb.face/dnd-held`).
+6d. **The dimming.** While the island is up the whole screen behind it (every monitor) is 55% black, fading in with
+   the drop and out as it retracts (no fade with `OMARCHY_REDUCED_MOTION=1`). Clicking it does nothing: the way out is
+   Cancel or Esc on the island. Check it is under the island (the island is not dimmed), over the notch and your
+   windows, and that the polkit dialog is still above it and takes the password.
 6c. **Toast hold, details.** `bin/omarchy-face-toasts` (tested by `dev/e5-toasts.sh`) does the hold. A do-not-disturb you had already switched on is never touched. If something goes wrong, `$XDG_RUNTIME_DIR/kalinewb.face/dnd-held` exists only while Face believes it turned do-not-disturb on; `omarchy-shell notifications isDnd` says what the shell thinks (`omarchy-toggle-notification-silencing` toggles it by hand).
 6b. **The mode is remembered** between scans (`$XDG_STATE_HOME/omarchy-face/enrol-mode`).
 7. **The idle demo.** Before Start (the camera is off) the circle plays a calm loop: a head
@@ -1056,6 +1060,16 @@ The SR1 fixes (3.1.0) are in it too: the parent refusing a stranger's template o
 child's stderr never reaching the client, the child holding the camera lock, a 60,000-bracket
 line, a bad label, a corrupt record's error carrying no path, the session bound no longer
 lengthened by a sweep, and the two copies of the template caps being equal.
+
+### Measuring the same-person guard (3.1.4)
+
+`dev/measure-guard.py --model <dlib_face_recognition_resnet_model_v1.dat[.bz2]> <recording dirs...>` computes the
+helper's own 128-d descriptors with real dlib for a person's recordings (user-run; never committed) and prints, by how far
+off-centre the head is, the percentiles of the owner's distance to the centre template and to the chain, and replays the
+guard (the 3.1.3 constants, a sliding chain, and one with HARD growing with r) over the frames that reach it. The helper's
+own model is in `/usr/lib/security/howdy/dlib-data/`, root-only, so the script takes the same upstream file from where
+you can read it (`~/.cache/yay/howdy/dlib_face_recognition_resnet_model_v1.dat.bz2`). `--cache <dir>` keeps the
+descriptors in a scratch directory so a rerun takes seconds. The tables and the decision are in `dev/SR1-notes.md` (3.1.4).
 
 ### Replaying a recording (3.1.3)
 
