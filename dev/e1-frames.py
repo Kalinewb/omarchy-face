@@ -45,19 +45,19 @@ def pose_of(where):
     return _POSES[key]
 
 
-def entry(yaw, pitch, scale=1.2, who=0.0, kind="ok", faces=1, hold=False, roll=0.0):
+def entry(yaw, pitch, scale=1.2, who=0.0, kind="ok", faces=1, hold=False, roll=0.0, drift=0.0):
     points = e0.landmarks(yaw, pitch, roll=roll, scale=scale)
     xs, ys = [p[0] for p in points], [p[1] for p in points]
     eye = 63.0 * scale
     box = [min(xs) - 0.6 * eye, min(ys) - 0.9 * eye, max(xs) + 0.6 * eye, max(ys) + 0.9 * eye]
-    return {"pts": points, "box": box, "faces": faces, "who": who, "kind": kind, "dt": DT, "hold": hold}
+    return {"pts": points, "box": box, "faces": faces, "who": who, "kind": kind, "dt": DT, "hold": hold, "drift": drift}
 
 
 def build(segments):
     """Segments: {"at": where, "n": frames, "from": where (the travel's start, default
     the previous segment), "travel": frames, plus any of entry()'s keywords and
     "swing": degrees of yaw alternating each frame}."""
-    frames, previous = [], "centre"
+    frames, previous, previous_drift = [], "centre", 0.0
     for segment in segments:
         segment = dict(segment)
         where = segment.pop("at", "centre")
@@ -65,15 +65,29 @@ def build(segments):
         travel = segment.pop("travel", 6)
         swing = segment.pop("swing", 0.0)
         hold_last = segment.pop("hold", False)
+        # "drift": how far this pose moves the SAME face's descriptor from its straight-on one (the owner's
+        # frames at a turn are 0.3-0.46 from the centre); it ramps over the travel like the pose does
+        drift1 = segment.pop("drift", 0.0)
         yaw1, pitch1 = pose_of(where)
         yaw0, pitch0 = pose_of(segment.pop("from", previous))
         for i in range(travel):
             f = (i + 1) / float(travel + 1)
-            frames.append(entry(yaw0 + (yaw1 - yaw0) * f, pitch0 + (pitch1 - pitch0) * f, **segment))
+            frames.append(entry(yaw0 + (yaw1 - yaw0) * f, pitch0 + (pitch1 - pitch0) * f,
+                                drift=previous_drift + (drift1 - previous_drift) * f, **segment))
         for i in range(count):
             wobble = swing * (1 if i % 2 else -1)
-            frames.append(entry(yaw1 + wobble, pitch1, **dict(segment, hold=hold_last and i == count - 1)))
-        previous = where
+            frames.append(entry(yaw1 + wobble, pitch1, drift=drift1, **dict(segment, hold=hold_last and i == count - 1)))
+        previous, previous_drift = where, drift1
+    return frames
+
+
+def _alternating():
+    """The owner's lap with a stranger's frame after every owner frame of the holds (never five in a row)."""
+    frames = []
+    for frame in build([dict(n=40)] + visit(SIMPLE)):
+        frames.append(frame)
+        if frame["who"] == 0.0 and len(frames) > 60:
+            frames.append(dict(frame, who=0.9))
     return frames
 
 
@@ -130,6 +144,13 @@ SCENARIOS = {
     "calibrate": lambda: [dict(entry(0.0, 0.0), kind=kind) for kind in ("unlit", "unlit-start", "lit") for _ in range(30)],
     # the unlit frames of a strobe whose lit frames are exactly black too
     "strobe-black": lambda: strobe(build([dict(n=450, kind="black")])),
+    # the OWNER turning to each Simple target, whose descriptor drifts 0.46 from the straight-on one at the
+    # target (over CHAIN, under HARD) but by small steps from frame to frame: it must complete (3.1.4)
+    "simple-owner-turn": lambda: build([dict(n=40)] + [dict(at=k, n=30, drift=0.46, travel=14) for k in SIMPLE]),
+    # a stranger 0.50 from the owner (inside HARD, outside CHAIN of everything accepted) after the centre
+    "simple-lookalike": lambda: build([dict(n=40)] + visit(SIMPLE, who=0.5)),
+    # the owner's frames alternating with a stranger's, from the first target on
+    "simple-alternating": lambda: _alternating(),
     "advanced-idle": lambda: build([dict(n=40), dict(n=900)]),
     "simple-wrong-long": lambda: build([dict(n=40), dict(at=6, n=900)]),
     # the camera waits on its first frame for a line on stdin (for the session-bound test)

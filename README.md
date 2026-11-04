@@ -195,7 +195,7 @@ sudo /usr/bin/bash -c 'PATH=/usr/bin; set -o pipefail; t=$(mktemp -d) || exit 1
     bash "$t/install.sh" "$1" "$2"
   }
   run "$@"; s=$?; rm -rf -- "$t"; exit $s' \
-  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.1.3
+  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.1.4
 ```
 
 What it does, from the button or from a terminal: root copies the installer out of the
@@ -325,6 +325,19 @@ off-by-default trace (`debug=true` in `/etc/omarchy-face/config`, `journalctl -t
 now also counts frames that passed every gate and each gate that failed (closer, farther, edge,
 dark, blurry, roll, unsteady), and prints the pose and the centre gate. Setup shows the plugin is
 newer than the installed system files: **Update Face's system files**, one password.
+
+### Updating from 3.1.3
+
+Face ID 3.1.4 changes the enrolment helper once more (root code). The scan now progressed but ended
+"That was not you": the same-person guard compared each frame with the centre and the templates so far,
+and an owner's frames at a moderate turn are up to 0.46 from the straight-on one (over the 0.40 chain
+limit), because a template is only added when a target fills. Measured with the real face model on your
+own recordings (`dev/measure-guard.py`), the guard's chain now also follows the latest accepted frames,
+which sit 0.1-0.3 from each other as the head turns; the bound against a stranger (0.55 from the centre) is
+unchanged. The off-by-default trace (`debug=true` in `/etc/omarchy-face/config`) also prints the guard's
+distances and the run of refused frames. While the scan island is up the screen behind it is dimmed.
+Setup shows the plugin is newer than the installed system files: **Update Face's system files**, one
+password.
 
 ## The views
 

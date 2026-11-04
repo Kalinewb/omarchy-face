@@ -266,6 +266,9 @@ class face_recognition_model_v1:
         # one axis carries whose face it is; a hair of per-frame difference rides on another
         vector[0] = CURRENT["who"]
         vector[1] = 0.004 * (int(CURRENT["pts"][4][0] * 10) % 7)
+        # how far this pose has moved the same face from its straight-on descriptor (the owner's own
+        # frames at a turn are 0.3-0.46 from the centre: dev/measure-guard.py)
+        vector[2] = CURRENT.get("drift", 0.0)
         return vector
 PY
 mount --bind "$LAB/site" "$site" || exit 1
@@ -504,6 +507,34 @@ scenario unlit-room
 out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
 same "a room too dark for the emitter (every frame unlit, no strobe) still ends: black_frames, and says dark after the 2 s of silence" '["black_frames",true]' "$(q "$out" '[last("capture_failed")["code"], any(t["state"] == "dark" for t in tracks)]')"
 
+step "the same-person guard (3.1.4): the owner turning completes, a stranger and a lookalike still end the lap"
+reset_store
+scenario simple-owner-turn
+out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
+same "the OWNER turning to each target, whose descriptor sits 0.46 from the centre there (over CHAIN, under HARD) but moves by small steps: all four targets fill, five templates" '[[0,3,6,9],5,false]' "$(q "$out" '[first("swept")["filled"], first("swept")["kept"], any(c.get("code") == "changed" for c in evs)]')"
+reset_store
+scenario simple-lookalike
+out=$(OMARCHY_FACE_SWEEP_SECONDS=60 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 90" "eof")
+same "a stranger 0.50 from the owner (inside HARD, outside CHAIN of every accepted frame) after the centre: changed, nothing stored" '["changed",false]' "$(q "$out" '[last("capture_failed")["code"], first("swept") is not None]')"
+check "...and nothing was written" bash -c "[[ ! -e $STORE/people/emil.json ]]"
+reset_store
+scenario simple-alternating
+out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
+same "the owner's frames alternating with a stranger's (never five in a row): no changed, the lap completes" '[[0,3,6,9],false]' "$(q "$out" '[first("swept")["filled"], any(c.get("code") == "changed" for c in evs)]')"
+same "...and not one stranger frame is in anything that was stored (every stored descriptor is the owner's)" 'true' "$(python3 -c "
+import json, glob
+bad = 0; n = 0
+for path in glob.glob('$STORE/people/emil.json'):
+    for appearance in json.load(open(path)).get('appearances', []):
+        for e in [appearance['encoding']] + [x['encoding'] for x in appearance.get('extra', [])]:
+            n += 1; bad += abs(e[0]) > 0.1
+print(str(n >= 5 and bad == 0).lower())
+")"
+reset_store
+scenario simple-stranger
+out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 90" "eof")
+same "the stranger scenarios still end changed or are refused: a whole lap by somebody else after the centre" '"changed"' "$(q "$out" 'last("capture_failed")["code"]')"
+
 step "the debug trace (3.1.2): off by default; with debug=true in root's config, one line a second, no frame data"
 # A stand-in for `logger`: only the sweep child's own (tag omarchy-face-sweep, no message, lines on
 # stdin) is kept; every other call has its message in argv and must not read the caller's stdin.
@@ -524,7 +555,7 @@ scenario simple-strobe
 out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
 lines=$(grep -c '^debug ' /run/omarchy-face-stub/logger.out)
 check "with debug=true it logs, at most 120 lines for the lap, about one per second of frame time" bash -c "[[ $lines -ge 5 && $lines -le 120 ]]"
-check "...each line has the counts, the per-gate failures, the target and what is held, the last word, the mean darkness of the lit frames and the refine candidate" bash -c "grep '^debug ' /run/omarchy-face-stub/logger.out | tail -1 | grep -qE '^debug t=[0-9.]+ frames=[0-9]+ strobe_off=[0-9]+ black=0 lit=[0-9]+ dark=0 none=[0-9]+ multi=[0-9]+ accepted=[0-9]+ acc_s=[0-9]+ closer=[0-9]+ farther=[0-9]+ edge=[0-9]+ darkgate=[0-9]+ blurry=[0-9]+ roll=[0-9]+ unsteady=[0-9]+ other=[0-9]+ over=[0-9]+ yaw=-?[0-9a-z/]+ pitch=-?[0-9a-z/]+ roll=-?[0-9a-z/]+ centre_gate=(in|out|-) centre_held=[01] filled=[0-9]+ target=[a-z0-9]+ last_word=(skip|ok|hold|dark|blurry|closer|farther|edge|multiple|other|searching|over) lit_darkness_mean=[0-9.]+ refine=(None|[a-z_]+)\$'"
+check "...each line has the counts, the per-gate failures, the target and what is held, the last word, the mean darkness of the lit frames and the refine candidate" bash -c "grep '^debug ' /run/omarchy-face-stub/logger.out | tail -1 | grep -qE '^debug t=[0-9.]+ frames=[0-9]+ strobe_off=[0-9]+ black=0 lit=[0-9]+ dark=0 none=[0-9]+ multi=[0-9]+ accepted=[0-9]+ acc_s=[0-9]+ closer=[0-9]+ farther=[0-9]+ edge=[0-9]+ exposure=[0-9]+ blurry=[0-9]+ roll=[0-9]+ unsteady=[0-9]+ other=[0-9]+ over=[0-9]+ yaw=-?[0-9a-z/]+ pitch=-?[0-9a-z/]+ roll=-?[0-9a-z/]+ centre_gate=(in|out|-) centre_held=[01] filled=[0-9]+ target=[a-z0-9]+ hard_max=[0-9.]+ chain_max=[0-9.]+ guard_run=[0-9]+ last_word=(skip|ok|hold|dark|blurry|closer|farther|edge|multiple|other|searching|over) lit_darkness_mean=[0-9.]+ refine=(None|[a-z_]+)\$'"
 same "...the lap's accepted frames are counted (the engine filled four targets from them), and the last word of a strobe-off frame is skip or of an accepted one ok (words that are never on the wire)" 'true' "$(python3 -c "
 import re
 rows = [dict(re.findall(r'(\w+)=(\S+)', l)) for l in open('/run/omarchy-face-stub/logger.out') if l.startswith('debug ')]
@@ -539,6 +570,15 @@ off, lit = int(f['strobe_off']), int(f['lit'])
 print(str(off > 0 and 0.7 <= off / max(1, lit) <= 1.3).lower())
 ")"
 check "...and no frame data: every line is words and numbers, under 400 characters" bash -c "! grep '^debug ' /run/omarchy-face-stub/logger.out | grep -qvE '^debug [A-Za-z_=0-9./ -]+\$' && ! grep '^debug ' /run/omarchy-face-stub/logger.out | awk 'length(\$0) > 400 { bad = 1 } END { exit !bad }'"
+reset_store
+scenario simple-owner-turn
+: >/run/omarchy-face-stub/logger.out
+out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
+same "the trace explains the guard: on the owner's turn hard_max reaches 0.40+ (distance to the centre) while chain_max stays under it (distance to the chain), and guard_run is 0" 'true' "$(python3 -c "
+import re
+rows = [dict(re.findall(r'(\w+)=(\S+)', l)) for l in open('/run/omarchy-face-stub/logger.out') if l.startswith('debug ')]
+print(str(max(float(r['hard_max']) for r in rows) >= 0.40 and max(float(r['chain_max']) for r in rows) < 0.40 and all(r['guard_run'] == '0' for r in rows)).lower())
+")"
 printf 'debug=false\n' >>/etc/omarchy-face/config
 : >/run/omarchy-face-stub/logger.out
 reset_store
@@ -625,10 +665,10 @@ open(out, "w").write(text.replace(old, new))
 PY
   chmod 0755 "$1"
 }
-patch_admin "$LAB/admin-noguard" '    if centre is None:
-        return True
-    if distance(encoding, centre) > hard:' '    return True
-    if distance(encoding, centre) > hard:'
+patch_admin "$LAB/admin-noguard" '    hard_distance, chain_distance = guard_distances(encoding, accepted, centre, recent)
+    if hard_distance > hard:' '    return True
+    hard_distance, chain_distance = guard_distances(encoding, accepted, centre, recent)
+    if hard_distance > hard:'
 patch_admin "$LAB/admin-wide" '"templates": [{"bin": k, "r": round(t["r"], 3),' '"templates": [{"bin": k, "r": 3.9,'
 REAL_ADMIN=$ADMIN
 reset_store
@@ -650,6 +690,12 @@ ADMIN=$LAB/admin-wide
 out=$(OMARCHY_FACE_SWEEP_SECONDS=30 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 90" "send $DONE" "eof")
 same "a child that reports r 3.9 (inside 0..4, outside R_MIN..R_MAX): dropped by the parent" '["timeout","bad_sweep"]' "$(q "$out" '[c["code"] for c in evs if c.get("event") == "capture_failed"]')"
 check "...and nothing is stored" bash -c "[[ ! -e $STORE/people/emil.json ]]"
+patch_admin "$LAB/admin-templates-only" '                                recent_frames = [e for t, e in recent_accepted if now - t <= RECENT_SECONDS][-RECENT_FRAMES:]' '                                recent_frames = []'
+reset_store
+scenario simple-owner-turn
+ADMIN=$LAB/admin-templates-only
+out=$(OMARCHY_FACE_SWEEP_SECONDS=60 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 90" "eof")
+same "the same owner-turn stream through 3.1.3's guard (a chain of templates only) ends changed: that is what the sliding chain fixes" '"changed"' "$(q "$out" 'last("capture_failed")["code"]')"
 ADMIN=$REAL_ADMIN
 reset_store
 scenario simple-stranger

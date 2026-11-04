@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 3.1.3
+# omarchy-face-version: 3.1.4
 #
 # Every privileged thing Face does, behind one polkit action
 # (plan-engine.md §8.2, plan-merged.md §2.3).
@@ -2786,7 +2786,7 @@ EDGE_MARGIN = 0.04          # share of the frame the face box keeps from each bo
 DARK_MAX = 50                # percent, howdy's dark_threshold
 SATURATED_MAX = 6.0          # percent of pixels
 SHARP_MIN = 0.5              # Laplacian variance over the session median
-STEADY_STEP = 0.20           # largest |d(u,v)| between smoothed lit frames (3.1.3: measured; was 0.05)
+STEADY_STEP = 0.20           # largest |d(u,v)| between smoothed lit frames (3.1.4: measured; was 0.05)
 STEADY_FRAMES = 3            # consecutive steps that must all be that small
 ROLL_MAX = 25.0              # degrees
 
@@ -2796,6 +2796,8 @@ HARD = 0.55                  # to the centre; the Phase 0 table sets it, never a
 SUPPORT = 0.30               # frames of one bin must sit this close to each other
 SUPPORT_GAP = 0.2            # seconds between supported frames
 CHANGED_FRAMES = 5           # consecutive lit frames failing the guard end the lap
+RECENT_FRAMES = 6            # the guard's chain also follows this many of the latest ACCEPTED frames...
+RECENT_SECONDS = 1.5         # ...of the last this many seconds (3.1.4: dev/measure-guard.py)
 MAX_CANDIDATES = 12          # per bin, so a long hold stays bounded
 DONE_BINS = 4                # bins held, besides the centre, before Done
 
@@ -2816,7 +2818,7 @@ STALL_SECONDS = 20.0         # Advanced: no new supported frame for this long
 MAX_TARGETS = 12
 SIMPLE_MAX_STORED = 5        # rule R: Simple may not replace a larger stored set
 COUPLING_C = 0.0             # rule D placeholder: Phase 0 fits it (synthetic model 0.33)
-SMOOTH_FRAMES = 5            # rule J: steadiness is judged on the mean of this many lit frames (3.1.3: was 3)
+SMOOTH_FRAMES = 5            # rule J: steadiness is judged on the mean of this many lit frames (3.1.4: was 3)
 GATE_WORDS = ("hold", "dark", "blurry", "closer", "farther", "edge", "multiple", "other",
               "searching", "over")
 ACCEPTED_WORD = "hold"       # the plan names no word for a frame that passed (see SR1-notes)
@@ -3024,7 +3026,7 @@ def gate_failures(eye, box, size, dark, saturated, sharp, roll, steady):
     if not box_inside(box, size):
         failed.append("edge")
     if dark > DARK_MAX or saturated > SATURATED_MAX:
-        failed.append("dark")
+        failed.append("exposure")           # dark OR saturated: `frame_word` says `dark` for both
     if sharp < SHARP_MIN:
         failed.append("blurry")
     if abs(roll) > ROLL_MAX:
@@ -3089,18 +3091,35 @@ def lap2_word(eye, reference_eye, want):
 
 # --- the same-person guard ------------------------------------------------------
 
-def guard_ok(encoding, accepted, centre, chain=CHAIN, hard=HARD):
+def guard_distances(encoding, accepted, centre, recent=()):
+    """(distance to the centre, distance to the nearest of the chain), the two numbers the guard
+    compares. The chain is the accepted templates and the latest accepted frames (`recent`).
+    (None, None) before there is a centre."""
+    if centre is None:
+        return None, None
+    chain = [distance(encoding, other) for other in list(accepted) + list(recent)]
+    return distance(encoding, centre), (min(chain) if chain else None)
+
+
+def guard_ok(encoding, accepted, centre, chain=CHAIN, hard=HARD, recent=()):
     """Per frame, never an error: close enough to the chain and to the centre.
 
-    `accepted` holds this appearance's templates so far (the centre among them);
-    a chain, so a slow genuine drift from frontal is followed. Without a centre
-    yet this frame is the centre.
+    `accepted` holds this appearance's templates so far (the centre among them) and
+    `recent` the encodings of the latest frames that passed this very guard (RECENT_FRAMES
+    of the last RECENT_SECONDS), so a chain follows a head as it turns: the owner's own
+    frames at a moderate turn sit 0.3-0.46 from the centre but 0.1-0.3 from the frame
+    before them (dev/measure-guard.py), and a template is only added when a target
+    fills. HARD stays what bounds a stranger: no frame is accepted that is further than
+    that from the centre, however near the chain it is. A stranger is refused because
+    the chain is the owner's frames: his first frame is far from all of them and he is
+    never added. Without a centre yet this frame is the centre.
     """
     if centre is None:
         return True
-    if distance(encoding, centre) > hard:
+    hard_distance, chain_distance = guard_distances(encoding, accepted, centre, recent)
+    if hard_distance > hard:
         return False
-    if accepted and min(distance(encoding, other) for other in accepted) > chain:
+    if chain_distance is not None and chain_distance > chain:
         return False
     return True
 
@@ -3566,7 +3585,9 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
     last_lit = None
     lit_dark = 0.0
     debug_at, debug_lines = None, 0
-    trace = {"accepted": 0, "acc_s": 0, "closer": 0, "farther": 0, "edge": 0, "dark": 0, "blurry": 0,
+    recent_accepted = []                    # (time, encoding) of the latest frames that passed the guard
+    guard_seen = {"hard": 0.0, "chain": 0.0}  # the largest guard distances since the last trace line
+    trace = {"accepted": 0, "acc_s": 0, "closer": 0, "farther": 0, "edge": 0, "exposure": 0, "blurry": 0,
              "roll": 0, "unsteady": 0, "other": 0, "over": 0}
     # the last lit frame's pose for the trace: degrees RELATIVE to the neutral (u and v are about 15
     # degrees to the unit), the eye line's roll in degrees, and whether it was inside the centre
@@ -3651,7 +3672,7 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
                     sharp_seen.append(variance)
                     middle = median(sharp_seen)
                     sharp = variance / middle if middle else 1.0
-                    poses = (poses + [pose])[-8:]
+                    poses = (poses + [pose])[-(SMOOTH_FRAMES + STEADY_FRAMES):]
 
                     def uv_of(p):
                         n = neutral or {"yaw": 0.0, "pitch": 0.0}
@@ -3691,7 +3712,12 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
                                 trace["over"] += 1
                             else:
                                 encoding = [float(x) for x in encoder.compute_face_descriptor(small, shape, 1)]
-                                bad = not guard_ok(encoding, accepted, centre_enc)
+                                recent_frames = [e for t, e in recent_accepted if now - t <= RECENT_SECONDS][-RECENT_FRAMES:]
+                                bad = not guard_ok(encoding, accepted, centre_enc, recent=recent_frames)
+                                if debug and centre_enc is not None:
+                                    gd, gc = guard_distances(encoding, accepted, centre_enc, recent_frames)
+                                    guard_seen["hard"] = max(guard_seen["hard"], gd)
+                                    guard_seen["chain"] = max(guard_seen["chain"], gc)
                                 run_failed, ended = changed_step(run_failed, bad)
                                 if ended:
                                     changed = True
@@ -3701,6 +3727,7 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
                                     trace["other"] += 1
                                 else:
                                     word = ACCEPTED_WORD
+                                    recent_accepted = (recent_accepted + [(now, encoding)])[-RECENT_FRAMES:]
                                     if not centre_held:
                                         on = r < R_MIN
                                         seen_pose["centre"] = "in" if on else "out"
@@ -3778,27 +3805,31 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
             debug_at = now
             debug_lines += 1
             lit_n = seen["frames"] - seen["strobe"] - seen["black"]
-            shown = "skip" if strobe else ("ok" if passed else (word or ACCEPTED_WORD))
+            # `ok` is an accepted frame, in the trace only; one that then failed the guard or passed r
+            # shows its own word (`other`, `over`), as the client was told
+            shown = "skip" if strobe else (word if word in ("other", "over") else ("ok" if passed else (word or ACCEPTED_WORD)))
             aim = current_target(mode, targets, filled, skipped, centre_held, head_bin if uv else None)
             try:
                 sys.stderr.write(
                     "debug t=%.1f frames=%d strobe_off=%d black=%d lit=%d dark=%d none=%d multi=%d "
-                    "accepted=%d acc_s=%d closer=%d farther=%d edge=%d darkgate=%d blurry=%d roll=%d unsteady=%d "
+                    "accepted=%d acc_s=%d closer=%d farther=%d edge=%d exposure=%d blurry=%d roll=%d unsteady=%d "
                     "other=%d over=%d yaw=%s pitch=%s roll=%s centre_gate=%s centre_held=%d filled=%d "
-                    "target=%s last_word=%s lit_darkness_mean=%.1f refine=%s\n" % (
+                    "target=%s hard_max=%.2f chain_max=%.2f guard_run=%d last_word=%s "
+                    "lit_darkness_mean=%.1f refine=%s\n" % (
                         now - started, seen["frames"], seen["strobe"], seen["black"], lit_n,
                         seen["dark"], seen["none"], seen["multi"], trace["accepted"], trace["acc_s"],
-                        trace["closer"], trace["farther"], trace["edge"], trace["dark"], trace["blurry"],
+                        trace["closer"], trace["farther"], trace["edge"], trace["exposure"], trace["blurry"],
                         trace["roll"], trace["unsteady"], trace["other"], trace["over"],
                         seen_pose["yaw"], seen_pose["pitch"], seen_pose["roll"], seen_pose["centre"],
                         1 if centre_held else 0, len(filled),
-                        "none" if aim is None else aim, shown,
+                        "none" if aim is None else aim, guard_seen["hard"], guard_seen["chain"], run_failed, shown,
                         (lit_dark / lit_n) if lit_n else 0.0, refine_for(seen)))
                 sys.stderr.flush()
             except (OSError, ValueError):
                 debug = False               # a broken pipe or a closed stderr: the trace stops, the lap does not
             trace["acc_s"] = 0
             seen_pose["centre"] = "-"
+            guard_seen["hard"] = guard_seen["chain"] = 0.0
 
         # `finish`: the only thing the parent ever writes here, judged after this frame
         if select.select([0], [], [], 0)[0]:

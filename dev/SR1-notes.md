@@ -232,3 +232,36 @@ Fixed in the plugin (`bin/omarchy-face-toasts`, `Service.qml`, `EnrolView.qml`; 
 - **m5.** (check-pins reads headers like the runtime: done in 3.1.3; the remaining part is for 3.1.4.)
 - **m6 v2.** A version-2 marker in `check-pins` for the header format.
 - **m9, m10.** As SR1 listed them.
+
+## Delta in 3.1.4 (2026-11-04): the guard's chain follows the head; the guard's numbers MEASURED; trace and SR1 3.1.3 minors. What SR1 re-reads
+
+**The measurement** (`dev/measure-guard.py`, new, user-run; real dlib, the same resnet model the helper uses, taken from howdy's build cache because `/usr/lib/security/howdy/` is root-only and nothing here uses sudo; the recordings and descriptors are never committed). It repeats the helper's own steps (CLAHE, the frame and the box scaled to `max_height` 320, the five landmarks, `compute_face_descriptor(small, shape, 1)`), takes the pose through the pure functions, and reports distances for the frames that would REACH the guard: steady, through the eye/edge/roll gates, r <= `R_MAX` 2.2 (a frame past `R_MAX` is `over` and never meets it; the first version of this table, over all frames, counted 21 refusals in `guided` that were small, far-away faces the eye gate turns back).
+
+Distance of the owner's own frames to the CENTRE template (the guard's HARD test, 0.55), by how far off-centre the head is (r, about 15 degrees per unit); p50 / p90 / p99 / max, then the share over CHAIN 0.40 and HARD 0.55:
+
+| recording | r 0-0.5 | r 0.5-1.0 | r 1.0-1.5 | r 1.5-2.2 |
+|---|---|---|---|---|
+| held head (60) | .075/.106/.195/.195 | .184/.233/.254/.254 | .182/.201/.206/.206 | |
+| slow desk lap (168) | .152/.286/.296/.296 | .276/.318/.383/.385 | .297/.331/.345/.357 | |
+| in the lap (25) | .073/.111/.162/.162 | .274/.296/.296/.296 | | .312/.355/.383/.383 |
+| tilted (46) | .115/.148/.269/.269 | .169/.331/.331/.331 | .245/.256/.306/.306 | |
+| far (33) | .113 (n=1) | .090/.113/.137/.137 | .205/.237/.238/.238 | .216/.326/.393/.393 |
+| guided (353) | .128/.289/.310/.319 | .273/.391/.395/.395 | .271/.318/.412/.412 (11% over CHAIN) | .364/.392/.461/.461 (12% over CHAIN) |
+
+No owner frame that reaches the guard is over HARD (max 0.461); 11-12% of the guided turn's frames at r 1.0-2.2 are over CHAIN, which is the whole reason a lap can end "That was not you": until a target fills the only template is the centre. The same frames, measured against the nearest EARLIER frame in the same pose neighbourhood (a chain that follows the head), are p50 0.09-0.18, p90 <= 0.31 and p99 <= 0.29 at r 1.0-2.2 in `guided` (max 0.29), and 0% over CHAIN in every band. Frames the gates stop before the guard (r > 2.2, an eye distance under 40 px: a face that small is 0.65-0.72 from the centre, a resolution effect and not pose) would have been refused by anything, and never reach it.
+
+**What it does not show.** Replaying the guard over those frames with the 3.1.3 constants refuses 0 of the held-head, desk, in-the-lap, tilted and far frames and 4 of 353 in `guided` (longest run 1), never five in a row: **these recordings do not reproduce the live "That was not you"**, so the live lap met frames or a centre template these recordings do not contain. The sliding chain cuts the refusals (4 -> 2 in `guided`) but cannot be shown to be what stops the live failure. The trace now says it (below). There is **no stranger data** (disclosed since S3): the table is the owner's side of the trade-off only.
+
+**Options, with the false-accept trade-off:**
+- (a) pose-dependent HARD/CHAIN up to the plan's 0.60 cap: **not supported by the data**: no owner frame reaches HARD, so raising it buys the owner nothing and widens the stranger's band for nothing; dlib's own same/different threshold is 0.6 and HARD 0.55 is already close to it. Not done.
+- (b) more consecutive failures at larger r: the owner's longest run is 1; not needed. Not done.
+- (c) **chosen: a sliding chain.** CHAIN is measured against the centre, the templates and the latest `RECENT_FRAMES` (6) accepted frames of the last `RECENT_SECONDS` (1.5 s) (`guard_distances`, `guard_ok(..., recent=)`); `HARD` against the centre is unchanged. The exposure it adds: a frame between 0.40 and 0.55 from the centre now passes if it is within 0.40 of a recent frame that itself passed. A stranger swapped in has his first frame refused (his distance to the owner's recent frames is the same ~0.6+ that his distance to the centre was) and is never added, so he never becomes the chain; a morph one step at a time is bounded by HARD. A lookalike inside 0.40 of the owner's recent frames and 0.55 of the centre passes today as well when he is inside 0.40 of the centre; the difference is the 0.40-0.55 band, no more than 0.15 of distance. With no stranger data this is a stated limit, not a measurement.
+- If the data cannot support a safe loosening the alternatives would be a slower or shorter turn, narrower Simple wedges, or fewer targets; the owner-side data here does not call for them.
+
+**Tests.** `e0` (the sliding chain at its boundaries, HARD unchanged however near a recent frame, a jump is not a chain step, `guard_distances`, the history cap). `e1`: `simple-owner-turn` (descriptor 0.46 from the centre at each target, small steps: must complete, five templates, no `changed`; fails with the 3.1.3 guard), `simple-lookalike` (0.50 from the owner after the centre: `changed`, nothing stored), `simple-alternating` (a stranger frame after every owner frame, never five in a row: completes, every stored descriptor the owner's), `simple-stranger` still `changed`, plus the existing stranger scenarios. The fake dlib gained a `drift` that moves one descriptor axis; the patched `guard_ok` copy was re-pointed at the new body.
+
+**Trace.** Adds `hard_max` and `chain_max` (the largest distance to the centre and to the chain in the last second, 2 decimals) and `guard_run` (the run of refused frames; 5 ends the lap). Reading it: `hard_max` over 0.55 is the centre test failing; `chain_max` over 0.40 with `hard_max` under 0.55 is the chain failing; `guard_run` climbing to 5 is `changed`.
+
+**SR1 3.1.3 minors folded in.** m2: the trace key is `exposure` (the dark OR saturated gate; `darkgate` read like `dark`), and `last_word` shows `other`/`over` for a frame that passed the gates and then failed the guard or r (it said `ok`). m4: the pose history cap is `SMOOTH_FRAMES + STEADY_FRAMES`, tested. m3 and m5 were done in 3.1.3 (the claim's wording; check-pins reads headers like the runtime). **m6 (a v2 marker in check-pins), m9 and m10 are not in what I was given: please send their text; I did not guess.**
+
+**UI, plugin side, not root:** the screen behind the island is dimmed (`ScanScrim.qml` per screen, `ScrimLayer.qml`).

@@ -441,7 +441,7 @@ def test_gates():
     check("a head turning at 0.3 u per lit frame is not steady", not sw.is_steady(sweep))
     failing = sw.gate_failures(30, (0, 0, 10, 10), (400, 400), 60.0, 7.0, 0.4, 30.0, False)
     check("the debug trace's gate_failures names every gate a frame fails, in frame_word's order",
-          failing == ["closer", "edge", "dark", "blurry", "roll", "unsteady"], str(failing))
+          failing == ["closer", "edge", "exposure", "blurry", "roll", "unsteady"], str(failing))
     check("...none for a frame that passes all of them", sw.gate_failures(80, (60, 60, 340, 340), (400, 400), 10, 1, 1.0, 0, True) == [])
     check("...and the word frame_word gives is the first of them",
           sw.frame_word(1, 30, (0, 0, 10, 10), (400, 400), 60.0, 7.0, 0.4, 30.0, False) == "closer")
@@ -522,6 +522,24 @@ def test_guard():
     check("but a jump straight to 0.50 is not a chain step", not sw.guard_ok(enc(0.50), [centre], centre))
     check("the chain is the NEAREST template, not every one",
           sw.guard_ok(enc(0.50), [centre, enc(0.20), enc(0.35)], centre))
+
+    # 3.1.4, measured on the owner's recordings (dev/measure-guard.py): at a moderate turn the owner's
+    # frames sit up to 0.46 from the CENTRE (over CHAIN) but 0.1-0.3 from the frame before them
+    check("the chain also follows the latest accepted frames: 0.46 from the centre is a pass when a recent frame is 0.20 away",
+          sw.guard_ok(enc(0.46), [centre], centre, recent=[enc(0.26)]) and not sw.guard_ok(enc(0.46), [centre], centre))
+    check("...and refused when no recent frame is within CHAIN of it either (a jump is not a chain step)",
+          not sw.guard_ok(enc(0.46), [centre], centre, recent=[enc(0.0), enc(0.02), enc(0.90)]))
+    check("HARD still bounds it, however near a recent frame is (the stranger's bound does not move)",
+          not sw.guard_ok(enc(0.56), [centre], centre, recent=[enc(0.55)]) and sw.guard_ok(enc(0.55), [centre], centre, recent=[enc(0.50)]))
+    check("the pose history cap is derived from SMOOTH_FRAMES + STEADY_FRAMES, not a literal 8 (SR1 m4)",
+          "[-(SMOOTH_FRAMES + STEADY_FRAMES):]" in SOURCE and "[-8:]" not in SOURCE)
+    check("a stranger 0.50 from the owner's frames is refused even with them all in the chain",
+          not sw.guard_ok(enc(0.50), [centre], centre, recent=[enc(0.05), enc(0.0), enc(0.02)]))
+    check("guard_distances returns what the guard compares (and nothing before a centre)",
+          [round(x, 3) for x in sw.guard_distances(enc(0.46), [centre], centre, [enc(0.26)])] == [0.46, 0.2],
+          str(sw.guard_distances(enc(0.46), [centre], centre, [enc(0.26)])))
+    check("...with no centre yet it is (None, None)", sw.guard_distances(enc(0.1), [], None) == (None, None))
+    check("RECENT_FRAMES 6 and RECENT_SECONDS 1.5 are the window", (sw.RECENT_FRAMES, sw.RECENT_SECONDS) == (6, 1.5))
 
     run, ended, history = 0, False, []
     for failed in (True, True, True, True, False, True, True, True, True):
