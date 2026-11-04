@@ -459,6 +459,12 @@ ShellRoot {
     at(function () {
       log("skip-line", line())
       log("skip-rest", binLook(0) + " | " + binKinds(0))
+      // 3.1.5: the next target's first frames say "over" (a far-off frame in the CHAIN..HARD band): the note still shows
+      track({state: "over", target: 6, centre: 1, bins: bins({9: 1, 3: 1}), skipped: [0], u: 0, v: 1.4})
+      log("skip-over-line", line())
+      track({state: "edge", target: 6, centre: 1, bins: bins({9: 1, 3: 1}), skipped: [0], u: 0, v: 1.4})
+      log("skip-edge-line", line())
+      track({state: "hold", target: 6, centre: 1, bins: bins({9: 1, 3: 1}), skipped: [0], u: 0, v: 1.4})
       // Every bin full in a track does NOT show Done in Simple; it arrives with swept.
       track({state: "hold", target: 6, centre: 1, bins: bins({9: 1, 3: 1, 0: 1, 6: 1}), canFinish: true, u: 0, v: 1.4})
     })

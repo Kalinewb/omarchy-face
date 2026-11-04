@@ -41,16 +41,19 @@ def pose_of(where):
     key = where
     if key not in _POSES:
         u, v = (where[1], where[2]) if isinstance(where, tuple) else e0.direction(where, 1.6)
-        _POSES[key] = e0.pose_for(u, v, NEUTRAL)
+        # A real head couples: turned sideways it reads lower by COUPLING_C of the turn (3.1.5, measured on the
+        # user's own trace). The engine takes that out (rule D), so the head that lands on a bin's centre
+        # after rule D is the one that reads that much lower before it.
+        _POSES[key] = e0.pose_for(u, v + e0.sw.COUPLING_C * abs(u), NEUTRAL)
     return _POSES[key]
 
 
-def entry(yaw, pitch, scale=1.2, who=0.0, kind="ok", faces=1, hold=False, roll=0.0, drift=0.0):
+def entry(yaw, pitch, scale=1.2, who=0.0, kind="ok", faces=1, hold=False, roll=0.0, drift=0.0, axis=2):
     points = e0.landmarks(yaw, pitch, roll=roll, scale=scale)
     xs, ys = [p[0] for p in points], [p[1] for p in points]
     eye = 63.0 * scale
     box = [min(xs) - 0.6 * eye, min(ys) - 0.9 * eye, max(xs) + 0.6 * eye, max(ys) + 0.9 * eye]
-    return {"pts": points, "box": box, "faces": faces, "who": who, "kind": kind, "dt": DT, "hold": hold, "drift": drift}
+    return {"pts": points, "box": box, "faces": faces, "who": who, "kind": kind, "dt": DT, "hold": hold, "drift": drift, "axis": axis}
 
 
 def build(segments):
@@ -96,6 +99,19 @@ def _identity(frames, start, gap, wobble, pattern=None, seed=7):
         frame = dict(frame)
         if i >= start and (pattern is None or pattern(i - start)):
             frame["who"] = gap + rng.uniform(-wobble, wobble)
+        out.append(frame)
+    return out
+
+
+def _identity_mixed(frames, start, gaps, wobble=0.01):
+    """From frame `start` every frame is somebody else, the gaps cycling through `gaps`."""
+    import random
+    rng = random.Random(11)
+    out = []
+    for i, frame in enumerate(frames):
+        frame = dict(frame)
+        if i >= start:
+            frame["who"] = gaps[(i - start) % len(gaps)] + rng.uniform(-wobble, wobble)
         out.append(frame)
     return out
 
@@ -167,23 +183,36 @@ SCENARIOS = {
     "calibrate": lambda: [dict(entry(0.0, 0.0), kind=kind) for kind in ("unlit", "unlit-start", "lit") for _ in range(30)],
     # the unlit frames of a strobe whose lit frames are exactly black too
     "strobe-black": lambda: strobe(build([dict(n=450, kind="black")])),
-    # the OWNER turning to each Simple target, whose descriptor is 0.46 from the straight-on one at the target (over
-    # CHAIN, under HARD) by small steps. 3.1.3's guard refuses it (`changed`), and so does this one: a sliding
-    # chain that would let it through was tried in 3.1.4 and withdrawn (SR1: it admits strangers). Kept as the
-    # regression of that behaviour; the live trace says how often a real owner meets it.
-    "simple-owner-turn": lambda: build([dict(n=40)] + [dict(at=k, n=30, drift=0.46, travel=14) for k in SIMPLE]),
-    # STRANGERS WITH PER-FRAME SPREAD (identity gap from the owner + wobble, after the centre): the limit, pinned
+    # the OWNER at each Simple target with a descriptor 0.46 from the straight-on one (over CHAIN, under HARD) by small
+    # steps, held long enough for the patience of every target to run out. 3.1.3 ended this lap `changed` (the live
+    # "That was not you"); 3.1.5 takes those frames for what they are -- not accepted, not a stranger -- and the lap
+    # ends with every target skipped (`too_few`), nothing stored.
+    # (each turn moves the descriptor along its own axis, as turning to different sides does: the left turn is not near the up one)
+    "simple-owner-turn": lambda: build([dict(n=40)] + [dict(at=k, n=240, drift=0.46, travel=14, axis=2 + i) for i, k in enumerate(SIMPLE)]),
+    # the user's lap as the live trace showed it: left and right fill (0.30), up and down are 0.46 from the centre
+    # (banded) and are skipped by patience: two filled is enough for Simple
+    "simple-owner-band-updown": lambda: build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2), dict(at=3, n=40, drift=0.30, travel=14, axis=3),
+                                               dict(at=0, n=240, drift=0.46, travel=14, axis=4), dict(at=6, n=240, drift=0.46, travel=14, axis=5)]),
+    # STRANGERS WITH PER-FRAME SPREAD (identity gap from the owner + wobble, after the centre). In the band between CHAIN
+    # and HARD (every frame 0.40-0.55 from the owner's) nothing is accepted and nothing ends the lap but the targets
+    # running out: `too_few`, nothing stored. Past HARD five in a row end it `changed`, as before.
     "simple-gap-046": lambda: _identity(_lap(), 45, 0.46, 0.04),
-    "simple-gap-050": lambda: _identity(_lap(), 45, 0.50, 0.08),
-    "simple-gap-054": lambda: _identity(_lap(), 45, 0.54, 0.04),
-    "simple-midswap": lambda: _identity(_lap(), 70, 0.50, 0.06),
+    "simple-gap-050": lambda: _identity(_lap(), 45, 0.50, 0.04),
+    "simple-gap-054": lambda: _identity(_lap(), 45, 0.54, 0.01),
+    "simple-midswap": lambda: _identity(_lap(), 70, 0.50, 0.04),
+    "simple-gap-058": lambda: _identity(_lap(), 45, 0.58, 0.02),
+    "simple-gap-062": lambda: _identity(_lap(), 45, 0.62, 0.03),
+    # band and beyond frames alternating: the band frames neither count nor break the run, so five beyond frames end it
+    "simple-band-beyond-mix": lambda: _identity_mixed(_lap(), 45, (0.48, 0.60)),
     "simple-two-of-three": lambda: _identity(_lap(), 45, 0.46, 0.04, pattern=lambda i: i % 3 != 0),
     "simple-strict-alternation": lambda: _identity(_lap(), 45, 0.46, 0.04, pattern=lambda i: i % 2 == 0),
     # ONE stranger frame inside CHAIN of the centre (a foothold), then frames 0.46 from the centre but near that
-    # one: refused with a chain of templates (`changed`), accepted with a chain of accepted frames
+    # one: no template is near them (a chain of templates), and a chain of accepted frames would have admitted them
     "simple-foothold": lambda: _foothold(),
     # a stranger wholly inside CHAIN of the centre (0.38): the documented limit, nothing in the guard refuses it
     "simple-limit-038": lambda: _identity(_lap(), 45, 0.38, 0.02),
+    # a stranger who STRADDLES CHAIN (0.46 +-0.08, so about one frame in eight is 0.40 or less from the owner's)
+    "simple-straddle": lambda: _identity(_lap(), 45, 0.46, 0.08),
     "advanced-idle": lambda: build([dict(n=40), dict(n=900)]),
     "simple-wrong-long": lambda: build([dict(n=40), dict(at=6, n=900)]),
     # the camera waits on its first frame for a line on stdin (for the session-bound test)

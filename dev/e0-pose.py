@@ -525,7 +525,7 @@ def test_guard():
 
     # 3.1.4: the guard is 3.1.3's. A sliding chain of the latest accepted frames was tried and withdrawn:
     # SR1 showed an accepted stranger frame becomes the chain (dev/SR1-notes.md)
-    check("an owner frame 0.46 from the centre and over CHAIN of every template is refused (the documented cost)",
+    check("an owner frame 0.46 from the centre and over CHAIN of every template is still not ok (3.1.5: it is a band frame, which does not end the lap)",
           not sw.guard_ok(enc(0.46), [centre], centre))
     try:
         sw.guard_ok(enc(0.46), [centre], centre, recent=[enc(0.26)])
@@ -541,6 +541,23 @@ def test_guard():
     check("guard_distances returns what the guard compares: the centre and the nearest template (and nothing before a centre)",
           [round(x, 3) for x in sw.guard_distances(enc(0.46), [centre, enc(0.30)], centre)] == [0.46, 0.16]
           and sw.guard_distances(enc(0.1), [], None) == (None, None))
+    # 3.1.5: three verdicts. Only a frame over HARD of the centre (the stranger bound) counts towards `changed`.
+    verdict = sw.guard_verdict
+    check("guard_verdict: ok within CHAIN of a template, band between CHAIN and HARD, beyond past HARD, ok before a centre",
+          (verdict(enc(0.40), [centre], centre), verdict(enc(0.4001), [centre], centre),
+           verdict(enc(0.55), [centre], centre), verdict(enc(0.5501), [centre], centre),
+           verdict(enc(9.0), [], None)) == ("ok", "band", "band", "beyond", "ok"))
+    check("a frame near a filled template is ok however far from the centre, until HARD",
+          verdict(enc(0.52), [centre, enc(0.45)], centre) == "ok" and verdict(enc(0.60), [centre, enc(0.58)], centre) == "beyond")
+    grid = [enc(x / 100.0) for x in range(0, 80)]
+    check("guard_ok is exactly 'the verdict is ok' (3.1.3's refusal set is unchanged; only what the loop does with a refusal is new)",
+          all(sw.guard_ok(e, [centre, enc(0.30)], centre) == (verdict(e, [centre, enc(0.30)], centre) == "ok") for e in grid))
+    check("beyond is the stranger bound alone: it is HARD from the centre and nothing else, whatever the templates",
+          all((verdict(e, t, centre) == "beyond") == (sw.distance(e, centre) > sw.HARD)
+              for e in grid for t in ([centre], [centre, enc(0.30)], [centre, enc(0.30), enc(0.55)])))
+    check("the loop gives a banded frame no part in the `changed` run (it never calls changed_step for one)",
+          'if verdict == "band":' in SOURCE and 'changed_step(run_failed, verdict == "beyond")' in SOURCE
+          and "changed_step(run_failed, bad)" not in SOURCE)
     check("the pose history cap is derived from SMOOTH_FRAMES + STEADY_FRAMES, not a literal 8 (SR1 m4)",
           "[-(SMOOTH_FRAMES + STEADY_FRAMES):]" in SOURCE and "[-8:]" not in SOURCE)
     check("the debug trace is written by one function that is also called when the lap ends (SR1 S3: guard_run reaches its real value)",
@@ -760,22 +777,42 @@ def test_plain_turns():
     # Heads posed by PHYSICAL yaw or pitch through landmarks(), never by inverting the chain.
     right = uv_of(landmarks(-20, 0), neutral)
     left = uv_of(landmarks(20, 0), neutral)
-    check("COUPLING_C is the placeholder 0.0 (the identity)", sw.COUPLING_C == 0.0 and sw.pose_decouple(1.3, 0.7) == (1.3, 0.7))
-    check("a yaw-only 20 degree turn to your right reads bin 4 at COUPLING_C 0.0 (the finding, asserted)",
+    check("pose_decouple is the identity at c = 0, leaves u alone, and is symmetric in u",
+          sw.pose_decouple(1.3, 0.7, 0.0) == (1.3, 0.7) and sw.pose_decouple(1.3, 0.7, 0.75)[0] == 1.3
+          and sw.pose_decouple(-1.3, 0.7, 0.75)[1] == sw.pose_decouple(1.3, 0.7, 0.75)[1])
+    check("a yaw-only 20 degree turn to your right reads bin 4 without it (the finding, asserted on the synthetic head)",
           sw.locate(*right)[0] == 4 and sw.locate(*left)[0] == 8, str((sw.locate(*right)[0], sw.locate(*left)[0])))
-    check("...and bin 3 (right) and 9 (left) after pose_decouple with the synthetic 0.33",
-          sw.locate(*sw.pose_decouple(*right, 0.33))[0] == 3 and sw.locate(*sw.pose_decouple(*left, 0.33))[0] == 9)
-    ok, angles = True, []
-    for yaw in (12, 16, 20, 24, 28):
-        u, v = sw.pose_decouple(*uv_of(landmarks(-yaw, 0), neutral), 0.33)
-        got = sw.locate(u, v)[0]
-        if math.hypot(u, v) >= sw.R_MIN and math.hypot(u, v) <= sw.R_MAX:
-            ok = ok and got == 3
-            angles.append(abs(sw.ring_angle(u, v) - 90.0))
-    check("at 12, 16, 20, 24 and 28 degrees of yaw the decoupled bin is 3 wherever r is in range",
-          ok and len(angles) >= 4, str(angles))
-    check("the dot's ring_angle lands within 5 degrees of the target's centre angle", angles and max(angles) < 5.0, str(angles))
-    check("pose_decouple leaves u alone", sw.pose_decouple(1.3, 0.7, 0.33)[0] == 1.3)
+
+    # 3.1.5: COUPLING_C from the user's own live trace (dev/fixtures/live-coupling-3.1.4.json) and the
+    # `guided` recording's big turns -- the synthetic head above leans quadratically, the real one
+    # is a straight line (the fit below), so these are the measured tests, not the synthetic one.
+    live = json.load(open(os.path.join(HERE, "fixtures", "live-coupling-3.1.4.json")))
+    pts = [(y / 15.0, p / 15.0) for y, p in live["right_hold"] + live["left_hold"] + live["left_over"]]
+    k_line = sum(abs(u) * v for u, v in pts) / sum(u * u for u, v in pts)
+    c_quad = sum(u * u * v for u, v in pts) / sum(u ** 4 for u, v in pts)
+    spread = lambda residuals: math.sqrt(sum(x * x for x in residuals) / len(residuals))
+    check("COUPLING_C is the measured 0.75: the least-squares line through the live samples (%.2f) and the recording's medians (0.66-0.77)"
+          % k_line, sw.COUPLING_C == 0.75 and abs(k_line - 0.75) < 0.1)
+    check("the straight line leaves less scatter than the quadratic form on the same samples (why the form changed)",
+          spread([v - k_line * abs(u) for u, v in pts]) < spread([v - c_quad * u * u for u, v in pts]) - 0.05,
+          "%.3f vs %.3f" % (spread([v - k_line * abs(u) for u, v in pts]), spread([v - c_quad * u * u for u, v in pts])))
+    held_right = [(y / 15.0, p / 15.0) for y, p in live["right_hold"]]
+    held_left = [(y / 15.0, p / 15.0) for y, p in live["left_hold"]]
+    inside = lambda samples, k, c: sum(sw.in_target(*sw.pose_decouple(u, v, c), k, False, sw.SIMPLE_WEDGE_HALF) for u, v in samples)
+    check("the user's right turn: 0 of 12 seconds inside Simple's right wedge before, all 12 after",
+          inside(held_right, 3, 0.0) == 0 and inside(held_right, 3, sw.COUPLING_C) == 12,
+          str((inside(held_right, 3, 0.0), inside(held_right, 3, sw.COUPLING_C))))
+    check("their left turn (the seconds inside R_MAX): 0 of 4 before, all 4 after",
+          inside(held_left, 9, 0.0) == 0 and inside(held_left, 9, sw.COUPLING_C) == 4,
+          str((inside(held_left, 9, 0.0), inside(held_left, 9, sw.COUPLING_C))))
+    over = [sw.pose_decouple(y / 15.0, p / 15.0, sw.COUPLING_C) for y, p in live["left_over"]]
+    check("and a left turn past 34 degrees stays `over` (r past R_MAX) however it is decoupled: rule O is not touched",
+          all(math.hypot(*uv) > sw.R_MAX for uv in over), str([round(math.hypot(*uv), 2) for uv in over]))
+    check("a nod alone is not moved by it: at 0 of yaw the pitch is exactly what was measured",
+          sw.pose_decouple(0.0, -1.2) == (0.0, -1.2) and sw.pose_decouple(0.0, 1.5) == (0.0, 1.5))
+    check("up and down at a few degrees of yaw keep their bins (a 5 degree yaw moves pitch by under 4 degrees)",
+          sw.locate(*sw.pose_decouple(0.33, -1.2))[0] == 0 and sw.locate(*sw.pose_decouple(0.33, 1.5))[0] == 6,
+          str((sw.locate(*sw.pose_decouple(0.33, -1.2)), sw.locate(*sw.pose_decouple(0.33, 1.5)))))
     up, down = uv_of(landmarks(0, -12), neutral), uv_of(landmarks(0, 12), neutral)
     check("a pure 12 degree nod up and down read bins 0 and 6", (sw.locate(*up)[0], sw.locate(*down)[0]) == (0, 6),
           str((sw.locate(*up), sw.locate(*down))))

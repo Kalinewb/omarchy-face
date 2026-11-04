@@ -268,7 +268,7 @@ class face_recognition_model_v1:
         vector[1] = 0.004 * (int(CURRENT["pts"][4][0] * 10) % 7)
         # how far this pose has moved the same face from its straight-on descriptor (the owner's own
         # frames at a turn are 0.3-0.46 from the centre: dev/measure-guard.py)
-        vector[2] = CURRENT.get("drift", 0.0)
+        vector[CURRENT.get("axis", 2)] = CURRENT.get("drift", 0.0)
         return vector
 PY
 mount --bind "$LAB/site" "$site" || exit 1
@@ -507,37 +507,67 @@ scenario unlit-room
 out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
 same "a room too dark for the emitter (every frame unlit, no strobe) still ends: black_frames, and says dark after the 2 s of silence" '["black_frames",true]' "$(q "$out" '[last("capture_failed")["code"], any(t["state"] == "dark" for t in tracks)]')"
 
-step "the same-person guard (3.1.3's, kept): strangers WITH per-frame spread, and the owner's turn, pinned"
-for sc in simple-gap-046 simple-gap-050 simple-gap-054 simple-midswap simple-foothold; do
-  reset_store
-  scenario $sc
-  out=$(OMARCHY_FACE_SWEEP_SECONDS=60 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 90" "eof")
-  same "$sc: a stranger (identity gap 0.40-0.54 from the owner with wobble, or one foothold frame then frames near it) after the centre ends changed, nothing stored" '["changed",false]' "$(q "$out" '[last("capture_failed")["code"], first("swept") is not None]')"
-  check "...$sc: and nothing was written" bash -c "[[ ! -e $STORE/people/emil.json ]]"
-done
-for sc in simple-two-of-three simple-strict-alternation; do
-  reset_store
-  scenario $sc
-  out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
-  same "$sc: the stranger's frames come two of three (or every other one): never five in a row, the lap completes, no changed" '[[0,3,6,9],false]' "$(q "$out" '[first("swept")["filled"], any(c.get("code") == "changed" for c in evs)]')"
-  same "...$sc: and not one stranger frame is in anything that was stored (every stored descriptor is the owner's)" 'true' "$(python3 -c "
+step "the same-person guard (3.1.5): ok / band / beyond. Strangers WITH per-frame spread, and the owner's far turn, pinned"
+stored_all_owner() { # stored_all_owner [min]: every descriptor in the store is the owner's (axis 0 is the fake stranger's gap)
+  python3 -c "
 import json, glob
 bad = 0; n = 0
 for path in glob.glob('$STORE/people/emil.json'):
     for appearance in json.load(open(path)).get('appearances', []):
         for e in [appearance['encoding']] + [x['encoding'] for x in appearance.get('extra', [])]:
             n += 1; bad += abs(e[0]) > 0.1
-print(str(n >= 5 and bad == 0).lower())
-")"
+print(str(n >= ${1:-5} and bad == 0).lower())
+"
+}
+# A stranger every frame of whom is in the band (0.40-0.55 from the owner's): nothing is accepted (so nothing is
+# stored), nothing is a stranger frame by the counter (so the lap is not ended `changed`), the targets run out.
+for sc in simple-gap-046 simple-gap-050 simple-gap-054 simple-midswap simple-foothold; do
+  reset_store
+  scenario $sc
+  out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
+  same "$sc: a stranger in the band (0.40-0.55 from the owner's, with wobble; or one foothold frame then frames near it) after the centre: not accepted, not stored, the lap ends too_few (3.1.5; 3.1.3 ended it changed)" '["too_few",false]' "$(q "$out" '[last("capture_failed")["code"], first("swept") is not None]')"
+  check "...$sc: and nothing was written" bash -c "[[ ! -e $STORE/people/emil.json ]]"
+done
+for sc in simple-gap-058 simple-gap-062 simple-band-beyond-mix simple-stranger; do
+  reset_store
+  scenario $sc
+  out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
+  same "$sc: a stranger past HARD (0.55) from the owner's, or beyond-HARD frames alternating with band ones (band frames neither count nor reset the run), ends changed, nothing stored" '["changed",false]' "$(q "$out" '[last("capture_failed")["code"], first("swept") is not None]')"
+  check "...$sc: and nothing was written" bash -c "[[ ! -e $STORE/people/emil.json ]]"
+done
+for sc in simple-two-of-three simple-strict-alternation; do
+  reset_store
+  scenario $sc
+  out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
+  same "$sc: the stranger's frames come two of three (or every other one) in the band: the owner's frames fill every target, no changed" '[[0,3,6,9],false]' "$(q "$out" '[first("swept")["filled"], any(c.get("code") == "changed" for c in evs)]')"
+  same "...$sc: and not one stranger frame is in anything that was stored (every stored descriptor is the owner's)" 'true' "$(stored_all_owner)"
 done
 reset_store
 scenario simple-limit-038
 out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
 same "THE KNOWN LIMIT: a stranger wholly inside CHAIN of the centre (0.38) is accepted: the lap completes (no stranger data; this pins it so a change is deliberate)" '[[0,3,6,9],false]' "$(q "$out" '[first("swept")["filled"], any(c.get("code") == "changed" for c in evs)]')"
 reset_store
+scenario simple-straddle
+out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 150" "send $DONE" "await saved 30")
+same "NEW IN 3.1.5, THE COST, pinned: a stranger who STRADDLES CHAIN (0.46 +-0.08 from the owner's, so one frame in eight is 0.40 or less) is no longer ended by five refusals in a row: the lap completes (3.1.3 ended it changed)" '[[0,3,6,9],false]' "$(q "$out" '[first("swept")["filled"], any(c.get("code") == "changed" for c in evs)]')"
+same "...what is stored passed the per-frame guard, as before, and the chain of TEMPLATES carries it: once one stranger template (0.39) is filled, the stranger's other frames are within CHAIN of it, so the stored descriptors reach past 0.40 but never past HARD (0.55) from the owner's centre" 'true' "$(python3 -c "
+import json, glob
+d = []
+for path in glob.glob('$STORE/people/emil.json'):
+    for appearance in json.load(open(path)).get('appearances', []):
+        d += [abs(e[0]) for e in [appearance['encoding']] + [x['encoding'] for x in appearance.get('extra', [])]]
+print(str(len(d) >= 5 and 0.40 < max(d) <= 0.55 + 1e-9).lower())
+")"
+reset_store
 scenario simple-owner-turn
-out=$(OMARCHY_FACE_SWEEP_SECONDS=60 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 90" "eof")
-same "the OWNER turning (0.46 from the centre at each target, small steps) is refused by this guard: changed (3.1.3's behaviour, kept; a sliding chain that let it through admitted strangers)" '"changed"' "$(q "$out" 'last("capture_failed")["code"]')"
+out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
+same "the OWNER far off-centre (0.46 from the centre at every target) is not refused as a stranger any more: no changed; every target runs out and the lap ends too_few (3.1.3's behaviour was changed, the live \"That was not you\")" '"too_few"' "$(q "$out" 'last("capture_failed")["code"]')"
+same "...and the scan said so while it was happening: some track events said over (the band), and every target was skipped" 'true' "$(q "$out" 'any(t["state"] == "over" for t in tracks) and sorted(evs[-1].get("skipped", [])) in ([], [0,3,6,9]) or any(sorted(t.get("skipped", [])) == [0,3,6,9] for t in tracks)')"
+reset_store
+scenario simple-owner-band-updown
+out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 150" "send $DONE" "await saved 30")
+same "THE USER'S LAP: left and right fill, up and down are banded (0.46) and skipped by patience: the lap is swept with two filled and two skipped, and saved" '[[3,9],[0,6],true]' "$(q "$out" '[first("swept")["filled"], first("swept")["skipped"], any(e.get("event") == "saved" for e in evs)]')"
+same "...and every stored descriptor is the owner's, no stranger frame was credited" 'true' "$(stored_all_owner 3)"
 reset_store
 scenario simple-stranger
 out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 90" "eof")
@@ -563,7 +593,7 @@ scenario simple-strobe
 out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
 lines=$(grep -c '^debug ' /run/omarchy-face-stub/logger.out)
 check "with debug=true it logs, at most 120 lines for the lap, about one per second of frame time" bash -c "[[ $lines -ge 5 && $lines -le 120 ]]"
-check "...each line has the counts, the per-gate failures, the target and what is held, the last word, the mean darkness of the lit frames and the refine candidate" bash -c "grep '^debug ' /run/omarchy-face-stub/logger.out | tail -1 | grep -qE '^debug t=[0-9.]+ frames=[0-9]+ strobe_off=[0-9]+ black=0 lit=[0-9]+ dark=0 none=[0-9]+ multi=[0-9]+ accepted=[0-9]+ acc_s=[0-9]+ closer=[0-9]+ farther=[0-9]+ edge=[0-9]+ exposure=[0-9]+ blurry=[0-9]+ roll=[0-9]+ unsteady=[0-9]+ other=[0-9]+ over=[0-9]+ yaw=-?[0-9a-z/]+ pitch=-?[0-9a-z/]+ roll=-?[0-9a-z/]+ centre_gate=(in|out|-) centre_held=[01] filled=[0-9]+ target=[a-z0-9]+ hard_max=[0-9.]+ chain_max=[0-9.]+ guard_run=[0-9]+ lap_end=[a-z_]+ last_word=(skip|ok|hold|dark|blurry|closer|farther|edge|multiple|other|searching|over) lit_darkness_mean=[0-9.]+ refine=(None|[a-z_]+)\$'"
+check "...each line has the counts, the per-gate failures, the target and what is held, the last word, the mean darkness of the lit frames and the refine candidate" bash -c "grep '^debug ' /run/omarchy-face-stub/logger.out | tail -1 | grep -qE '^debug t=[0-9.]+ frames=[0-9]+ strobe_off=[0-9]+ black=0 lit=[0-9]+ dark=0 none=[0-9]+ multi=[0-9]+ accepted=[0-9]+ acc_s=[0-9]+ closer=[0-9]+ farther=[0-9]+ edge=[0-9]+ exposure=[0-9]+ blurry=[0-9]+ roll=[0-9]+ unsteady=[0-9]+ other=[0-9]+ over=[0-9]+ band=[0-9]+ yaw=-?[0-9a-z/]+ pitch=-?[0-9a-z/]+ pitch_dec=-?[0-9a-z/]+ roll=-?[0-9a-z/]+ centre_gate=(in|out|-) centre_held=[01] filled=[0-9]+ target=[a-z0-9]+ hard_max=[0-9.]+ chain_max=[0-9.]+ guard_run=[0-9]+ lap_end=[a-z_]+ last_word=(skip|ok|hold|dark|blurry|closer|farther|edge|multiple|other|searching|over|band) lit_darkness_mean=[0-9.]+ refine=(None|[a-z_]+)\$'"
 same "...the lap's accepted frames are counted (the engine filled four targets from them), and the last word of a strobe-off frame is skip or of an accepted one ok (words that are never on the wire)" 'true' "$(python3 -c "
 import re
 rows = [dict(re.findall(r'(\w+)=(\S+)', l)) for l in open('/run/omarchy-face-stub/logger.out') if l.startswith('debug ')]
@@ -578,15 +608,32 @@ off, lit = int(f['strobe_off']), int(f['lit'])
 print(str(off > 0 and 0.7 <= off / max(1, lit) <= 1.3).lower())
 ")"
 check "...and no frame data: every line is words and numbers, under 400 characters" bash -c "! grep '^debug ' /run/omarchy-face-stub/logger.out | grep -qvE '^debug [A-Za-z_=0-9./ -]+\$' && ! grep '^debug ' /run/omarchy-face-stub/logger.out | awk 'length(\$0) > 400 { bad = 1 } END { exit !bad }'"
+same "...the pose is printed twice: pitch as the camera sees it and pitch_dec with rule D taken out; at the right target the fake head reads about 18 and 0" 'true' "$(python3 -c "
+import re
+rows = [dict(re.findall(r'(\w+)=(\S+)', l)) for l in open('/run/omarchy-face-stub/logger.out') if l.startswith('debug ')]
+on = [r for r in rows if r['target'] == '3' and r['pitch'] not in ('n/a',) and r['pitch_dec'] != 'n/a' and abs(int(r['yaw'])) > 15]
+print(str(len(on) >= 2 and all(12 <= int(r['pitch']) <= 24 and abs(int(r['pitch_dec'])) <= 5 for r in on)).lower())
+")"
 reset_store
-scenario simple-owner-turn
+scenario simple-gap-058
 : >/run/omarchy-face-stub/logger.out
-out=$(OMARCHY_FACE_SWEEP_SECONDS=60 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 90" "eof")
-same "the trace explains the guard, to the last line: on the owner's refused turn hard_max is under 0.55 (the centre test passes) while chain_max is over 0.40 (the chain test fails), guard_run reaches 5 and the lap ends changed (SR1 S3: the final line is written before the lap is left)" 'true' "$(python3 -c "
+out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
+same "the trace explains a stranger, to the last line: hard_max over 0.55 (the stranger bound), guard_run reaches 5, the lap ends changed (SR1 S3: the final line is written before the lap is left)" 'true' "$(python3 -c "
 import re
 rows = [dict(re.findall(r'(\w+)=(\S+)', l)) for l in open('/run/omarchy-face-stub/logger.out') if l.startswith('debug ')]
 last = rows[-1]
-print(str(last['guard_run'] == '5' and last['lap_end'] == 'changed' and float(last['chain_max']) > 0.40 and float(last['hard_max']) < 0.55 and max(int(r['guard_run']) for r in rows) == 5).lower())
+print(str(last['guard_run'] == '5' and last['lap_end'] == 'changed' and float(last['hard_max']) > 0.55 and max(int(r['guard_run']) for r in rows) == 5).lower())
+")"
+reset_store
+scenario simple-owner-turn
+: >/run/omarchy-face-stub/logger.out
+out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
+same "...and the owner far off-centre: hard_max under 0.55 and chain_max over 0.40 (the band), band counted, guard_run never above 0, last word band, the lap ends by running out of targets (resolved)" 'true' "$(python3 -c "
+import re
+rows = [dict(re.findall(r'(\w+)=(\S+)', l)) for l in open('/run/omarchy-face-stub/logger.out') if l.startswith('debug ')]
+last = rows[-1]
+print(str(float(last['hard_max']) < 0.55 and max(float(r['chain_max']) for r in rows) > 0.40 and int(last['band']) > 5
+          and max(int(r['guard_run']) for r in rows) == 0 and 'band' in {r['last_word'] for r in rows} and last['lap_end'] == 'resolved').lower())
 ")"
 printf 'debug=false\n' >>/etc/omarchy-face/config
 : >/run/omarchy-face-stub/logger.out
@@ -675,7 +722,7 @@ PY
   chmod 0755 "$1"
 }
 patch_admin "$LAB/admin-noguard" '    hard_distance, chain_distance = guard_distances(encoding, accepted, centre)
-    if hard_distance > hard:' '    return True
+    if hard_distance > hard:' '    return "ok"
     hard_distance, chain_distance = guard_distances(encoding, accepted, centre)
     if hard_distance > hard:'
 patch_admin "$LAB/admin-wide" '"templates": [{"bin": k, "r": round(t["r"], 3),' '"templates": [{"bin": k, "r": 3.9,'

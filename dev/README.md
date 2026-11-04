@@ -1102,7 +1102,12 @@ Counts and words only, never a frame. From 3.1.3 it also has `accepted` (frames 
 `acc_s` for the last second), the per-gate failures (`closer farther edge darkgate blurry roll unsteady`),
 `other`, `over`, the pose relative to the neutral in degrees (`yaw pitch roll`), `centre_gate` (`in` / `out` /
 `-`), `centre_held`, `filled`, `target`, and `last_word` as `skip` (a strobe-off frame) or `ok` (an accepted
-one); those two words are in the trace only. `dev/SR1-notes.md` has the deltas for SR1.
+one); those two words are in the trace only. 3.1.4 added `hard_max` / `chain_max` (the largest distance to the
+centre and to the nearest accepted template in the last second), `guard_run` (the run of stranger frames; 5 ends
+the lap), `lap_end` and a final line when the lap ends. 3.1.5 adds `band` (frames between CHAIN and HARD, told to
+the client as `over`; `last_word` can be `band`) and `pitch_dec`, the pitch with rule D taken out, next to `pitch`
+as the camera sees it. Reading it: `hard_max` over 0.55 is a stranger frame; `chain_max` over 0.40 with `hard_max`
+under 0.55 is a band frame (not accepted, not counted towards `changed`). `dev/SR1-notes.md` has the deltas for SR1.
 
 ### How to widen Sudo later
 

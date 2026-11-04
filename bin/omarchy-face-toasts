@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 3.1.4
+# omarchy-face-version: 3.1.5
 #
 # Hold the notch's notification toasts back while the scan island is up, and put
 # them back after (Service.qml calls this; nothing else does).

@@ -1,0 +1,10 @@
+{
+ "about": "The pose of the owner's head while they turned for the Simple scan, from the helper 3.1.4's own debug trace (journal tag omarchy-face-sweep, 2026-11-04, one lap), one sample per second: [yaw, pitch] in degrees relative to the neutral, as the camera sees them, before rule D (3.1.5). Numbers only, no frames; the trace prints nothing else about the face.",
+ "right_hold": [[23, 22], [18, 18], [19, 19], [20, 21], [24, 18], [23, 21], [27, 23], [26, 19], [20, 16], [19, 14], [19, 16], [16, 14]],
+ "left_hold": [[-24, 15], [-17, 10], [-22, 14], [-22, 14]],
+ "left_over": [[-34, 16], [-38, 26], [-39, 20], [-44, 28]],
+ "recording_big_turn": {
+  "about": "dev/enrol-record.py `guided` recording (2026-11-02), every lit one-face frame with |yaw| of 30 or more, 137 frames: the median of pitch / |yaw| by band. The same file's frames under 30 of yaw are dominated by the person looking up, which is not coupling, and are not used.",
+  "30-45": 0.66, "45-60": 0.77, "60-90": 0.74, "right_quartiles": [0.5, 0.73, 0.96]
+ }
+}

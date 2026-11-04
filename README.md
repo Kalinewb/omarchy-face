@@ -195,7 +195,7 @@ sudo /usr/bin/bash -c 'PATH=/usr/bin; set -o pipefail; t=$(mktemp -d) || exit 1
     bash "$t/install.sh" "$1" "$2"
   }
   run "$@"; s=$?; rm -rf -- "$t"; exit $s' \
-  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.1.4
+  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.1.5
 ```
 
 What it does, from the button or from a terminal: root copies the installer out of the
@@ -325,6 +325,17 @@ off-by-default trace (`debug=true` in `/etc/omarchy-face/config`, `journalctl -t
 now also counts frames that passed every gate and each gate that failed (closer, farther, edge,
 dark, blurry, roll, unsteady), and prints the pose and the centre gate. Setup shows the plugin is
 newer than the installed system files: **Update Face's system files**, one password.
+
+### Updating from 3.1.4
+
+Face ID 3.1.5 changes the enrolment helper (root code, so Setup offers **Update Face's system files**, one
+password) in two places, both found in your own trace. First, turning your head sideways read as tilting it down
+by about three quarters of the turn, so a right turn landed outside the right target and never filled; the
+position the scan reads is now corrected for that (it changes only which target a pose counts for, not who the
+face is). Second, a frame that is over the 0.40 chain limit but still well inside the 0.55 centre limit (you,
+far from straight on) is no longer counted towards "That was not you": it is simply not used, and the scan
+says "A little less". Only frames beyond 0.55 from your first one can end the scan that way. The ring and the
+caption already show a target that is skipped (the tick stays empty and the line says "We will skip that one").
 
 ### Updating from 3.1.3
 

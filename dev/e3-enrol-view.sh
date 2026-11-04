@@ -176,6 +176,8 @@ check "…the next arc is current, and its line changed in the same frame" \
   "14/1 14/1 14/1 14/1 14/1 | current,current,current,current,current | Turn your head to the right" \
   "$(field next-3 "$out") | $(field next-line "$out")"
 check "state words: over, edge" "A little less|Centre your face" "$(field over-line "$out")|$(field edge-line "$out")"
+check "3.1.5: the skip note outranks `over` (a far-off turn keeps saying it), but not a gate that needs something else (edge)" "We will skip that one | Centre your face" \
+  "$(field skip-over-line "$out") | $(field skip-edge-line "$out")"
 check "a skipped bin goes back to the rest look and the line says so" "We will skip that one | 8/0.7 8/0.7 8/0.7 8/0.7 8/0.7 | rest,rest,rest,rest,rest" \
   "$(field skip-line "$out") | $(field skip-rest "$out")"
 check "a track with every bin full and canFinish shows no Done in Simple (Done arrives with swept)" \

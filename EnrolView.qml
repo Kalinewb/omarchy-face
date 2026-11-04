@@ -125,6 +125,9 @@ Item {
         return s.filled.length >= 12 ? "The circle is complete." : "All set."
       return s.kept >= 4 ? "All set." : "Enough to save."
     }
+    // The skip note outranks the two words a far-off turn keeps saying ("A little less", and the guard's
+    // own); a gate that needs the person to do something else (centre, closer, only you) still wins.
+    if (view.skipNote && (s.trackState === "over" || s.trackState === "other")) return "We will skip that one"
     if (view.gateText[s.trackState] !== undefined) return view.gateText[s.trackState]
     if (view.skipNote) return "We will skip that one"
     if (ph === "centre") return s.centre > 0 ? "Hold still" : "Look straight at the circle"

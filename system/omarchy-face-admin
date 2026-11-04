@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 3.1.4
+# omarchy-face-version: 3.1.5
 #
 # Every privileged thing Face does, behind one polkit action
 # (plan-engine.md §8.2, plan-merged.md §2.3).
@@ -2815,7 +2815,8 @@ ADVANCED_LAP_SECONDS = 90.0
 STALL_SECONDS = 20.0         # Advanced: no new supported frame for this long
 MAX_TARGETS = 12
 SIMPLE_MAX_STORED = 5        # rule R: Simple may not replace a larger stored set
-COUPLING_C = 0.0             # rule D placeholder: Phase 0 fits it (synthetic model 0.33)
+COUPLING_C = 0.75            # rule D (3.1.5: measured; was the 0.0 placeholder): the nose reads this much lower
+                             # per unit of yaw on a turned head -- see pose_decouple
 SMOOTH_FRAMES = 5            # rule J: steadiness is judged on the mean of this many lit frames (3.1.3: was 3)
 GATE_WORDS = ("hold", "dark", "blurry", "closer", "farther", "edge", "multiple", "other",
               "searching", "over")
@@ -3099,6 +3100,27 @@ def guard_distances(encoding, accepted, centre):
     return distance(encoding, centre), nearest
 
 
+def guard_verdict(encoding, accepted, centre, chain=CHAIN, hard=HARD):
+    """"ok", "band" or "beyond", per frame:
+
+      ok      within HARD of the centre and within CHAIN of the nearest accepted template
+      band    within HARD of the centre but over CHAIN of every template: not accepted (not stored,
+              not credited, no dwell) but not evidence of another person either; the loop neither
+              counts it towards `changed` nor lets it break a run
+      beyond  over HARD of the centre: the stranger bound, the only verdict that counts
+
+    Without a centre yet this frame is the centre (ok).
+    """
+    if centre is None:
+        return "ok"
+    hard_distance, chain_distance = guard_distances(encoding, accepted, centre)
+    if hard_distance > hard:
+        return "beyond"
+    if chain_distance is not None and chain_distance > chain:
+        return "band"
+    return "ok"
+
+
 def guard_ok(encoding, accepted, centre, chain=CHAIN, hard=HARD):
     """Per frame, never an error: close enough to the chain and to the centre.
 
@@ -3109,24 +3131,19 @@ def guard_ok(encoding, accepted, centre, chain=CHAIN, hard=HARD):
     It is deliberately NOT a chain of the latest accepted frames: 3.1.4 tried that (an owner's
     frames at a turn are 0.1-0.3 from the frame before and up to 0.46 from the centre), and SR1
     showed it admits strangers 3.1.3 refused, because an accepted stranger frame becomes the
-    chain (dev/SR1-notes.md). The owner's turn up to 0.46 from the centre is therefore still
-    refused here when it is over CHAIN of every template; the live trace shows how often.
+    chain (dev/SR1-notes.md). A frame over CHAIN of every template is still not ok here; what
+    the loop does with it is `guard_verdict`'s business (3.1.5: it is not accepted, and it no
+    longer ends the lap unless it is also over HARD).
     """
-    if centre is None:
-        return True
-    hard_distance, chain_distance = guard_distances(encoding, accepted, centre)
-    if hard_distance > hard:
-        return False
-    if chain_distance is not None and chain_distance > chain:
-        return False
-    return True
+    return guard_verdict(encoding, accepted, centre, chain, hard) == "ok"
 
 
 def changed_step(run, failed):
     """The run of consecutive lit frames that failed the guard, and whether it ends the lap.
 
     Called only for frames that reached an encoding: a frame the gates turned away
-    neither extends the run nor breaks it.
+    neither extends the run nor breaks it. `failed` is "beyond HARD" (3.1.5): a frame in
+    the band between CHAIN and HARD is not passed here at all, so it is neither.
     """
     run = run + 1 if failed else 0
     return run, run >= CHANGED_FRAMES
@@ -3295,8 +3312,15 @@ def finite(value):
 
 
 def pose_decouple(u, v, c=COUPLING_C):
-    """Rule D: take the yaw-into-pitch coupling out of v. The identity at c = 0."""
-    return u, v - c * u * u
+    """Rule D: take the yaw-into-pitch coupling out of v. The identity at c = 0.
+
+    A head turned sideways reads as tilted down by about 0.75 of the turn, the same for the left
+    and the right and growing in proportion to the turn (the user's own live trace: 23 of yaw
+    reads as 22 of pitch; the recordings: 0.66-0.77 at 30-90). The first version of this rule was
+    quadratic (v - c u^2); on the same data the straight line leaves half the scatter. It only
+    changes which wedge a pose is in, never an identity decision: the guard sees the picture, not u, v.
+    """
+    return u, v - c * abs(u)
 
 
 def in_target(u, v, k, holding, half):
@@ -3585,10 +3609,10 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
     debug_at, debug_lines = None, 0
     guard_seen = {"hard": 0.0, "chain": 0.0}  # the largest guard distances since the last trace line
     trace = {"accepted": 0, "acc_s": 0, "closer": 0, "farther": 0, "edge": 0, "exposure": 0, "blurry": 0,
-             "roll": 0, "unsteady": 0, "other": 0, "over": 0}
+             "roll": 0, "unsteady": 0, "other": 0, "over": 0, "band": 0}
     # the last lit frame's pose for the trace: degrees RELATIVE to the neutral (u and v are about 15
     # degrees to the unit), the eye line's roll in degrees, and whether it was inside the centre
-    seen_pose = {"yaw": "n/a", "pitch": "n/a", "roll": "n/a", "centre": "-"}
+    seen_pose = {"yaw": "n/a", "pitch": "n/a", "pitch_dec": "n/a", "roll": "n/a", "centre": "-"}
     last_emit, last_key = None, None
     sup_total, sup_at, stalled = 0, None, False
     started = None
@@ -3608,21 +3632,22 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
         debug_lines += 1
         lit_n = seen["frames"] - seen["strobe"] - seen["black"]
         # `ok` is an accepted frame, in the trace only; one that then failed the guard or passed r
-        # shows its own word (`other`, `over`), as the client was told
-        shown = "skip" if strobe else (word if word in ("other", "over") else ("ok" if passed else (word or ACCEPTED_WORD)))
+        # shows its own word (`other`, `over`), as the client was told; `band` (3.1.5) is a frame between
+        # CHAIN and HARD, which the client was told as `over`
+        shown = "skip" if strobe else ("band" if banded else word if word in ("other", "over") else ("ok" if passed else (word or ACCEPTED_WORD)))
         aim = current_target(mode, targets, filled, skipped, centre_held, head_bin if uv else None)
         try:
             sys.stderr.write(
                 "debug t=%.1f frames=%d strobe_off=%d black=%d lit=%d dark=%d none=%d multi=%d "
                 "accepted=%d acc_s=%d closer=%d farther=%d edge=%d exposure=%d blurry=%d roll=%d unsteady=%d "
-                "other=%d over=%d yaw=%s pitch=%s roll=%s centre_gate=%s centre_held=%d filled=%d "
+                "other=%d over=%d band=%d yaw=%s pitch=%s pitch_dec=%s roll=%s centre_gate=%s centre_held=%d filled=%d "
                 "target=%s hard_max=%.2f chain_max=%.2f guard_run=%d lap_end=%s last_word=%s "
                 "lit_darkness_mean=%.1f refine=%s\n" % (
                     now - started, seen["frames"], seen["strobe"], seen["black"], lit_n,
                     seen["dark"], seen["none"], seen["multi"], trace["accepted"], trace["acc_s"],
                     trace["closer"], trace["farther"], trace["edge"], trace["exposure"], trace["blurry"],
-                    trace["roll"], trace["unsteady"], trace["other"], trace["over"],
-                    seen_pose["yaw"], seen_pose["pitch"], seen_pose["roll"], seen_pose["centre"],
+                    trace["roll"], trace["unsteady"], trace["other"], trace["over"], trace["band"],
+                    seen_pose["yaw"], seen_pose["pitch"], seen_pose["pitch_dec"], seen_pose["roll"], seen_pose["centre"],
                     1 if centre_held else 0, len(filled),
                     "none" if aim is None else aim, guard_seen["hard"], guard_seen["chain"], run_failed,
                     lap_end, shown, (lit_dark / lit_n) if lit_n else 0.0, refine_for(seen)))
@@ -3640,7 +3665,7 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
             started = now
         seen["frames"] += 1
         word, uv, r = None, None, None
-        passed = False
+        passed = banded = False
 
         gray = clahe.apply(gray_in)
         hist = cv2.calcHist([gray], [0], None, [8], [0, 256])
@@ -3716,9 +3741,11 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
                     if debug:
                         seen_pose["roll"] = str(int(round(pose["roll"])))
                         if neutral is not None:
-                            tu, tv = uv_of(pose)
-                            seen_pose["yaw"] = str(int(round(15 * tu)))
-                            seen_pose["pitch"] = str(int(round(15 * tv)))
+                            ru, rv = pose_uv(pose, neutral)
+                            tu, tv = pose_decouple(ru, rv)
+                            seen_pose["yaw"] = str(int(round(15 * ru)))
+                            seen_pose["pitch"] = str(int(round(15 * rv)))             # as the camera sees it
+                            seen_pose["pitch_dec"] = str(int(round(15 * tv)))         # with rule D taken out
                     word = frame_word(1, pose["eye"], box, (native_w, native_h), darkness, saturated,
                                       sharp, pose["roll"], steady)
                     if debug:
@@ -3747,19 +3774,28 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
                                 trace["over"] += 1
                             else:
                                 encoding = [float(x) for x in encoder.compute_face_descriptor(small, shape, 1)]
-                                bad = not guard_ok(encoding, accepted, centre_enc)
+                                verdict = guard_verdict(encoding, accepted, centre_enc)
                                 if debug and centre_enc is not None:
                                     gd, gc = guard_distances(encoding, accepted, centre_enc)
                                     guard_seen["hard"] = max(guard_seen["hard"], gd)
                                     guard_seen["chain"] = max(guard_seen["chain"], gc)
-                                run_failed, ended = changed_step(run_failed, bad)
+                                if verdict == "band":
+                                    # The owner far off-centre reads like this too: not accepted (not stored,
+                                    # not credited, no dwell) and not a stranger either, so the run towards
+                                    # `changed` is left exactly as it was.
+                                    word = "over"
+                                    banded = True
+                                    trace["band"] += 1
+                                    ended = False
+                                else:
+                                    run_failed, ended = changed_step(run_failed, verdict == "beyond")
                                 if ended:
                                     changed = True
                                     reason = "changed"
-                                elif bad:
+                                elif verdict == "beyond":
                                     word = "other"
                                     trace["other"] += 1
-                                else:
+                                elif verdict == "ok":
                                     word = ACCEPTED_WORD
                                     if not centre_held:
                                         on = r < R_MIN
