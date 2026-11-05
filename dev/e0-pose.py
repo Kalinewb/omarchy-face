@@ -525,7 +525,7 @@ def test_guard():
 
     # 3.1.4: the guard is 3.1.3's. A sliding chain of the latest accepted frames was tried and withdrawn:
     # SR1 showed an accepted stranger frame becomes the chain (dev/SR1-notes.md)
-    check("an owner frame 0.46 from the centre and over CHAIN of every template is still not ok (3.1.5: once something is filled it is a band frame, which does not end the lap; with the centre alone it is `beyond`)",
+    check("an owner frame 0.46 from the centre and over CHAIN of every template is still not ok (3.1.5: a band frame; below the floor the loop settles it as `beyond`)",
           not sw.guard_ok(enc(0.46), [centre], centre))
     try:
         sw.guard_ok(enc(0.46), [centre], centre, recent=[enc(0.26)])
@@ -541,27 +541,36 @@ def test_guard():
     check("guard_distances returns what the guard compares: the centre and the nearest template (and nothing before a centre)",
           [round(x, 3) for x in sw.guard_distances(enc(0.46), [centre, enc(0.30)], centre)] == [0.46, 0.16]
           and sw.guard_distances(enc(0.1), [], None) == (None, None))
-    # 3.1.5: three verdicts. Only a frame over HARD of the centre (the stranger bound) counts towards `changed`,
-    # and so does one over CHAIN while the centre is the only template (nothing filled yet: 3.1.3's strictness).
+    # 3.1.5: three verdicts from the distances alone; `settle_verdict` decides what a band frame means.
     verdict = sw.guard_verdict
-    filled = [centre, enc(-0.20)]            # something is filled: the band exists
-    check("nothing filled (the centre alone): ok within CHAIN, beyond past it and past HARD, ok before a centre -- 3.1.3's two bounds",
-          (verdict(enc(0.40), [centre], centre), verdict(enc(0.4001), [centre], centre),
-           verdict(enc(0.55), [centre], centre), verdict(enc(0.5501), [centre], centre),
-           verdict(enc(9.0), [], None)) == ("ok", "beyond", "beyond", "beyond", "ok"))
-    check("something filled: ok within CHAIN of a template, band between CHAIN and HARD, beyond past HARD",
-          (verdict(enc(0.20), filled, centre), verdict(enc(0.45), filled, centre), verdict(enc(0.55), filled, centre),
-           verdict(enc(0.5501), filled, centre)) == ("ok", "band", "band", "beyond"))
-    check("the band opens with the FIRST filled template, not before: the same frame is beyond with the centre alone and band with one filled",
-          verdict(enc(0.46), [centre], centre) == "beyond" and verdict(enc(0.46), filled, centre) == "band")
-    check("a frame near a filled template is ok however far from the centre, until HARD",
+    templates = [centre, enc(-0.20)]
+    check("guard_verdict: ok within CHAIN of a template, band between CHAIN and HARD, beyond past HARD, ok before a centre",
+          (verdict(enc(0.40), [centre], centre), verdict(enc(0.4001), [centre], centre), verdict(enc(0.55), [centre], centre),
+           verdict(enc(0.5501), [centre], centre), verdict(enc(9.0), [], None)) == ("ok", "band", "band", "beyond", "ok"))
+    check("a frame near a template is ok however far from the centre, until HARD",
           verdict(enc(0.52), [centre, enc(0.45)], centre) == "ok" and verdict(enc(0.60), [centre, enc(0.58)], centre) == "beyond")
     grid = [enc(x / 100.0) for x in range(0, 80)]
-    check("guard_ok is exactly 'the verdict is ok' (3.1.3's refusal set is unchanged; only what the loop does with a refusal is new)",
-          all(sw.guard_ok(e, t, centre) == (verdict(e, t, centre) == "ok") for e in grid for t in ([centre], filled)))
-    check("beyond is the stranger bound (over HARD of the centre, whatever the templates), or over CHAIN with nothing filled; band is never both",
-          all((verdict(e, t, centre) == "beyond") == (sw.distance(e, centre) > sw.HARD or (len(t) == 1 and not sw.guard_ok(e, t, centre)))
-              for e in grid for t in ([centre], filled, [centre, enc(0.30), enc(0.55)])))
+    check("guard_ok is exactly 'the verdict is ok' (3.1.3's refusal set is unchanged)",
+          all(sw.guard_ok(e, t, centre) == (verdict(e, t, centre) == "ok") for e in grid for t in ([centre], templates)))
+    check("beyond is exactly over HARD of the centre, whatever the templates",
+          all((verdict(e, t, centre) == "beyond") == (sw.distance(e, centre) > sw.HARD)
+              for e in grid for t in ([centre], templates, [centre, enc(0.30), enc(0.55)])))
+    check("over HARD returns before any template is looked at (3.1.3's order): a malformed template cannot raise for it",
+          verdict(enc(0.70), [None], centre) == "beyond")
+    settle = sw.settle_verdict
+    two, one = {3, 9}, {9}
+    check("settle_verdict, Simple: a band frame is beyond below the floor (0 or 1 filled) and band at two filled; ok and beyond are never changed",
+          (settle("band", "simple", True, set()), settle("band", "simple", True, one), settle("band", "simple", True, two))
+          == ("beyond", "beyond", "band")
+          and all(settle(v, "simple", True, f) == v for v in ("ok", "beyond") for f in (set(), one, two)))
+    check("...Advanced: the floor is four bins OF THIS LAP (the lap-1 templates in `accepted` do not count): band is beyond at 0-3 filled, band at 4",
+          (settle("band", "advanced", True, set()), settle("band", "advanced", True, {0, 3, 6}), settle("band", "advanced", True, {0, 3, 6, 9}))
+          == ("beyond", "beyond", "band"))
+    check("...and before the centre is held nothing is a band frame to settle (can_finish needs the centre)",
+          settle("band", "simple", False, two) == "beyond")
+    check("the loop settles every verdict, graceful-ends only a Simple lap after five band frames in a row, and an ok frame resets that count",
+          "settle_verdict(guard_verdict(encoding, accepted, centre_enc)," in SOURCE
+          and 'if mode == "simple" and band_run >= CHANGED_FRAMES:' in SOURCE and "band_run = 0" in SOURCE)
     check("the loop gives a banded frame no part in the `changed` run (it never calls changed_step for one)",
           'if verdict == "band":' in SOURCE and 'changed_step(run_failed, verdict == "beyond")' in SOURCE
           and "changed_step(run_failed, bad)" not in SOURCE)
@@ -798,6 +807,8 @@ def test_plain_turns():
     k_line = sum(abs(u) * v for u, v in pts) / sum(u * u for u, v in pts)
     c_quad = sum(u * u * v for u, v in pts) / sum(u ** 4 for u, v in pts)
     spread = lambda residuals: math.sqrt(sum(x * x for x in residuals) / len(residuals))
+    # (circular on purpose and said so: COUPLING_C was chosen from this fixture, so this guards against an
+    # accidental edit of the constant, not against the constant being wrong for somebody else)
     check("COUPLING_C is the measured 0.75: the least-squares line through the live samples (%.2f) and the recording's medians (0.66-0.77)"
           % k_line, sw.COUPLING_C == 0.75 and abs(k_line - 0.75) < 0.1)
     check("the straight line leaves less scatter than the quadratic form on the same samples (why the form changed)",

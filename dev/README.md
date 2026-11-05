@@ -1107,7 +1107,7 @@ centre and to the nearest accepted template in the last second), `guard_run` (th
 the lap), `lap_end` and a final line when the lap ends. 3.1.5 adds `band` (frames between CHAIN and HARD, told to
 the client as `over`; `last_word` can be `band`) and `pitch_dec`, the pitch with rule D taken out, next to `pitch`
 as the camera sees it. Signs: `yaw` is positive to the right of the (mirrored) preview, `pitch` and `pitch_dec` are positive DOWN (negative is up). Reading it: `hard_max` over 0.55 is a stranger frame; `chain_max` over 0.40 with `hard_max`
-under 0.55 is a band frame (not accepted, not counted towards `changed`). `dev/SR1-notes.md` has the deltas for SR1.
+under 0.55 is a band frame: past the floor (two filled in Simple, four in Advanced) it is left out and not counted towards `changed` (`band` counts it); below the floor it is a stranger frame (`other`, `guard_run`). `dev/SR1-notes.md` has the deltas for SR1.
 
 ### How to widen Sudo later
 

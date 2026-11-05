@@ -185,15 +185,25 @@ SCENARIOS = {
     "strobe-black": lambda: strobe(build([dict(n=450, kind="black")])),
     # the OWNER at each Simple target with a descriptor 0.46 from the straight-on one (over CHAIN, under HARD) by small
     # steps: the FIRST target is already that far, so nothing is filled and the run of refusals ends the lap `changed`,
-    # as in 3.1.3 (the cost of the strictness while only the centre exists; the live trace's failure was after two fills).
+    # as in 3.1.3 (the cost of the strictness below the floor; the live trace's failure was after two fills).
     # (each turn moves the descriptor along its own axis, as turning to different sides does: the left turn is not near the up one)
     "simple-owner-turn": lambda: build([dict(n=40)] + [dict(at=k, n=240, drift=0.46, travel=14, axis=2 + i) for i, k in enumerate(SIMPLE)]),
-    # left fills (0.30), then right, up and down are 0.46 from the centre: the band is transparent once something is filled
+    # left fills (0.30), then right, up and down are 0.46 from the centre: ONE fill is below the floor of two, so the
+    # right target's frames are stranger frames (`changed`) -- the cost of keying the band on the floor
     "simple-owner-band-after-fill": lambda: build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2)]
                                                   + [dict(at=k, n=240, drift=0.46, travel=14, axis=3 + i) for i, k in enumerate((3, 0, 6))]),
-    # a stranger straddling CHAIN who takes over after the owner's left target has filled: the band is transparent by then, so
-    # nothing ends it and his frames within CHAIN of the centre fill the rest (the cost that remains after 3.1.5's (a))
+    # a stranger straddling CHAIN who takes over after the owner's left target has filled (one fill: below the floor of two,
+    # so the band is still strict) and after left AND right have (the floor is met: the band is neutral and five band
+    # frames in a row end the lap with what is filled)
     "simple-late-stranger": lambda: _identity(build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2)] + visit((3, 0, 6))), 100, 0.46, 0.08),
+    "simple-late-stranger-2": lambda: _identity(build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2), dict(at=3, n=40, drift=0.30, travel=14, axis=3)]
+                                                      + visit((0, 6), n=240)), 135, 0.46, 0.08),
+    # lap 2 (Advanced), the owner at the centre, then somebody else: `accepted` holds lap 1's templates from the first frame,
+    # so only THIS LAP's fills count towards the floor
+    "simple-late-limit-038": lambda: _identity(build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2), dict(at=3, n=40, drift=0.30, travel=14, axis=3)]
+                                                     + visit((0, 6), n=240)), 135, 0.38, 0.02),
+    "lap2-stranger-044": lambda: _identity(build([dict(n=40, scale=0.9)] + visit(CLOCK, scale=0.9)), 45, 0.44, 0.04),
+    "lap2-straddle": lambda: _identity(build([dict(n=40, scale=0.9)] + visit(CLOCK, scale=0.9)), 45, 0.44, 0.08),
     "simple-owner-band-updown": lambda: build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2), dict(at=3, n=40, drift=0.30, travel=14, axis=3),
                                                dict(at=0, n=240, drift=0.46, travel=14, axis=4), dict(at=6, n=240, drift=0.46, travel=14, axis=5)]),
     # STRANGERS WITH PER-FRAME SPREAD (identity gap from the owner + wobble, after the centre). With only the centre

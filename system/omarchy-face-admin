@@ -3101,32 +3101,39 @@ def guard_distances(encoding, accepted, centre):
 
 
 def guard_verdict(encoding, accepted, centre, chain=CHAIN, hard=HARD):
-    """"ok", "band" or "beyond", per frame:
+    """"ok", "band" or "beyond", per frame, from the two distances alone:
 
       ok      within HARD of the centre and within CHAIN of the nearest accepted template
-      band    within HARD of the centre but over CHAIN of every template, and AT LEAST ONE TARGET
-              IS FILLED (`accepted` holds more than the centre): not accepted (not stored, not
-              credited, no dwell) but not evidence of another person either; the loop neither
-              counts it towards `changed` nor lets it break a run
-      beyond  over HARD of the centre: the stranger bound. Also a frame over CHAIN while the centre
-              is the only template (nothing filled yet): that is 3.1.3's rule, kept where a
-              stranger is cheapest to stop, because the first filled template is what a stranger's
-              later frames chain to
+      band    within HARD of the centre but over CHAIN of every template
+      beyond  over HARD of the centre: the stranger bound
 
-    Without a centre yet this frame is the centre (ok).
+    What a `band` frame MEANS is `settle_verdict`'s business. Without a centre yet this frame
+    is the centre (ok). The centre distance is taken first and a frame over HARD returns before
+    any template is touched, as in 3.1.3.
     """
     if centre is None:
         return "ok"
-    hard_distance, chain_distance = guard_distances(encoding, accepted, centre)
-    if hard_distance > hard:
+    if distance(encoding, centre) > hard:
         return "beyond"
-    if chain_distance is not None and chain_distance > chain:
-        return "band" if len(accepted) > 1 else "beyond"
+    nearest = min((distance(encoding, other) for other in accepted), default=None)
+    if nearest is not None and nearest > chain:
+        return "band"
     return "ok"
 
 
+def settle_verdict(verdict, mode, centre_held, filled):
+    """What the loop does with a verdict (3.1.5, "vgrace"): a `band` frame (over CHAIN, within HARD)
+    is a stranger frame -- `beyond`, 3.1.3's rule -- until THIS LAP's filled targets meet the floor
+    (`can_finish`: two in Simple, four in Advanced), and only past the floor is it neutral (not
+    accepted, not stored, no dwell, neither counted nor breaking the run). It is keyed on this lap's
+    fills, not on the templates held: lap 2 starts with the centre and all of lap 1's templates."""
+    if verdict == "band" and not can_finish(mode, centre_held, filled):
+        return "beyond"
+    return verdict
+
+
 def guard_ok(encoding, accepted, centre, chain=CHAIN, hard=HARD):
-    """Per frame, never an error: close enough to the chain and to the centre.
+    """Per frame: close enough to the chain and to the centre.
 
     `accepted` holds this appearance's templates so far (the centre among them);
     a chain, so a slow genuine drift from frontal is followed. Without a centre
@@ -3136,8 +3143,8 @@ def guard_ok(encoding, accepted, centre, chain=CHAIN, hard=HARD):
     frames at a turn are 0.1-0.3 from the frame before and up to 0.46 from the centre), and SR1
     showed it admits strangers 3.1.3 refused, because an accepted stranger frame becomes the
     chain (dev/SR1-notes.md). A frame over CHAIN of every template is still not ok here; what
-    the loop does with it is `guard_verdict`'s business (3.1.5: it is not accepted, and it no
-    longer ends the lap unless it is also over HARD).
+    the loop does with it is `settle_verdict`'s business (3.1.5: below the floor it is a stranger
+    frame, as before; past the floor it is neutral).
     """
     return guard_verdict(encoding, accepted, centre, chain, hard) == "ok"
 
@@ -3146,9 +3153,9 @@ def changed_step(run, failed):
     """The run of consecutive lit frames that failed the guard, and whether it ends the lap.
 
     Called only for frames that reached an encoding: a frame the gates turned away
-    neither extends the run nor breaks it. `failed` is the verdict "beyond" (3.1.5): over
-    HARD, or over CHAIN while nothing is filled. A frame in the band (over CHAIN, within
-    HARD, something filled) is not passed here at all, so it is neither.
+    neither extends the run nor breaks it. `failed` is the settled verdict "beyond" (3.1.5):
+    over HARD, or over CHAIN while this lap's fills are below the floor. A band frame past the
+    floor is not passed here at all, so it is neither.
     """
     run = run + 1 if failed else 0
     return run, run >= CHANGED_FRAMES
@@ -3324,6 +3331,12 @@ def pose_decouple(u, v, c=COUPLING_C):
     reads as 22 of pitch; the recordings: 0.66-0.77 at 30-90). The first version of this rule was
     quadratic (v - c u^2); on the same data the straight line leaves half the scatter. It only
     changes which wedge a pose is in, never an identity decision: the guard sees the picture, not u, v.
+
+    It does decide more than the wedge, because every consumer of (u, v) reads the decoupled pair:
+    the centre disc (r < R_MIN), `over` (r > R_MAX), steadiness, and the `r` stored with each
+    template (which the parent range-checks against R_MIN..R_MAX, rule F). A head turned to the
+    side is therefore nearer the centre disc than the camera sees it. 0.75 is ONE person's fit
+    (this user, this camera, two sessions); dev/SR1-notes.md.
     """
     return u, v - c * abs(u)
 
@@ -3607,6 +3620,7 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
     holding, head_bin = None, None
     mark, became = (0.0, 0.0), None
     run_failed, changed = 0, False
+    band_run = 0                           # consecutive band frames (past the floor), see settle_verdict
     sharp_seen, eyes = [], []
     seen = {"frames": 0, "black": 0, "strobe": 0, "dark": 0, "none": 0, "multi": 0}
     last_lit = None
@@ -3779,19 +3793,25 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
                                 trace["over"] += 1
                             else:
                                 encoding = [float(x) for x in encoder.compute_face_descriptor(small, shape, 1)]
-                                verdict = guard_verdict(encoding, accepted, centre_enc)
+                                verdict = settle_verdict(guard_verdict(encoding, accepted, centre_enc),
+                                                         mode, centre_held, filled)
                                 if debug and centre_enc is not None:
                                     gd, gc = guard_distances(encoding, accepted, centre_enc)
                                     guard_seen["hard"] = max(guard_seen["hard"], gd)
                                     guard_seen["chain"] = max(guard_seen["chain"], gc)
                                 if verdict == "band":
-                                    # The owner far off-centre reads like this too: not accepted (not stored,
-                                    # not credited, no dwell) and not a stranger either, so the run towards
-                                    # `changed` is left exactly as it was.
+                                    # Past the floor, the owner far off-centre reads like this: not accepted
+                                    # (not stored, not credited, no dwell), not a stranger frame by the counter.
+                                    # Five in a row, none of them ok, end a Simple lap gracefully with what is
+                                    # filled (`finish`); an Advanced lap is the person's to end (Done), so there
+                                    # the frames are only left out.
                                     word = "over"
                                     banded = True
                                     trace["band"] += 1
+                                    band_run += 1
                                     ended = False
+                                    if mode == "simple" and band_run >= CHANGED_FRAMES:
+                                        reason = "finish"
                                 else:
                                     run_failed, ended = changed_step(run_failed, verdict == "beyond")
                                 if ended:
@@ -3801,6 +3821,7 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
                                     word = "other"
                                     trace["other"] += 1
                                 elif verdict == "ok":
+                                    band_run = 0
                                     word = ACCEPTED_WORD
                                     if not centre_held:
                                         on = r < R_MIN
