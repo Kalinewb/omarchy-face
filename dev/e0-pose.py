@@ -559,20 +559,22 @@ def test_guard():
           verdict(enc(0.70), [None], centre) == "beyond")
     settle = sw.settle_verdict
     two, one = {3, 9}, {9}
-    check("settle_verdict, Simple: a band frame is beyond below the floor (0 or 1 filled) and band at two filled; ok and beyond are never changed",
-          (settle("band", "simple", True, set()), settle("band", "simple", True, one), settle("band", "simple", True, two))
-          == ("beyond", "beyond", "band")
-          and all(settle(v, "simple", True, f) == v for v in ("ok", "beyond") for f in (set(), one, two)))
-    check("...Advanced: the floor is four bins OF THIS LAP (the lap-1 templates in `accepted` do not count): band is beyond at 0-3 filled, band at 4",
-          (settle("band", "advanced", True, set()), settle("band", "advanced", True, {0, 3, 6}), settle("band", "advanced", True, {0, 3, 6, 9}))
-          == ("beyond", "beyond", "band"))
-    check("...and before the centre is held nothing is a band frame to settle (can_finish needs the centre)",
-          settle("band", "simple", False, two) == "beyond")
+    check("settle_verdict, Simple: below the floor (0 or 1 filled) band and beyond are both `beyond`; at two filled band stays `band` and beyond becomes `far`; ok is never changed",
+          (settle("band", "simple", True, set()), settle("band", "simple", True, one), settle("band", "simple", True, two),
+           settle("beyond", "simple", True, one), settle("beyond", "simple", True, two))
+          == ("beyond", "beyond", "band", "beyond", "far")
+          and all(settle("ok", "simple", True, f) == "ok" for f in (set(), one, two)))
+    check("...Advanced: the floor is four bins OF THIS LAP (the lap-1 templates in `accepted` do not count)",
+          (settle("band", "advanced", True, {0, 3, 6}), settle("beyond", "advanced", True, {0, 3, 6}),
+           settle("band", "advanced", True, {0, 3, 6, 9}), settle("beyond", "advanced", True, {0, 3, 6, 9}))
+          == ("beyond", "beyond", "band", "far"))
+    check("...and before the centre is held nothing is past the floor (can_finish needs the centre)",
+          settle("band", "simple", False, two) == "beyond" and settle("beyond", "simple", False, two) == "beyond")
     check("the loop settles every verdict, graceful-ends a lap (either mode) after five band frames in a row, and an ok frame resets that count",
           "settle_verdict(guard_verdict(encoding, accepted, centre_enc)," in SOURCE
-          and 'if band_run >= CHANGED_FRAMES:' in SOURCE and 'mode == "simple" and band_run' not in SOURCE and "band_run = 0" in SOURCE)
+          and 'if verdict in ("band", "far"):' in SOURCE and 'if band_run >= CHANGED_FRAMES:' in SOURCE and 'mode == "simple" and band_run' not in SOURCE and "band_run = 0" in SOURCE)
     check("the loop gives a banded frame no part in the `changed` run (it never calls changed_step for one)",
-          'if verdict == "band":' in SOURCE and 'changed_step(run_failed, verdict == "beyond")' in SOURCE
+          'if verdict in ("band", "far"):' in SOURCE and 'changed_step(run_failed, verdict == "beyond")' in SOURCE
           and "changed_step(run_failed, bad)" not in SOURCE)
     check("the pose history cap is derived from SMOOTH_FRAMES + STEADY_FRAMES, not a literal 8 (SR1 m4)",
           "[-(SMOOTH_FRAMES + STEADY_FRAMES):]" in SOURCE and "[-8:]" not in SOURCE)

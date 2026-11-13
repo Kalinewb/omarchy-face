@@ -331,3 +331,48 @@ Checked in e3 (already pinned): the skipped target's tick returns to the rest lo
 4. Remaining costs, each pinned in e1: `simple-limit-038`/`simple-late-limit-038`, a late straddler past the floor (reviewer: 12/108, = 3.1.4), owners whose first or second target is band are `changed`; (Advanced past four bins now ends like Simple, F1.)
 
 **3.1.5, F1 (Advanced) after SR1 on cf997e6:** the only root change is one condition: `if band_run >= CHANGED_FRAMES:` (was `if mode == "simple" and band_run >= CHANGED_FRAMES:`), plus its comment. e1: `adv-owner-band`, `adv-late-stranger-046`, `adv-late-stranger-050` (nothing of the stranger stored), `adv-late-straddle-044`.
+
+## Delta in 3.1.6 (2026-11-13): past the floor a frame over HARD no longer discards the lap; the pose behind the distances is traced. What SR1 re-reads (root code)
+
+**The live 3.1.5 lap** (helper 3.1.5, `debug=true`, Simple, the owner, 33 lines in the journal). The rule-D fix worked: left filled at 6.7 s, right at about 11 s (`yaw +25`, `pitch_dec` -4 to +2, `filled 2`, target up). Then the up target: at 14.3 s `hard_max = chain_max = 0.60` (over HARD), `other 4`, `guard_run 4` then `5`, `lap_end changed`, "That was not you", although the floor of two had been met 3 s earlier and 41-46 frames had been accepted: the whole lap (centre, left, right) was discarded. **What the trace does not say:** the trace prints the LAST frame's pose and the MAX over the second, and the last frames of that second were at `yaw -1 pitch -1` and `yaw 2 pitch 6`, i.e. near the centre; the second before (13.2 s) had no encoded frame at all. So I cannot tell how far up the head was when the distance was 0.60; "the owner cannot turn up without exceeding HARD" is an inference, not something the trace shows. (3.1.4's lap reached `pitch -18` at 0.35 and `pitch +13/+24` at 0.37; its failing frames, `pitch +17/+18`, were 0.49-0.50.) 3.1.6 prints the pose behind the distance so the next trace answers it.
+
+### 1. The change (root): past the floor, a frame over HARD is neutral too
+
+`settle_verdict(verdict, mode, centre_held, filled)` now returns `ok`, `beyond` (below the floor: every frame over CHAIN, band or beyond, 3.1.3's rule), `band` or `far` (past the floor: over CHAIN within HARD, or over HARD). The floor is `can_finish` on THIS lap's fills (two in Simple, four bins in Advanced). `band` and `far` take the same branch in the loop: word `over`, not accepted, not stored, no dwell, `changed_step` not called; five in a row since the last `ok` frame (`band_run`) end the lap with `reason = "finish"`, keeping what is filled, in both modes. `beyond` frames below the floor go through `changed_step` exactly as before. **Only `ok` frames store, as before; no band or far frame is ever stored or credited** (the loop's `elif verdict == "ok"` is the only accept block).
+
+**What this changes for strangers.**
+- Below the floor: nothing (3.1.3's rule; e1 `simple-late-beyond-1`: a stranger 0.60 away after only LEFT is `changed`, nothing written; the centre-only and lap-2 scenarios likewise).
+- Past the floor, a stranger whose frames are over HARD now ends the lap `finish` with the OWNER's floor templates saved, where 3.1.4 and 3.1.5 discarded the lap (`changed`). Nothing of his is stored unless some of his frames are `ok` (per-frame guard unchanged). e1: `simple-late-beyond-2`, `adv-late-stranger-060`.
+- A stream of mixed band and far frames now ends after five non-ok frames of either kind; in 3.1.5 the two kinds had separate counters (up to nine frames). That can only shorten the window in which a late stranger's occasional `ok` frames could accumulate; I did not measure it separately.
+- A side effect worth knowing: an owner is no longer told "That was not you" when somebody walks in after the floor; the lap ends saved with what the owner had.
+
+**Exposure, measured** (`dev/e1-late-grid.sh`: the owner's left and right fill, then somebody else at identity gap 0.40-0.60 from frame 135, wobble 0.04 and 0.10, 4 seeds, 48 laps per version, the same frames for each version; this is MY grid, smaller than the reviewer's, and the old versions were run with their own head coupling):
+
+| version | laps storing a stranger descriptor | how the 48 laps ended |
+|---|---|---|
+| 3.1.4 (3f7c841) | 2 / 48 | gap 0.40: 6 changed, 2 swept; gaps 0.44-0.60: 40/40 changed (lap discarded) |
+| 3.1.5 (a5c0b7a) | 2 / 48 | gap 0.40: 8 swept; 0.44: 7 swept, 1 changed; 0.48: 1 swept, 7 changed; 0.52-0.60: 24/24 changed |
+| 3.1.6 | 2 / 48 | all 48 end with `finish` and the owner's [3, 9] saved (the two laps below also fill up with the stranger) |
+
+The two stored laps are the same in all three versions: gap 0.40, seed 1 (wobble 0.04 and 0.10), a stranger whose frames are within CHAIN of the centre fills the up target: the 3.1.3 known limit. Gaps 0.44-0.60: no stranger descriptor stored by any version.
+
+### 2. Simple's up and down: what I chose and why
+
+What the data say. Owner distance to the centre template, real dlib, `guided` recording, pitch only (|yaw| 6 or less; negative is up): -8 to 8 n 312 max 0.32; -15 to -8 n 4 max 0.30; **-40 to -25 p50 0.51 (15% over HARD); -70 to -40 p50 0.53 (37% over HARD)**; no frames between -25 and -15 and none for pure down. The two live laps: up `pitch -12/-18` 0.25/0.35, down `+13/+24` 0.37, `+17/+18` 0.49-0.50, and 3.1.5's up second 0.60 at an unknown pitch (see above). So frames at 12-18 degrees of pitch are mostly within CHAIN, those past about 25 are not, and one second is unexplained.
+
+Options and trade-offs:
+- *Shrink the up/down radius* (a smaller pitch needed): the wedge needs r of 1.0 or more (15 degrees); 0.8 would be 12. It would cost a per-target radius in `in_target` (root), and the held-head jitter is 0.43 units per frame (`ir-held-head-stats.json`), so a 0.8 radius sits within two of those: a face looking straight ahead could fill the up target, which is what R_MIN exists to prevent. And the 3.1.4 lap reached 18 degrees at 0.35, so I have no evidence the radius is what blocked this owner.
+- *Up/down silent and optional, the lap ending "All set" as soon as left and right are in:* the lap saves 3 templates instead of 5 and no owner is ever asked for a vertical; the ring still shows two ticks that are never asked, or `SIMPLE_TARGETS` changes (below).
+- *Simple = centre, left, right; up and down Advanced only:* `SIMPLE_TARGETS` and the parent's `valid_sweep` check, `SIMPLE_MIN_HELD` (becomes all of them), `enrolring.js` and the client's ring (three ticks, not five), `RecordSession`, and about 25 e1 expectations, e2/e3 tick counts. It is the cleanest if the next trace shows the owner's up is really unreachable.
+
+**Chosen (the least invasive that keeps the guard unchanged):** keep the four targets; with change 1 a failing up or down is harmless (five non-ok frames end the lap saved with left and right, or patience skips the target), and the vertical prompts now say "Tilt your head up a little" / "down a little" in the live view (the idle demo keeps its words), because the model is very sensitive to tilt. If the next trace's `hm_pitch` shows the owner's 0.55-0.60 frames at 15 degrees or less, the third option is the right one and I would do it then.
+
+### 3. Trace
+
+`far` counts past-the-floor frames over HARD (`band` those within it); `hm_yaw hm_pitch hm_pitch_dec` are the pose (degrees, camera view, down-positive) of the frame that gave `hard_max` this second, `yaw_lo yaw_hi pitch_lo pitch_hi` the raw range of the frames that reached the guard; `n/a` when none did. Numbers only.
+
+**Tests.** e0 (222): `settle_verdict` below the floor (both kinds `beyond`), past it (`band`, `far`), Advanced per this lap's bins, before the centre. e1: `simple-owner-up-beyond` (the 3.1.5 live lap: left and right, up 0.60: `finish`, [3,9] saved, only owner descriptors), `simple-late-beyond-2`, `simple-late-beyond-1` (below the floor: `changed`), `adv-late-stranger-060`; the trace line's new fields and that the `hm_*` pose lies inside the `*_lo/_hi` range; `grid-late2:GAP:WOBBLE:SEED` and `dev/e1-late-grid.sh`.
+
+**What SR1 re-reads (all in `system/omarchy-face-admin`; the other 11 system files change only the version header and the pins).** (1) `settle_verdict`: past the floor both over-CHAIN verdicts are neutral; below it both are `beyond`. (2) The loop branch `if verdict in ("band", "far")`: no store, no credit, `changed_step` not called, `finish` after five since the last ok; confirm `ok` is the only path that reaches the accept block and that `finish` here needs `can_finish` (it does: the verdict is only `band`/`far` when `can_finish` holds). (3) `trace_line`: the new fields and `guard_seen["pose"/"lo"/"hi"]` (debug only; numbers). (4) The remaining costs: a stranger within CHAIN of the centre (the known limit) is stored in all versions; a late stranger now ends a lap saved where it used to be discarded.
+
+**Not verified:** helper 3.1.6 on the laptop; how far up the owner's head was at the 0.60 frames; whether 0.75 holds for another seat. The grid is mine (48 laps per version), not the reviewer's.

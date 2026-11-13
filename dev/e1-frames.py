@@ -89,6 +89,12 @@ def _adv_base():
     return build([dict(n=40)] + visit(CLOCK[:4]) + visit(CLOCK[4:], n=60))
 
 
+def _late2_base():
+    """The owner's centre, left and right (0.30 each, own axes), then up and down held for a long time."""
+    return build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2), dict(at=3, n=40, drift=0.30, travel=14, axis=3)]
+                 + visit((0, 6), n=240))
+
+
 def _lap():
     return build([dict(n=40)] + visit(SIMPLE))
 
@@ -214,6 +220,14 @@ SCENARIOS = {
     "adv-late-stranger-046": lambda: _identity(_adv_base(), 190, 0.46, 0.04),
     "adv-late-stranger-050": lambda: _identity(_adv_base(), 190, 0.50, 0.04),
     "adv-late-straddle-044": lambda: _identity(_adv_base(), 190, 0.44, 0.08),
+    # 3.1.6: past the floor a frame OVER HARD is neutral too (five in a row end the lap with `finish`, what is filled is kept):
+    # the owner whose up is 0.60 from the centre, a stranger 0.60 away after left and right, and after the owner's four Advanced
+    # bins; below the floor (after only left) it still ends `changed`
+    "simple-owner-up-beyond": lambda: build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2), dict(at=3, n=40, drift=0.30, travel=14, axis=3),
+                                             dict(at=0, n=240, drift=0.60, travel=14, axis=4)]),
+    "simple-late-beyond-2": lambda: _identity(_late2_base(), 135, 0.60, 0.02),
+    "simple-late-beyond-1": lambda: _identity(build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2)] + visit((3, 0, 6))), 100, 0.60, 0.02),
+    "adv-late-stranger-060": lambda: _identity(_adv_base(), 190, 0.60, 0.02),
     "lap2-stranger-044": lambda: _identity(build([dict(n=40, scale=0.9)] + visit(CLOCK, scale=0.9)), 45, 0.44, 0.04),
     "lap2-straddle": lambda: _identity(build([dict(n=40, scale=0.9)] + visit(CLOCK, scale=0.9)), 45, 0.44, 0.08),
     "simple-owner-band-updown": lambda: build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2), dict(at=3, n=40, drift=0.30, travel=14, axis=3),
@@ -265,7 +279,17 @@ SCENARIOS = {
 }
 
 
+def grid(name):
+    """grid-late2:GAP:WOBBLE:SEED -- the owner's left and right, then somebody else at that identity gap (+- wobble), seeded.
+    The tool for measuring how often a late stranger is stored (dev/README.md)."""
+    _, gap, wobble, seed = name.split(":")
+    return _identity(_late2_base(), 135, float(gap), float(wobble), seed=int(seed))
+
+
 def main(argv):
+    if len(argv) == 1 and argv[0].startswith("grid-late2:"):
+        json.dump(grid(argv[0][len("grid-"):]), sys.stdout)
+        return 0
     if len(argv) != 1 or argv[0] not in SCENARIOS:
         sys.stderr.write(__doc__ + "\nscenarios: " + ", ".join(sorted(SCENARIOS)) + "\n")
         return 2

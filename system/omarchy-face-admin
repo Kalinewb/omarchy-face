@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 3.1.5
+# omarchy-face-version: 3.1.6
 #
 # Every privileged thing Face does, behind one polkit action
 # (plan-engine.md §8.2, plan-merged.md §2.3).
@@ -3122,14 +3122,18 @@ def guard_verdict(encoding, accepted, centre, chain=CHAIN, hard=HARD):
 
 
 def settle_verdict(verdict, mode, centre_held, filled):
-    """What the loop does with a verdict (3.1.5, "vgrace"): a `band` frame (over CHAIN, within HARD)
-    is a stranger frame -- `beyond`, 3.1.3's rule -- until THIS LAP's filled targets meet the floor
-    (`can_finish`: two in Simple, four in Advanced), and only past the floor is it neutral (not
-    accepted, not stored, no dwell, neither counted nor breaking the run). It is keyed on this lap's
-    fills, not on the templates held: lap 2 starts with the centre and all of lap 1's templates."""
-    if verdict == "band" and not can_finish(mode, centre_held, filled):
+    """What the loop does with a verdict (3.1.5 "vgrace", 3.1.6): below the floor (`can_finish`: two
+    filled in Simple, four bins in Advanced, THIS lap's fills, not the templates held: lap 2 starts
+    with the centre and all of lap 1's) every frame over CHAIN is a stranger frame, `beyond`,
+    3.1.3's rule. Past the floor a frame over CHAIN is neutral whichever bound it is over: `band`
+    (within HARD) or `far` (over HARD). Neutral means not accepted, not stored, no dwell, and it
+    leaves the `changed` run alone; five of them since the last ok frame end the lap with `finish`,
+    keeping what is filled (3.1.6: a far frame no longer discards a lap whose floor is met)."""
+    if verdict == "ok":
+        return verdict
+    if not can_finish(mode, centre_held, filled):
         return "beyond"
-    return verdict
+    return "far" if verdict == "beyond" else "band"
 
 
 def guard_ok(encoding, accepted, centre, chain=CHAIN, hard=HARD):
@@ -3626,9 +3630,12 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
     last_lit = None
     lit_dark = 0.0
     debug_at, debug_lines = None, 0
-    guard_seen = {"hard": 0.0, "chain": 0.0}  # the largest guard distances since the last trace line
+    guard_seen = {"hard": 0.0, "chain": 0.0,  # the largest guard distances since the last trace line,
+                  "pose": None,               # the pose (yaw, pitch, pitch_dec) of the frame that gave `hard`,
+                  "lo": None, "hi": None}     # and the raw yaw/pitch range of the frames that reached the guard
+    cur_pose = None                           # this frame's (yaw, pitch, pitch_dec), debug only
     trace = {"accepted": 0, "acc_s": 0, "closer": 0, "farther": 0, "edge": 0, "exposure": 0, "blurry": 0,
-             "roll": 0, "unsteady": 0, "other": 0, "over": 0, "band": 0}
+             "roll": 0, "unsteady": 0, "other": 0, "over": 0, "band": 0, "far": 0}
     # the last lit frame's pose for the trace: degrees RELATIVE to the neutral (u and v are about 15
     # degrees to the unit), the eye line's roll in degrees, and whether it was inside the centre
     seen_pose = {"yaw": "n/a", "pitch": "n/a", "pitch_dec": "n/a", "roll": "n/a", "centre": "-"}
@@ -3655,20 +3662,26 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
         # CHAIN and HARD, which the client was told as `over`
         shown = "skip" if strobe else ("band" if banded else word if word in ("other", "over") else ("ok" if passed else (word or ACCEPTED_WORD)))
         aim = current_target(mode, targets, filled, skipped, centre_held, head_bin if uv else None)
+        # the pose behind the distances (3.1.6): that of the frame that gave hard_max, and the raw yaw and
+        # pitch range of the frames that reached the guard in this second (degrees, as the camera sees them)
+        hm = guard_seen["pose"] or ("n/a", "n/a", "n/a")
+        rng = guard_seen["lo"] and guard_seen["hi"] and (guard_seen["lo"][0], guard_seen["hi"][0], guard_seen["lo"][1], guard_seen["hi"][1]) or ("n/a",) * 4
         try:
             sys.stderr.write(
                 "debug t=%.1f frames=%d strobe_off=%d black=%d lit=%d dark=%d none=%d multi=%d "
                 "accepted=%d acc_s=%d closer=%d farther=%d edge=%d exposure=%d blurry=%d roll=%d unsteady=%d "
-                "other=%d over=%d band=%d yaw=%s pitch=%s pitch_dec=%s roll=%s centre_gate=%s centre_held=%d filled=%d "
-                "target=%s hard_max=%.2f chain_max=%.2f guard_run=%d lap_end=%s last_word=%s "
+                "other=%d over=%d band=%d far=%d yaw=%s pitch=%s pitch_dec=%s roll=%s centre_gate=%s centre_held=%d filled=%d "
+                "target=%s hard_max=%.2f chain_max=%.2f hm_yaw=%s hm_pitch=%s hm_pitch_dec=%s "
+                "yaw_lo=%s yaw_hi=%s pitch_lo=%s pitch_hi=%s guard_run=%d lap_end=%s last_word=%s "
                 "lit_darkness_mean=%.1f refine=%s\n" % (
                     now - started, seen["frames"], seen["strobe"], seen["black"], lit_n,
                     seen["dark"], seen["none"], seen["multi"], trace["accepted"], trace["acc_s"],
                     trace["closer"], trace["farther"], trace["edge"], trace["exposure"], trace["blurry"],
-                    trace["roll"], trace["unsteady"], trace["other"], trace["over"], trace["band"],
+                    trace["roll"], trace["unsteady"], trace["other"], trace["over"], trace["band"], trace["far"],
                     seen_pose["yaw"], seen_pose["pitch"], seen_pose["pitch_dec"], seen_pose["roll"], seen_pose["centre"],
                     1 if centre_held else 0, len(filled),
-                    "none" if aim is None else aim, guard_seen["hard"], guard_seen["chain"], run_failed,
+                    "none" if aim is None else aim, guard_seen["hard"], guard_seen["chain"],
+                    hm[0], hm[1], hm[2], rng[0], rng[1], rng[2], rng[3], run_failed,
                     lap_end, shown, (lit_dark / lit_n) if lit_n else 0.0, refine_for(seen)))
             sys.stderr.flush()
         except (OSError, ValueError):
@@ -3676,6 +3689,7 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
         trace["acc_s"] = 0
         seen_pose["centre"] = "-"
         guard_seen["hard"] = guard_seen["chain"] = 0.0
+        guard_seen["pose"] = guard_seen["lo"] = guard_seen["hi"] = None
 
     while True:
         frame, gray_in = camera.read_frame()
@@ -3685,6 +3699,7 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
         seen["frames"] += 1
         word, uv, r = None, None, None
         passed = banded = False
+        cur_pose = None
 
         gray = clahe.apply(gray_in)
         hist = cv2.calcHist([gray], [0], None, [8], [0, 256])
@@ -3765,6 +3780,7 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
                             seen_pose["yaw"] = str(int(round(15 * ru)))
                             seen_pose["pitch"] = str(int(round(15 * rv)))             # as the camera sees it
                             seen_pose["pitch_dec"] = str(int(round(15 * tv)))         # with rule D taken out
+                            cur_pose = (int(round(15 * ru)), int(round(15 * rv)), int(round(15 * tv)))
                     word = frame_word(1, pose["eye"], box, (native_w, native_h), darkness, saturated,
                                       sharp, pose["roll"], steady)
                     if debug:
@@ -3797,16 +3813,22 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
                                                          mode, centre_held, filled)
                                 if debug and centre_enc is not None:
                                     gd, gc = guard_distances(encoding, accepted, centre_enc)
+                                    if gd >= guard_seen["hard"] and cur_pose is not None:
+                                        guard_seen["pose"] = cur_pose
                                     guard_seen["hard"] = max(guard_seen["hard"], gd)
                                     guard_seen["chain"] = max(guard_seen["chain"], gc)
-                                if verdict == "band":
+                                    if cur_pose is not None:
+                                        lo, hi = guard_seen["lo"] or cur_pose[:2], guard_seen["hi"] or cur_pose[:2]
+                                        guard_seen["lo"] = (min(lo[0], cur_pose[0]), min(lo[1], cur_pose[1]))
+                                        guard_seen["hi"] = (max(hi[0], cur_pose[0]), max(hi[1], cur_pose[1]))
+                                if verdict in ("band", "far"):
                                     # Past the floor, the owner far off-centre reads like this: not accepted
-                                    # (not stored, not credited, no dwell), not a stranger frame by the counter.
-                                    # Five in a row, none of them ok, end the lap gracefully with what is
-                                    # filled (`finish`), in either mode.
+                                    # (not stored, not credited, no dwell), not a stranger frame by the counter,
+                                    # whichever of CHAIN and HARD it is over. Five in a row, none of them ok,
+                                    # end the lap gracefully with what is filled (`finish`), in either mode.
                                     word = "over"
                                     banded = True
-                                    trace["band"] += 1
+                                    trace["band" if verdict == "band" else "far"] += 1
                                     band_run += 1
                                     ended = False
                                     if band_run >= CHANGED_FRAMES:

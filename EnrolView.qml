@@ -106,8 +106,8 @@ Item {
   function prompt(bin) {
     if (bin === 9) return "Turn your head to the left"
     if (bin === 3) return "Turn your head to the right"
-    if (bin === 0) return "Tilt your head up"
-    if (bin === 6) return "Tilt your head down"
+    if (bin === 0) return "Tilt your head up a little"
+    if (bin === 6) return "Tilt your head down a little"
     return "Move your head slowly to complete the circle."
   }
 

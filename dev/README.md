@@ -1105,9 +1105,11 @@ Counts and words only, never a frame. From 3.1.3 it also has `accepted` (frames 
 one); those two words are in the trace only. 3.1.4 added `hard_max` / `chain_max` (the largest distance to the
 centre and to the nearest accepted template in the last second), `guard_run` (the run of stranger frames; 5 ends
 the lap), `lap_end` and a final line when the lap ends. 3.1.5 adds `band` (frames between CHAIN and HARD, told to
-the client as `over`; `last_word` can be `band`) and `pitch_dec`, the pitch with rule D taken out, next to `pitch`
+the client as `over`; `last_word` can be `band`) and `pitch_dec`; 3.1.6 adds `far` (over HARD, past the floor, also told as `over`) and the pose behind the distances: `hm_yaw hm_pitch hm_pitch_dec` (the frame that gave `hard_max`) and `yaw_lo yaw_hi pitch_lo pitch_hi` (raw range of the frames that reached the guard in the second), `n/a` when none did, the pitch with rule D taken out, next to `pitch`
 as the camera sees it. Signs: `yaw` is positive to the right of the (mirrored) preview, `pitch` and `pitch_dec` are positive DOWN (negative is up). Reading it: `hard_max` over 0.55 is a stranger frame; `chain_max` over 0.40 with `hard_max`
 under 0.55 is a band frame: past the floor (two filled in Simple, four in Advanced) it is left out and not counted towards `changed` (`band` counts it); below the floor it is a stranger frame (`other`, `guard_run`). `dev/SR1-notes.md` has the deltas for SR1.
+
+**Late-stranger grid.** `dev/e1-late-grid.sh` (sourced through e1's `E1_SHELL`, see its header) runs the owner's left and right and then somebody else at a chosen identity gap and wobble, seeded, through any version of the helper, and prints one `GRID` line per lap (how it ended, what filled, whether a stranger descriptor was stored). The scenario is `dev/e1-frames.py grid-late2:GAP:WOBBLE:SEED`.
 
 ### How to widen Sudo later
 
