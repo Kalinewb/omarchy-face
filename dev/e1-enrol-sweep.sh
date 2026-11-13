@@ -586,6 +586,16 @@ out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE
 same "the same stranger taking over after only LEFT (below the floor of two) is still changed, nothing stored (3.1.3's rule)" '"changed"' "$(q "$out" 'last("capture_failed")["code"]')"
 check "...and nothing was written" bash -c "[[ ! -e $STORE/people/emil.json ]]"
 reset_store
+scenario adv-scale-drift
+out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 150" "send $DONE" "await saved 30")
+same "THE SCALE BAND (3.1.7): the owner leans back on the first bin (eyes 0.67 of the centre's, the descriptor 0.60 from the centre: over HARD, five frames of which ended the lap changed in 3.1.6), is asked to come closer, leans forward again and fills four bins: no changed, swept [0,3,6,9], saved" '[[0,3,6,9],true,false,true]' "$(q "$out" '[first("swept")["filled"], any(e.get("event") == "saved" for e in evs), any(c.get("code") == "changed" for c in evs), any(t["state"] == "closer" for t in tracks)]')"
+same "...and only the owner's descriptors are stored" 'true' "$(stored_all_owner 5)"
+reset_store
+scenario simple-stranger-small
+out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
+same "somebody else 0.60 from the owner who sits at another size (0.67 of the centre's eye distance) after the centre gains nothing: none of his frames is encoded, so nothing is stored and nothing is counted: too_few at the ceiling, not changed, nothing written" '["too_few",true]' "$(q "$out" '[last("capture_failed")["code"], any(t["state"] == "closer" for t in tracks)]')"
+check "...nothing was written" bash -c "[[ ! -e $STORE/people/emil.json ]]"
+reset_store
 scenario simple-late-stranger-2
 out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 150" "send $DONE" "await saved 30")
 same "a stranger straddling CHAIN who takes over AFTER left and right filled: the band is neutral and five band frames end the lap with the owner's two: swept [3,9], saved, only the owner's descriptors (in this run; a stranger frame within 0.40 of a template can still fill a target, see the next check)" '[[3,9],true]' "$(q "$out" '[first("swept")["filled"], any(e.get("event") == "saved" for e in evs)]')"
@@ -635,7 +645,7 @@ scenario simple-strobe
 out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
 lines=$(grep -c '^debug ' /run/omarchy-face-stub/logger.out)
 check "with debug=true it logs, at most 120 lines for the lap, about one per second of frame time" bash -c "[[ $lines -ge 5 && $lines -le 120 ]]"
-check "...each line has the counts, the per-gate failures, the target and what is held, the last word, the mean darkness of the lit frames and the refine candidate" bash -c "grep '^debug ' /run/omarchy-face-stub/logger.out | tail -1 | grep -qE '^debug t=[0-9.]+ frames=[0-9]+ strobe_off=[0-9]+ black=0 lit=[0-9]+ dark=0 none=[0-9]+ multi=[0-9]+ accepted=[0-9]+ acc_s=[0-9]+ closer=[0-9]+ farther=[0-9]+ edge=[0-9]+ exposure=[0-9]+ blurry=[0-9]+ roll=[0-9]+ unsteady=[0-9]+ other=[0-9]+ over=[0-9]+ band=[0-9]+ far=[0-9]+ yaw=-?[0-9a-z/]+ pitch=-?[0-9a-z/]+ pitch_dec=-?[0-9a-z/]+ roll=-?[0-9a-z/]+ centre_gate=(in|out|-) centre_held=[01] filled=[0-9]+ target=[a-z0-9]+ hard_max=[0-9.]+ chain_max=[0-9.]+ hm_yaw=-?[0-9a-z/]+ hm_pitch=-?[0-9a-z/]+ hm_pitch_dec=-?[0-9a-z/]+ yaw_lo=-?[0-9a-z/]+ yaw_hi=-?[0-9a-z/]+ pitch_lo=-?[0-9a-z/]+ pitch_hi=-?[0-9a-z/]+ guard_run=[0-9]+ lap_end=[a-z_]+ last_word=(skip|ok|hold|dark|blurry|closer|farther|edge|multiple|other|searching|over|band) lit_darkness_mean=[0-9.]+ refine=(None|[a-z_]+)\$'"
+check "...each line has the counts, the per-gate failures, the target and what is held, the last word, the mean darkness of the lit frames and the refine candidate" bash -c "grep '^debug ' /run/omarchy-face-stub/logger.out | tail -1 | grep -qE '^debug t=[0-9.]+ frames=[0-9]+ strobe_off=[0-9]+ black=0 lit=[0-9]+ dark=0 none=[0-9]+ multi=[0-9]+ accepted=[0-9]+ acc_s=[0-9]+ closer=[0-9]+ farther=[0-9]+ edge=[0-9]+ exposure=[0-9]+ blurry=[0-9]+ roll=[0-9]+ unsteady=[0-9]+ other=[0-9]+ over=[0-9]+ band=[0-9]+ far=[0-9]+ yaw=-?[0-9a-z/]+ pitch=-?[0-9a-z/]+ pitch_dec=-?[0-9a-z/]+ roll=-?[0-9a-z/]+ centre_gate=(in|out|-) centre_held=[01] filled=[0-9]+ target=[a-z0-9]+ hard_max=[0-9.]+ chain_max=[0-9.]+ hm_yaw=-?[0-9a-z/]+ hm_pitch=-?[0-9a-z/]+ hm_pitch_dec=-?[0-9a-z/]+ yaw_lo=-?[0-9a-z/]+ yaw_hi=-?[0-9a-z/]+ pitch_lo=-?[0-9a-z/]+ pitch_hi=-?[0-9a-z/]+ hard_min=[0-9.a-z/]+ eye=[0-9a-z/]+ centre_eye=[0-9a-z/]+ hm_eye=[0-9a-z/]+ eye_lo=[0-9a-z/]+ eye_hi=[0-9a-z/]+ step_hi=[0-9.]+ scale=[0-9]+ guard_run=[0-9]+ lap_end=[a-z_]+ last_word=(skip|ok|hold|dark|blurry|closer|farther|edge|multiple|other|searching|over|band) lit_darkness_mean=[0-9.]+ refine=(None|[a-z_]+)\$'"
 same "...the lap's accepted frames are counted (the engine filled four targets from them), and the last word of a strobe-off frame is skip or of an accepted one ok (words that are never on the wire)" 'true' "$(python3 -c "
 import re
 rows = [dict(re.findall(r'(\w+)=(\S+)', l)) for l in open('/run/omarchy-face-stub/logger.out') if l.startswith('debug ')]
@@ -649,7 +659,7 @@ f = dict(re.findall(r'(\w+)=(\S+)', last))
 off, lit = int(f['strobe_off']), int(f['lit'])
 print(str(off > 0 and 0.7 <= off / max(1, lit) <= 1.3).lower())
 ")"
-check "...and no frame data: every line is words and numbers, under 600 characters" bash -c "! grep '^debug ' /run/omarchy-face-stub/logger.out | grep -qvE '^debug [A-Za-z_=0-9./ -]+\$' && ! grep '^debug ' /run/omarchy-face-stub/logger.out | awk 'length(\$0) > 600 { bad = 1 } END { exit !bad }'"
+check "...and no frame data: every line is words and numbers, under 800 characters" bash -c "! grep '^debug ' /run/omarchy-face-stub/logger.out | grep -qvE '^debug [A-Za-z_=0-9./ -]+\$' && ! grep '^debug ' /run/omarchy-face-stub/logger.out | awk 'length(\$0) > 800 { bad = 1 } END { exit !bad }'"
 same "...the pose is printed twice: pitch as the camera sees it and pitch_dec with rule D taken out; at the right target the fake head reads about 18 and 0" 'true' "$(python3 -c "
 import re
 rows = [dict(re.findall(r'(\w+)=(\S+)', l)) for l in open('/run/omarchy-face-stub/logger.out') if l.startswith('debug ')]

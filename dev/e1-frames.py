@@ -228,6 +228,13 @@ SCENARIOS = {
     "simple-late-beyond-2": lambda: _identity(_late2_base(), 135, 0.60, 0.02),
     "simple-late-beyond-1": lambda: _identity(build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2)] + visit((3, 0, 6))), 100, 0.60, 0.02),
     "adv-late-stranger-060": lambda: _identity(_adv_base(), 190, 0.60, 0.02),
+    # 3.1.7: the scale band. The owner leans back on the first bin (smaller face, 0.67 of the centre's eye distance) and the
+    # descriptor goes 0.60 from the centre (over HARD): without the band that is five stranger frames and the lap is `changed`;
+    # with it those frames are asked to come `closer`, never encoded, and the owner who leans forward again fills four bins.
+    "adv-scale-drift": lambda: build([dict(n=40), dict(at=0, n=60, scale=0.8, drift=0.60, travel=6, axis=6)] + visit(CLOCK[:4], travel=10)),
+    # ...and somebody else who takes over at ANOTHER size (0.6 from the centre, 0.67 of its eye distance) and stays there gains
+    # nothing: none of his frames is encoded, so none can be stored, and nothing ends the lap but the ceiling
+    "simple-stranger-small": lambda: _identity(build([dict(n=40, scale=1.2)] + visit(SIMPLE, scale=0.8)), 45, 0.60, 0.02),
     "lap2-stranger-044": lambda: _identity(build([dict(n=40, scale=0.9)] + visit(CLOCK, scale=0.9)), 45, 0.44, 0.04),
     "lap2-straddle": lambda: _identity(build([dict(n=40, scale=0.9)] + visit(CLOCK, scale=0.9)), 45, 0.44, 0.08),
     "simple-owner-band-updown": lambda: build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2), dict(at=3, n=40, drift=0.30, travel=14, axis=3),
