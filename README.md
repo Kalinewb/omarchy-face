@@ -334,12 +334,14 @@ by about three quarters of the turn, so a right turn landed outside the right ta
 position the scan reads is now corrected for that (it changes only which target a pose counts for, not who the
 face is). Second, once two targets have filled in a Simple scan (four bins in an Advanced lap), a frame that is over the
 0.40 chain limit but still well inside the 0.55 centre limit (you, far from straight on) is no longer counted
-towards "That was not you": it is left out and the scan says "A little less", and five of them in a row end a
-Simple scan with the two you have. Before that point, and for any frame beyond 0.55 from your first one, the old
-rule stands, so a first or second target that is far from straight on can still end the scan with "That was not
-you". As before, a person whose face is within 0.40 of yours is not stopped by the scan (it compares pictures
-against your first one, not people), so enrol only yourself. The ring and the caption already show a target that
-is skipped (the tick stays empty and the line says "We will skip that one").
+towards "That was not you": it is left out and the scan says "A little less". Five of them since the last good
+frame end the scan with the two or more targets you have (in both modes: an Advanced lap now stops at the first
+sustained far-off stretch once four bins are in, instead of waiting for you to press Done). Before that point, and for
+any frame beyond 0.55 from your first one, the old rule stands, so a first or second target that is far from
+straight on can still end the scan with "That was not you". As before, a person whose face is within 0.40 of yours
+is not stopped by the scan (it compares pictures against your first one, not people), and the graceful end can
+keep a stranger's template where 3.1.4 discarded the whole scan, so enrol only yourself. The ring and the caption
+already show a target that is skipped (the tick stays empty and the line says "We will skip that one").
 
 ### Updating from 3.1.3
 

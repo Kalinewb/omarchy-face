@@ -84,6 +84,11 @@ def build(segments):
     return frames
 
 
+def _adv_base():
+    """The owner's centre and four Advanced bins (frames 0 to about 185), then the rest of the ring held for a long time."""
+    return build([dict(n=40)] + visit(CLOCK[:4]) + visit(CLOCK[4:], n=60))
+
+
 def _lap():
     return build([dict(n=40)] + visit(SIMPLE))
 
@@ -202,6 +207,13 @@ SCENARIOS = {
     # so only THIS LAP's fills count towards the floor
     "simple-late-limit-038": lambda: _identity(build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2), dict(at=3, n=40, drift=0.30, travel=14, axis=3)]
                                                      + visit((0, 6), n=240)), 135, 0.38, 0.02),
+    # ADVANCED, the floor met (four bins of this lap): the owner far off-centre on the fifth bin (0.46 on its own axis), and
+    # somebody else who takes over after the owner's fourth bin (gaps 0.46 and 0.50 in the band, 0.44 +-0.08 straddling).
+    # Five band frames in a row end the lap with `finish`, keeping the owner's four bins.
+    "adv-owner-band": lambda: build([dict(n=40)] + visit(CLOCK[:4], drift=0.30) + [dict(at=CLOCK[4], n=240, drift=0.46, travel=14, axis=6)]),
+    "adv-late-stranger-046": lambda: _identity(_adv_base(), 190, 0.46, 0.04),
+    "adv-late-stranger-050": lambda: _identity(_adv_base(), 190, 0.50, 0.04),
+    "adv-late-straddle-044": lambda: _identity(_adv_base(), 190, 0.44, 0.08),
     "lap2-stranger-044": lambda: _identity(build([dict(n=40, scale=0.9)] + visit(CLOCK, scale=0.9)), 45, 0.44, 0.04),
     "lap2-straddle": lambda: _identity(build([dict(n=40, scale=0.9)] + visit(CLOCK, scale=0.9)), 45, 0.44, 0.08),
     "simple-owner-band-updown": lambda: build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2), dict(at=3, n=40, drift=0.30, travel=14, axis=3),

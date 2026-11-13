@@ -568,9 +568,9 @@ def test_guard():
           == ("beyond", "beyond", "band"))
     check("...and before the centre is held nothing is a band frame to settle (can_finish needs the centre)",
           settle("band", "simple", False, two) == "beyond")
-    check("the loop settles every verdict, graceful-ends only a Simple lap after five band frames in a row, and an ok frame resets that count",
+    check("the loop settles every verdict, graceful-ends a lap (either mode) after five band frames in a row, and an ok frame resets that count",
           "settle_verdict(guard_verdict(encoding, accepted, centre_enc)," in SOURCE
-          and 'if mode == "simple" and band_run >= CHANGED_FRAMES:' in SOURCE and "band_run = 0" in SOURCE)
+          and 'if band_run >= CHANGED_FRAMES:' in SOURCE and 'mode == "simple" and band_run' not in SOURCE and "band_run = 0" in SOURCE)
     check("the loop gives a banded frame no part in the `changed` run (it never calls changed_step for one)",
           'if verdict == "band":' in SOURCE and 'changed_step(run_failed, verdict == "beyond")' in SOURCE
           and "changed_step(run_failed, bad)" not in SOURCE)

@@ -319,6 +319,17 @@ CREATE='{"cmd":"create","label":"Emil"}'
 FINISH='{"cmd":"finish"}'
 DONE='{"cmd":"done"}'
 
+stored_all_owner() { # stored_all_owner [min]: every descriptor in the store is the owner's (axis 0 is the fake stranger's gap)
+  python3 -c "
+import json, glob
+bad = 0; n = 0
+for path in glob.glob('$STORE/people/emil.json'):
+    for appearance in json.load(open(path)).get('appearances', []):
+        for e in [appearance['encoding']] + [x['encoding'] for x in appearance.get('extra', [])]:
+            n += 1; bad += abs(e[0]) > 0.1
+print(str(n >= ${1:-5} and bad == 0).lower())
+"
+}
 reset_store() { rm -rf "$STORE"/people "$STORE"/people.json "$MODELS"/omarchy-face.*.dat; }
 
 # E1_SHELL='command' runs one command in the sandbox with the helpers above, for debugging.
@@ -405,6 +416,13 @@ for sc in lap2-stranger-044 lap2-straddle; do
   out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 120" "send $ADV2" "awaitwhere {\"event\":\"capture_failed\",\"code\":\"changed\"} 120" "send $DONE" "eof")
   same "$sc: lap 1 is the owner's; in lap 2 somebody 0.44 from the centre (with wobble 0.04 or 0.08) takes over after the centre: lap 1's templates are in \`accepted\` from the first frame, but only THIS lap's fills count towards the floor (SR1 S2), so it is changed, as in 3.1.4" '["changed","bad_sweep"]' "$(q "$out" '[c["code"] for c in evs if c.get("event") == "capture_failed"]')"
   check "...$sc: nothing is stored" bash -c "[[ ! -e $STORE/people/emil.json ]]"
+done
+for sc in adv-owner-band adv-late-stranger-046 adv-late-stranger-050 adv-late-straddle-044; do
+  reset_store
+  scenario $sc
+  out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 120" "send $DONE" "await saved 30")
+  same "$sc: Advanced, the floor met (the owner's four bins): the owner's fifth bin 0.46 off-centre, or somebody else (band gaps 0.46 and 0.50, straddling 0.44 +-0.08) taking over, ends the lap with five band frames (finish): the owner's four bins are swept and saved, no changed (F1)" '[[0,3,6,9],true,false]' "$(q "$out" '[first("swept")["filled"], any(e.get("event") == "saved" for e in evs), any(c.get("code") == "changed" for c in evs)]')"
+  same "...$sc: and nothing of the stranger's is stored (every stored descriptor is the owner's)" 'true' "$(stored_all_owner 5)"
 done
 reset_store
 scenario advanced hold-first
@@ -515,17 +533,6 @@ out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE"
 same "a room too dark for the emitter (every frame unlit, no strobe) still ends: black_frames, and says dark after the 2 s of silence" '["black_frames",true]' "$(q "$out" '[last("capture_failed")["code"], any(t["state"] == "dark" for t in tracks)]')"
 
 step "the same-person guard (3.1.5): ok / band / beyond. Strangers WITH per-frame spread, and the owner's far turn, pinned"
-stored_all_owner() { # stored_all_owner [min]: every descriptor in the store is the owner's (axis 0 is the fake stranger's gap)
-  python3 -c "
-import json, glob
-bad = 0; n = 0
-for path in glob.glob('$STORE/people/emil.json'):
-    for appearance in json.load(open(path)).get('appearances', []):
-        for e in [appearance['encoding']] + [x['encoding'] for x in appearance.get('extra', [])]:
-            n += 1; bad += abs(e[0]) > 0.1
-print(str(n >= ${1:-5} and bad == 0).lower())
-"
-}
 # Below the floor (fewer than two targets filled in Simple, four in Advanced, counted for THIS LAP) a frame over CHAIN
 # counts towards `changed` exactly as in 3.1.3/3.1.4: a stranger in the band, straddling CHAIN, past HARD, or taking
 # over after the first fill (midswap) is ended after five in a row, and nothing is stored.

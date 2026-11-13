@@ -3802,15 +3802,14 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
                                 if verdict == "band":
                                     # Past the floor, the owner far off-centre reads like this: not accepted
                                     # (not stored, not credited, no dwell), not a stranger frame by the counter.
-                                    # Five in a row, none of them ok, end a Simple lap gracefully with what is
-                                    # filled (`finish`); an Advanced lap is the person's to end (Done), so there
-                                    # the frames are only left out.
+                                    # Five in a row, none of them ok, end the lap gracefully with what is
+                                    # filled (`finish`), in either mode.
                                     word = "over"
                                     banded = True
                                     trace["band"] += 1
                                     band_run += 1
                                     ended = False
-                                    if mode == "simple" and band_run >= CHANGED_FRAMES:
+                                    if band_run >= CHANGED_FRAMES:
                                         reason = "finish"
                                 else:
                                     run_failed, ended = changed_step(run_failed, verdict == "beyond")
