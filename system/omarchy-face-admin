@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 3.1.6
+# omarchy-face-version: 3.1.7
 #
 # Every privileged thing Face does, behind one polkit action
 # (plan-engine.md §8.2, plan-merged.md §2.3).
@@ -2849,6 +2849,10 @@ SUDO_POLICY = "centre"
 SUDO_R_MAX = 1.5
 SUDO_CENTRE = 0.40           # a sudo template stays this close to its centre
 LAP2_FAR, LAP2_NEAR = 0.8, 1.25
+SCALE_MIN = 0.85             # (3.1.7, measured) the smallest face, over the centre's, that is judged by the guard: dlib's
+                             # descriptor moves with the size of the face (dev/SR1-notes.md), 5% of frames are over CHAIN at
+                             # 0.9-1.1 of the centre's eye distance and 45% at 0.8-0.9, so a frame that far out is asked
+                             # to come closer or go farther instead of being counted against the person
 
 # Bit-reversal order over 12 bins: the four cardinals first, then the bins 30
 # degrees past them, then the ones 60 degrees past, each group alternating sides.
@@ -3085,6 +3089,29 @@ def lap2_word(eye, reference_eye, want):
         return None if eye <= reference_eye * LAP2_FAR else "farther"
     if want == "near":
         return None if eye >= reference_eye * LAP2_NEAR else "closer"
+    return None
+
+
+def scale_word(eye, centre_eye, u=0.0):
+    """"closer" / "farther" (what the person is asked to do, as frame_word says it) when the face is smaller /
+    larger than the centre's by more than SCALE_MIN allows, else None.
+
+    3.1.7: the descriptor of a face depends on its size in the picture, so a frame taken from another distance
+    than the centre's is not comparable with it. The eye distance shrinks with the cosine of the yaw, and `u`
+    is about 15 degrees of yaw to the unit, so that is taken out first (up to R_MAX, past which the frame is `over`;
+    in the guided recording the eyes of a head at 2.5 to 4 units are still 0.83 of the centre's, not the cosine's 0.71). Such a frame is not encoded at all: it is
+    neither accepted nor counted against anybody (it cannot store, and a stranger gains nothing by sitting at
+    another distance). Only the lap's own centre is the reference; lap 2 is asked for another distance by
+    lap2_word and is not judged here.
+    """
+    if not centre_eye or not eye:
+        return None
+    expected = math.cos(math.radians(min(abs(u) * 15.0, 15.0 * R_MAX)))
+    ratio = eye / (centre_eye * expected)
+    if ratio < SCALE_MIN:
+        return "closer"
+    if ratio > 1.0 / SCALE_MIN:
+        return "farther"
     return None
 
 
@@ -3617,6 +3644,7 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
     accepted = [list(e) for e in reference]
     centre_held = lap == 2
     centre_cands, centre_dw, centre_prog = [], new_dwell(), 1.0 if lap == 2 else 0.0
+    centre_eye = None                      # lap 1: the median eye distance of the frames that formed the centre (scale_word)
     cands = {k: [] for k in targets}
     dw = {k: new_dwell() for k in targets}
     prog = {k: 0.0 for k in targets}
@@ -3632,10 +3660,12 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
     debug_at, debug_lines = None, 0
     guard_seen = {"hard": 0.0, "chain": 0.0,  # the largest guard distances since the last trace line,
                   "pose": None,               # the pose (yaw, pitch, pitch_dec) of the frame that gave `hard`,
-                  "lo": None, "hi": None}     # and the raw yaw/pitch range of the frames that reached the guard
+                  "lo": None, "hi": None,
+                  "min": None, "eye": None, "elo": None, "ehi": None, "step": 0.0}     # and the raw yaw/pitch range of the frames that reached the guard
     cur_pose = None                           # this frame's (yaw, pitch, pitch_dec), debug only
+    cur_eye, cur_step = None, 0.0             # ...its eye distance in pixels and the last smoothed step, debug only
     trace = {"accepted": 0, "acc_s": 0, "closer": 0, "farther": 0, "edge": 0, "exposure": 0, "blurry": 0,
-             "roll": 0, "unsteady": 0, "other": 0, "over": 0, "band": 0, "far": 0}
+             "roll": 0, "unsteady": 0, "other": 0, "over": 0, "band": 0, "far": 0, "scale": 0}
     # the last lit frame's pose for the trace: degrees RELATIVE to the neutral (u and v are about 15
     # degrees to the unit), the eye line's roll in degrees, and whether it was inside the centre
     seen_pose = {"yaw": "n/a", "pitch": "n/a", "pitch_dec": "n/a", "roll": "n/a", "centre": "-"}
@@ -3672,7 +3702,8 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
                 "accepted=%d acc_s=%d closer=%d farther=%d edge=%d exposure=%d blurry=%d roll=%d unsteady=%d "
                 "other=%d over=%d band=%d far=%d yaw=%s pitch=%s pitch_dec=%s roll=%s centre_gate=%s centre_held=%d filled=%d "
                 "target=%s hard_max=%.2f chain_max=%.2f hm_yaw=%s hm_pitch=%s hm_pitch_dec=%s "
-                "yaw_lo=%s yaw_hi=%s pitch_lo=%s pitch_hi=%s guard_run=%d lap_end=%s last_word=%s "
+                "yaw_lo=%s yaw_hi=%s pitch_lo=%s pitch_hi=%s hard_min=%s eye=%s centre_eye=%s hm_eye=%s eye_lo=%s eye_hi=%s step_hi=%.2f scale=%d "
+                "guard_run=%d lap_end=%s last_word=%s "
                 "lit_darkness_mean=%.1f refine=%s\n" % (
                     now - started, seen["frames"], seen["strobe"], seen["black"], lit_n,
                     seen["dark"], seen["none"], seen["multi"], trace["accepted"], trace["acc_s"],
@@ -3681,7 +3712,12 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
                     seen_pose["yaw"], seen_pose["pitch"], seen_pose["pitch_dec"], seen_pose["roll"], seen_pose["centre"],
                     1 if centre_held else 0, len(filled),
                     "none" if aim is None else aim, guard_seen["hard"], guard_seen["chain"],
-                    hm[0], hm[1], hm[2], rng[0], rng[1], rng[2], rng[3], run_failed,
+                    hm[0], hm[1], hm[2], rng[0], rng[1], rng[2], rng[3],
+                    "n/a" if guard_seen["min"] is None else "%.2f" % guard_seen["min"],
+                    "n/a" if cur_eye is None else cur_eye, "n/a" if centre_eye is None else int(round(centre_eye)),
+                    "n/a" if guard_seen["eye"] is None else guard_seen["eye"],
+                    "n/a" if guard_seen["elo"] is None else guard_seen["elo"], "n/a" if guard_seen["ehi"] is None else guard_seen["ehi"],
+                    guard_seen["step"], trace["scale"], run_failed,
                     lap_end, shown, (lit_dark / lit_n) if lit_n else 0.0, refine_for(seen)))
             sys.stderr.flush()
         except (OSError, ValueError):
@@ -3690,6 +3726,8 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
         seen_pose["centre"] = "-"
         guard_seen["hard"] = guard_seen["chain"] = 0.0
         guard_seen["pose"] = guard_seen["lo"] = guard_seen["hi"] = None
+        guard_seen["min"] = guard_seen["eye"] = guard_seen["elo"] = guard_seen["ehi"] = None
+        guard_seen["step"] = 0.0
 
     while True:
         frame, gray_in = camera.read_frame()
@@ -3699,7 +3737,7 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
         seen["frames"] += 1
         word, uv, r = None, None, None
         passed = banded = False
-        cur_pose = None
+        cur_pose, cur_eye, cur_step = None, None, 0.0
 
         gray = clahe.apply(gray_in)
         hist = cv2.calcHist([gray], [0], None, [8], [0, 256])
@@ -3781,6 +3819,9 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
                             seen_pose["pitch"] = str(int(round(15 * rv)))             # as the camera sees it
                             seen_pose["pitch_dec"] = str(int(round(15 * tv)))         # with rule D taken out
                             cur_pose = (int(round(15 * ru)), int(round(15 * rv)), int(round(15 * tv)))
+                            means = smooth([uv_of(p) for p in poses[-(SMOOTH_FRAMES + STEADY_FRAMES):]])
+                            cur_step = math.hypot(means[-1][0] - means[-2][0], means[-1][1] - means[-2][1]) if len(means) >= 2 else 0.0
+                        cur_eye = int(round(pose["eye"]))
                     word = frame_word(1, pose["eye"], box, (native_w, native_h), darkness, saturated,
                                       sharp, pose["roll"], steady)
                     if debug:
@@ -3793,6 +3834,10 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
                             trace["acc_s"] += 1
                     if word is None and want:
                         word = lap2_word(pose["eye"], ref_eye, want)
+                    if word is None and centre_eye is not None and neutral is not None:
+                        word = scale_word(pose["eye"], centre_eye, uv_of(pose)[0])
+                        if word is not None:
+                            trace["scale"] += 1
                     if word is None:
                         eyes.append(pose["eye"])
                         if neutral is None:
@@ -3815,6 +3860,12 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
                                     gd, gc = guard_distances(encoding, accepted, centre_enc)
                                     if gd >= guard_seen["hard"] and cur_pose is not None:
                                         guard_seen["pose"] = cur_pose
+                                        guard_seen["eye"] = cur_eye
+                                    guard_seen["min"] = gd if guard_seen["min"] is None else min(guard_seen["min"], gd)
+                                    guard_seen["step"] = max(guard_seen["step"], cur_step)
+                                    if cur_eye is not None:
+                                        guard_seen["elo"] = cur_eye if guard_seen["elo"] is None else min(guard_seen["elo"], cur_eye)
+                                        guard_seen["ehi"] = cur_eye if guard_seen["ehi"] is None else max(guard_seen["ehi"], cur_eye)
                                     guard_seen["hard"] = max(guard_seen["hard"], gd)
                                     guard_seen["chain"] = max(guard_seen["chain"], gc)
                                     if cur_pose is not None:
@@ -3848,12 +3899,13 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
                                         on = r < R_MIN
                                         seen_pose["centre"] = "in" if on else "out"
                                         if on:
-                                            centre_cands = add_candidate(centre_cands, {"t": now, "r": r, "encoding": encoding})
+                                            centre_cands = add_candidate(centre_cands, {"t": now, "r": r, "encoding": encoding, "eye": pose["eye"]})
                                         centre_dw = dwell_step(centre_dw, now, True, on)
                                         count = len(supported(centre_cands))
                                         centre_prog = target_progress(dwell_fraction(centre_dw), count)
                                         if centre_dw["dwell"] >= TARGET_DWELL and count >= QUOTA:
                                             centre_enc = medoid(supported(centre_cands))["encoding"]
+                                            centre_eye = median([c["eye"] for c in supported(centre_cands)])
                                             accepted = [centre_enc]
                                             centre_held, centre_prog = True, 1.0
                                             sup_at = now

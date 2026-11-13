@@ -114,6 +114,9 @@ def table_ratio(names, loaded):
 
 def table_reference(names, loaded, reference):
     centre, centre_eye, _ = centre_of(loaded[name_of(reference)])
+    if centre is None:
+        sys.stderr.write("%s has fewer than three steady frames inside R_MIN: pick a recording where the head was held (`still`)\n" % name_of(reference))
+        return None
     print("\n3. distance to the centre of %s (eye %.0f px) by the frame's own eye px; howdy's unlock is per frame under 0.35" % (name_of(reference), centre_eye))
     print("   eye px       n   p50   p90   <0.35  <0.40")
     rows = [f for name in names if name != name_of(reference) for f in loaded[name] if f["eye"] and f["r"] < 2.2]
@@ -197,7 +200,7 @@ def main(argv):
         table_ratio(names, loaded)
         if reference:
             centre = table_reference(names, loaded, reference)
-            for d in detect:
+            for d in detect if centre else ():
                 table_detect(d, centre, model, landmarks)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)

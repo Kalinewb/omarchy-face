@@ -506,6 +506,27 @@ def test_strobe():
           refine(10, strobe=5, black=0, dark=5) == "too_dark" and refine(10, strobe=5, black=0, dark=4, none=1) is None)
 
 
+# --- 2b. the scale band (3.1.7) -------------------------------------------------------
+def test_scale():
+    print("scale band: a face of another size than the centre's is asked to come closer or go farther")
+    word = sw.scale_word
+    check("SCALE_MIN is 0.85 and the band is symmetric in the ratio (0.85 and 1/0.85)", sw.SCALE_MIN == 0.85)
+    check("the centre's own size, 10% either way: no word",
+          word(65, 65) is None and word(58.5, 65) is None and word(71.5, 65) is None)
+    check("15% is the edge: a smaller face asks the person to come `closer`, a larger one to go `farther` (frame_word's meaning)",
+          word(55.3, 65) is None and word(54, 65) == "closer" and word(76.0, 65) is None and word(78.0, 65) == "farther")
+    check("no centre yet, or no eye: no word (nothing to compare with)", word(40, None) is None and word(None, 65) is None)
+    check("a head turned 30 degrees (u = 2) shows eyes cos(30) = 0.87 as far apart: that is not `closer`",
+          word(65 * 0.87, 65, 2.0) is None and word(65 * 0.87, 65, 0.0) is None and word(65 * 0.80, 65, 2.0) is None
+          and word(65 * 0.70, 65, 2.0) == "closer")
+    check("...and the compensation is capped at R_MAX (a wild u cannot make everything pass, nor everything fail): u of 9 expects cos(33) = 0.84",
+          word(65 * 0.40, 65, 9.0) == "closer" and word(65 * 0.84, 65, 9.0) is None and word(65 * 0.84 * 1.15, 65, 9.0) is None)
+    check("the words are the ones the client already says (GATE_WORDS)", all(w in sw.GATE_WORDS for w in ("farther", "closer")))
+    check("the loop judges scale only once the lap's own centre exists, after lap2_word, and counts it in the trace",
+          "centre_eye is not None and neutral is not None" in SOURCE and 'trace["scale"] += 1' in SOURCE
+          and "centre_eye = median(" in SOURCE)
+
+
 # --- 3. the same-person guard and the changed counter -----------------------------
 def test_guard():
     print("same-person guard")
@@ -1054,6 +1075,7 @@ def main():
     coupling_findings()
     test_gates()
     test_strobe()
+    test_scale()
     test_guard()
     test_support()
     test_pick()

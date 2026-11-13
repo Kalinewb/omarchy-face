@@ -195,7 +195,7 @@ sudo /usr/bin/bash -c 'PATH=/usr/bin; set -o pipefail; t=$(mktemp -d) || exit 1
     bash "$t/install.sh" "$1" "$2"
   }
   run "$@"; s=$?; rm -rf -- "$t"; exit $s' \
-  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.1.6
+  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.1.7
 ```
 
 What it does, from the button or from a terminal: root copies the installer out of the
