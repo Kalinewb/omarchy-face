@@ -1102,7 +1102,7 @@ root never reads one, and the GUI cannot set a root file) makes the sweep child 
 at most 120 a lap, to the journal under the tag `omarchy-face-sweep`:
 `journalctl -t omarchy-face-sweep -f` during a scan shows `frames`, `strobe_off`, `black`, `lit`,
 `dark`, `none`, `multi`, the last word, the mean darkness of the lit frames and the refine candidate.
-Counts and words only, never a frame. From 3.1.3 it also has `accepted` (frames that passed every gate;
+Counts and words only, never a frame. A line is about 800 characters (up to about 863 with the longest numbers), under the 1 KiB `logger` takes as one record; e1's bound on the lines it produces is 800 (raised from 600 when 3.1.6's pose fields and 3.1.7's eye and distance fields were added). From 3.1.3 it also has `accepted` (frames that passed every gate;
 `acc_s` for the last second), the per-gate failures (`closer farther edge darkgate blurry roll unsteady`),
 `other`, `over`, the pose relative to the neutral in degrees (`yaw pitch roll`), `centre_gate` (`in` / `out` /
 `-`), `centre_held`, `filled`, `target`, and `last_word` as `skip` (a strobe-off frame) or `ok` (an accepted

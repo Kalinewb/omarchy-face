@@ -334,8 +334,13 @@ your recordings, a face 10-20% smaller than the one the scan started with is far
 nearly half of its frames, whatever the angle. Leaning back to look up, or drifting during the Advanced circle,
 did that and ended scans with "That was not you". The scan now says "A little closer" or "A little farther" when
 your face is more than about 15% off the size it started at, and does not count those frames against you (it
-does not store them either, and a stranger gains nothing by sitting at another distance: his scan simply runs
-out). The scan's debug trace (`debug=true` in `/etc/omarchy-face/config`, `journalctl -t omarchy-face-sweep`)
+does not store them either). A stranger who takes over and HOLDS another distance gains nothing: none of his
+frames is used and his scan runs out. One who ALTERNATES distances by more than 15% is not ended by the
+five-in-a-row rule, because that rule counts only frames that were used, and only the per-frame test (0.40 from
+a stored template, 0.55 from your first picture) stops him; the same was already possible by failing any other
+gate, tilting the head past the roll limit, say. If somebody else's face forms your first picture at another
+size than yours, you are told "closer" or "farther" until the scan runs out (about 54 s in Simple, 90 s in
+Advanced) instead of "That was not you" after a few seconds. Enrol only yourself. The scan's debug trace (`debug=true` in `/etc/omarchy-face/config`, `journalctl -t omarchy-face-sweep`)
 now prints your eye distance in pixels, so you can see how big your face is at the distance you sit at.
 
 The same measurement explains why unlocking from a normal distance can fail when you scanned with the laptop
@@ -345,6 +350,15 @@ least about 45 pixels apart in the camera's picture; the trace prints it). Detec
 (`dev/measure-scale.py`: howdy's 320 pixels and one upsample find as many faces as 400 pixels or two upsamples), so
 nothing in howdy's own settings was changed; to see them, read-only:
 `sudo grep -E '^(certainty|max_height|timeout|dark_threshold) *=' /usr/lib/security/howdy/config.ini`.
+
+### Updating from 3.1.5
+
+3.1.5 was not released on its own: its changes (below, under "Updating from 3.1.4") arrive with 3.1.6, which adds
+one more. Past the point where two targets have filled in a Simple scan (four bins in Advanced), a frame over the
+0.55 centre limit is now left out like one over 0.40, instead of ending the scan with "That was not you" and
+discarding it: five of them since the last good frame end the scan with what you have, saved. The up and down
+prompts say "a little", and the trace prints the pose behind the distances (`hm_yaw`, `hm_pitch`, the ranges).
+Below that point nothing changed.
 
 ### Updating from 3.1.4
 
