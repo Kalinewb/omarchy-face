@@ -353,8 +353,8 @@ nothing in howdy's own settings was changed; to see them, read-only:
 
 ### Updating from 3.1.5
 
-3.1.5 was not released on its own: its changes (below, under "Updating from 3.1.4") arrive with 3.1.6, which adds
-one more. Past the point where two targets have filled in a Simple scan (four bins in Advanced), a frame over the
+3.1.5 is released (tag `v3.1.5`); its changes are described below, under "Updating from 3.1.4". 3.1.6 adds one
+more. Past the point where two targets have filled in a Simple scan (four bins in Advanced), a frame over the
 0.55 centre limit is now left out like one over 0.40, instead of ending the scan with "That was not you" and
 discarding it: five of them since the last good frame end the scan with what you have, saved. The up and down
 prompts say "a little", and the trace prints the pose behind the distances (`hm_yaw`, `hm_pitch`, the ranges).
