@@ -3,7 +3,7 @@
 """How face size (eye distance in pixels) moves dlib's descriptor distance, on a person's own recordings.
 
     dev/measure-scale.py --model <dlib_face_recognition_resnet_model_v1.dat[.bz2]> --cache <dir> \\
-                         [--reference <recording dir>] [--detect <recording dir> ...] <recording dir> [...]
+                         [--reference <recording dir> ...] [--detect <recording dir> ...] <recording dir> [...]
 
 User-run, never part of CI: the recordings (dev/enrol-record.py, in ~/.cache/omarchy-face-enrol) are a
 person's face and are never committed, and neither is anything this computes from them. Like
@@ -17,9 +17,10 @@ It prints four things, each from the recordings' lit one-face frames:
      would have refused;
   2. the distance to the lap's CENTRE template by the frame's eye px divided by the centre's (the scale
      drift a head makes by leaning), and the share of frames over CHAIN and HARD at each ratio;
-  3. `--reference R`: the distance of every recording's frames to the centre of recording R (a normal
-     desk distance, say), by the frame's own eye px: what an unlock at another distance would see against
-     templates enrolled at R's, with howdy's stock threshold 0.35 and CHAIN 0.40;
+  3. `--reference R` (repeatable): the distance of every recording's frames to the NEAREST of the centres of the
+     reference recordings (howdy takes the best of all stored templates), by the frame's own eye px: what an
+     unlock at another distance would see against templates enrolled at the references' distance, with howdy's
+     stock threshold 0.35 and CHAIN 0.40; a recording is never compared with its own centre;
   4. `--detect D`: for the recording D, how often the HOG detector finds a face and how often a detected
      face is within 0.35 of R's centre, at 400 px / 320 px (howdy's `max_height`) and upsample 0, 1, 2,
      and what each costs per frame.
@@ -72,6 +73,16 @@ def centre_of(frames):
     return sw.medoid(cand)["encoding"], statistics.median(frames[i]["eye"] for i in first), first[0]
 
 
+def reference_centre(frames, count=30):
+    """A reference template for tables 3 and 4: the medoid of the first `count` ungated frames with the head inside R_MIN
+    (steadiness is not asked: a recording of a moving head has few steady frames near the centre)."""
+    near = [f for f in frames if f["eye"] and not f["gated"] and f["r"] < sw.R_MIN][:count]
+    if len(near) < 5:
+        return None, None
+    cand = [{"t": i * 0.1, "r": 0.0, "encoding": f["enc"]} for i, f in enumerate(near)]
+    return sw.medoid(cand)["encoding"], statistics.median(f["eye"] for f in near)
+
+
 def pct(values, p):
     ordered = sorted(values)
     return ordered[min(len(ordered) - 1, int(p * (len(ordered) - 1) + 0.5))]
@@ -112,23 +123,27 @@ def table_ratio(names, loaded):
             sum(r["d"] > sw.CHAIN for r in reach if r not in inside), len(reach) - len(inside)))
 
 
-def table_reference(names, loaded, reference):
-    centre, centre_eye, _ = centre_of(loaded[name_of(reference)])
-    if centre is None:
-        sys.stderr.write("%s has fewer than three steady frames inside R_MIN: pick a recording where the head was held (`still`)\n" % name_of(reference))
-        return None
-    print("\n3. distance to the centre of %s (eye %.0f px) by the frame's own eye px; howdy's unlock is per frame under 0.35" % (name_of(reference), centre_eye))
+def table_reference(names, loaded, references):
+    """howdy compares a frame with EVERY stored template and takes the best: the distance here is the smallest over the
+    references' centres (each a recording at a normal distance), excluding the recording the frame came from."""
+    centres = {}
+    for ref in references:
+        c, e = reference_centre(loaded[name_of(ref)])
+        if c is not None:
+            centres[name_of(ref)] = (c, e)
+    print("\n3. distance to the nearest of %d reference centres (%s; eye %s px) by the frame's own eye px; howdy's unlock is per frame under 0.35" % (
+        len(centres), ", ".join(n[9:] for n in centres), "/".join("%.0f" % e for _, e in centres.values())))
     print("   eye px       n   p50   p90   <0.35  <0.40")
-    rows = [f for name in names if name != name_of(reference) for f in loaded[name] if f["eye"] and f["r"] < 2.2]
+    rows = [(name, f) for name in names for f in loaded[name] if f["eye"] and f["r"] < 2.2]
     for lo, hi in ((0, 25), (25, 32), (32, 38), (38, 44), (44, 52), (52, 60), (60, 80), (80, 200)):
-        x = [dist(f["enc"], centre) for f in rows if lo <= f["eye"] < hi]
+        x = [min(dist(f["enc"], c) for n, (c, _) in centres.items() if n != name) for name, f in rows if lo <= f["eye"] < hi and len(centres) > (name in centres)]
         if len(x) >= 5:
             print("   %3d-%3d %5d  %.2f  %.2f   %3d%%   %3d%%" % (lo, hi, len(x), pct(x, .5), pct(x, .9),
                                                                 100 * sum(v < .35 for v in x) // len(x), 100 * sum(v < .40 for v in x) // len(x)))
-    return centre
+    return {n: c for n, (c, _) in centres.items()}
 
 
-def table_detect(path, centre, model, landmarks):
+def table_detect(path, centres, model, landmarks):
     import time
     import cv2
     import numpy as np
@@ -159,17 +174,18 @@ def table_detect(path, centre, model, landmarks):
             r["lit"] += 1
             r["det"] += bool(faces)
             r["multi"] += len(faces) > 1
-            best = min((dist([float(x) for x in encoder.compute_face_descriptor(small, predictor(small, rect), 1)], centre)
-                        for rect in faces), default=9.0)
+            best = min((min(dist(d, c) for n, c in centres.items() if n != name_of(path)) for d in
+                        ([float(x) for x in encoder.compute_face_descriptor(small, predictor(small, rect), 1)] for rect in faces)), default=9.0)
             r["hit"] += best < 0.35
-    print("\n4. detection and matching on %s (centre templates from the reference)" % name_of(path))
+    print("\n4. detection and matching on %s (against the nearest of the reference centres, excluding itself)" % name_of(path))
     for name, r in result.items():
         print("   %-42s lit %3d  detected %3d%%  two or more faces %3d  a face within 0.35: %3d%%  detect %.0f ms/frame" % (
             name, r["lit"], 100 * r["det"] // max(1, r["lit"]), r["multi"], 100 * r["hit"] // max(1, r["lit"]), r["ms"] / max(1, r["lit"])))
 
 
 def main(argv):
-    model = reference = cache_dir = None
+    model = cache_dir = None
+    references = []
     detect, directories = [], []
     i = 0
     while i < len(argv):
@@ -178,7 +194,7 @@ def main(argv):
         elif argv[i] == "--cache":
             cache_dir = argv[i + 1]; os.makedirs(cache_dir, mode=0o700, exist_ok=True); os.chmod(cache_dir, 0o700); i += 2
         elif argv[i] == "--reference":
-            reference = argv[i + 1]; i += 2
+            references.append(argv[i + 1]); i += 2
         elif argv[i] == "--detect":
             detect.append(argv[i + 1]); i += 2
         else:
@@ -190,18 +206,18 @@ def main(argv):
     scratch = tempfile.mkdtemp(prefix="omarchy-face-scale.")
     try:
         model = mg.prepare(model, scratch)
-        missing = [d for d in directories + detect + ([reference] if reference else [])
+        missing = [d for d in directories + detect + references
                    if not os.path.exists(os.path.join(cache_dir, name_of(d) + ".json"))]
         if missing:       # measure-guard's own main encodes and caches them (and prints its report, which is fine)
             mg.main(["--model", model, "--cache", cache_dir] + sorted(set(missing)))
         names = [name_of(d) for d in directories]
-        loaded = {name_of(d): load(d, cache_dir) for d in set(directories + detect + ([reference] if reference else []))}
+        loaded = {name_of(d): load(d, cache_dir) for d in set(directories + detect + references)}
         table_eye(names, loaded)
         table_ratio(names, loaded)
-        if reference:
-            centre = table_reference(names, loaded, reference)
-            for d in detect if centre else ():
-                table_detect(d, centre, model, landmarks)
+        if references:
+            centres = table_reference(names, loaded, references)
+            for d in detect if centres else ():
+                table_detect(d, centres, model, landmarks)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     return 0

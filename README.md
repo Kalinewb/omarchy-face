@@ -326,6 +326,26 @@ now also counts frames that passed every gate and each gate that failed (closer,
 dark, blurry, roll, unsteady), and prints the pose and the centre gate. Setup shows the plugin is
 newer than the installed system files: **Update Face's system files**, one password.
 
+### Updating from 3.1.6
+
+Face ID 3.1.7 changes the enrolment helper (root code, so Setup offers **Update Face's system files**, one
+password). The face model's picture of you depends on how big your face is in the camera's picture: measured on
+your recordings, a face 10-20% smaller than the one the scan started with is farther from it than it should be in
+nearly half of its frames, whatever the angle. Leaning back to look up, or drifting during the Advanced circle,
+did that and ended scans with "That was not you". The scan now says "A little closer" or "A little farther" when
+your face is more than about 15% off the size it started at, and does not count those frames against you (it
+does not store them either, and a stranger gains nothing by sitting at another distance: his scan simply runs
+out). The scan's debug trace (`debug=true` in `/etc/omarchy-face/config`, `journalctl -t omarchy-face-sweep`)
+now prints your eye distance in pixels, so you can see how big your face is at the distance you sit at.
+
+The same measurement explains why unlocking from a normal distance can fail when you scanned with the laptop
+lifted against your face: the stored pictures are of a bigger face than the one the lock screen sees, and howdy
+accepts a picture only if it is closer than 0.35. Scan at the distance you will unlock from (keep your eyes at
+least about 45 pixels apart in the camera's picture; the trace prints it). Detection is not the problem
+(`dev/measure-scale.py`: howdy's 320 pixels and one upsample find as many faces as 400 pixels or two upsamples), so
+nothing in howdy's own settings was changed; to see them, read-only:
+`sudo grep -E '^(certainty|max_height|timeout|dark_threshold) *=' /usr/lib/security/howdy/config.ini`.
+
 ### Updating from 3.1.4
 
 Face ID 3.1.5 changes the enrolment helper (root code, so Setup offers **Update Face's system files**, one

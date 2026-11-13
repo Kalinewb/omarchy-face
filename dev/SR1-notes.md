@@ -376,3 +376,77 @@ Options and trade-offs:
 **What SR1 re-reads (all in `system/omarchy-face-admin`; the other 11 system files change only the version header and the pins).** (1) `settle_verdict`: past the floor both over-CHAIN verdicts are neutral; below it both are `beyond`. (2) The loop branch `if verdict in ("band", "far")`: no store, no credit, `changed_step` not called, `finish` after five since the last ok; confirm `ok` is the only path that reaches the accept block and that `finish` here needs `can_finish` (it does: the verdict is only `band`/`far` when `can_finish` holds). (3) `trace_line`: the new fields and `guard_seen["pose"/"lo"/"hi"]` (debug only; numbers). (4) The remaining costs: a stranger within CHAIN of the centre (the known limit) is stored in all versions; a late stranger now ends a lap saved where it used to be discarded.
 
 **Not verified:** helper 3.1.6 on the laptop; how far up the owner's head was at the 0.60 frames; whether 0.75 holds for another seat. The grid is mine (48 laps per version), not the reviewer's.
+
+## Delta in 3.1.7 (2026-11-13): the face's size, not its pose, moves the descriptor; a frame of another size than the centre's is asked to come closer or go farther. What SR1 re-reads (root code)
+
+**What the live Advanced lap showed** (helper 3.1.6, `debug=true`, 21:01:18, 8 lines). The centre was held at 3.3 s; the target stayed `none` (the head moved within R_MIN, as Advanced's slow circle does); `guard_run` 1, 3, 4, 5, `lap_end changed` at 8.4 s with `hard_max` 0.47, 0.48, 0.59, 0.47 **at small poses** (`hm_yaw -1..9`, `hm_pitch -8..9`) while `unsteady` rose 10 to 29. Below the floor (four bins) every frame over CHAIN is `beyond`, so five of them ended the lap. `closer`, `farther` and `edge` stayed 0 for the whole lap.
+
+**Which frames reach the guard (hypothesis 3, checked in the code):** only frames for which `frame_word` is `None`, i.e. every gate including steadiness passed (`STEADY_STEP` 0.20 on means of five lit frames, three steps in a row); a barely-steady frame can be encoded, a moving one cannot.
+
+### A. The measurements (`dev/measure-scale.py`, `dev/measure-guard.py`: real dlib, the same model as the helper, on the user's eight recordings; nothing committed)
+
+| hypothesis | what the recordings say | verdict |
+|---|---|---|
+| 1. moving, barely-steady frames give unstable descriptors | steady frames that reach the guard, distance to the centre by the smoothed step (0.20 is the limit): step 0.00-0.03 p50 0.14 / max 0.39 (n 226); 0.10-0.15 p50 0.22 (n 45); 0.15-0.20 p50 0.28, 6% over CHAIN (n 29). **At small poses (r < 1) the maximum is 0.38 at every speed** (n 7 at 0.15-0.20), nothing over CHAIN | speed raises the median by about 0.1; it does not make 0.47-0.59 at a small pose |
+| 2. the centre is a poor sample (two supported frames, SUPPORT 0.30) | the centre as the loop forms it, against the medoid of all the recording's near-centre frames: 0.00, 0.09, 0.11, 0.12; the later near-centre frames to that centre: p50 0.14-0.17, p90 0.19-0.29, **max 0.25-0.32, none over CHAIN** (n 41-306) | not supported on these recordings; not changed |
+| 4. (found while looking) the SIZE of the face | table below | **supported, and it fits every live failure so far** |
+
+Distance to the lap's own centre by the frame's eye distance (px) over the centre's (1034 one-face frames, poses r <= 2.2, all eight recordings):
+
+| eye / centre's | n | p50 | p90 | over CHAIN 0.40 | over HARD 0.55 |
+|---|---|---|---|---|---|
+| 0.90-1.10 | 904 | 0.21 | 0.36 | 5% | 0% |
+| 1.10-1.25 | 24 | 0.33 | 0.43 | 29% | 0% |
+| 0.80-0.90 | 35 | 0.39 | 0.59 | 45% | 14% |
+| 0.70-0.80 | 6 | 0.52 | 0.58 | 100% | 16% |
+| 0.60-0.70 | 12 | 0.37 | 0.60 | 41% | 33% |
+| under 0.60 | 53 | 0.72 | 0.76 | 100% | 98% |
+
+A face 10-20% smaller than the centre's is over CHAIN in 45% of frames, whatever the pose: dlib resamples the face to a fixed chip, and a smaller face is a blurrier chip. Leaning back to tilt up, leaning in to tilt down, or drifting during Advanced's slow circle changes the size by that much; that is the one measured mechanism that gives 0.47-0.60 at a small pose. **I cannot prove it for the live lap:** the trace had no eye distance. (The 3.1.5 Simple lap's up target, 0.60 with the last frames near the centre, fits the same story.) 3.1.7 prints `eye`, `centre_eye`, `hm_eye`, `eye_lo`, `eye_hi`, `hard_min` and `step_hi` so the next trace settles it. On the recordings themselves the change is neutral by construction: the person held one distance, and a band of 0.85-1.18 keeps 683 of the 685 steady frames that reach the guard (one of the two it removes was over CHAIN).
+
+### The change (root): `scale_word`
+
+`SCALE_MIN` 0.85. Once the lap's own centre is held (lap 1; `centre_eye` is the median eye distance of the frames that formed it), a frame whose eye distance is under 0.85 or over 1/0.85 of the centre's, after taking out the cosine of the yaw (`u` is about 15 degrees to the unit, capped at R_MAX; the guided recording's eyes at 2 to 2.5 units are 0.82 of the centre's, cosine 0.83), gets the word `closer` (smaller) or `farther` (larger), as `frame_word` says them, and is **not encoded at all**. So it is neither accepted nor counted: it cannot store, and it does not count towards `changed`. The client already says "A little closer / farther". Lap 2 is not judged (it is asked for another distance by `lap2_word` and compares with lap 1's centre).
+
+**What this changes for strangers, exactly.** Nothing is stored that was not storable (only `ok` frames store, and a frame that is not encoded cannot be `ok`). A stranger who takes over at another size than the centre's is no longer ended by five refusals (3.1.3-3.1.6: `changed`); he is asked to come closer or go farther, and nothing of his is encoded or stored (e1 `simple-stranger-small`: `too_few` at the ceiling, nothing written). A stranger at the centre's size is judged exactly as before. The cost: a stranger who sits at another size now ends a lap `too_few` instead of `changed`, and an owner who is 15% off is told to adjust instead of being refused as a stranger. No distance threshold changed.
+
+### B. Distance sensitivity
+
+**Scan.** Eye px at the recorded distances (`measure-scale.py` table 1): the `desk` and `still` recordings are 61-70 px (p50), `concurrent` 63, `guided` 59 (59 of 827 frames `closer`); the `far` recording is 38 px p50 (p10 19), 78 of its 136 one-face frames `closer`. `farther` never fires; `edge` fires in the `tilt` (102 frames) and `guided` (14) recordings. The gates are `EYE_MIN` 40 and `EYE_MAX` 150; the live laps never had a `closer` frame (the laptop was lifted).
+
+Detection (table 4, `far`, 336 lit frames, the detector as howdy runs it):
+
+| setting | face found | two or more faces | a face within 0.35 of a reference centre | detect per frame |
+|---|---|---|---|---|
+| 400 px, upsample 1 (as recorded) | 93% | 167 | 53% | 39 ms |
+| **320 px, upsample 1 (howdy as installed)** | **94%** | 190 | **52%** | **26 ms** |
+| 400 px, upsample 2 | 92% | 162 | 54% | 160 ms |
+| 320 px, upsample 2 | 91% | 191 | 51% | 104 ms |
+| 400 px, upsample 0 | 82% | 3 | 52% | 10 ms |
+
+So **detection is not the bottleneck**: 400 px and the second upsample find no more faces and no more matches, at 1.5x and 4-6x the cost. What fails is the match.
+
+Unlock (howdy's own `compare.py`, v2.6.1, read from the build cache's git clone: per frame, `0 < distance < certainty/10` against ANY stored template, `certainty` 3.5 so 0.35, for `timeout` 5 s, detector on a CLAHE'd frame scaled to `max_height` 320, upsample 1). Frame distance to the nearest of four reference centres enrolled at 63-70 px (table 3):
+
+| the frame's eye px | n | p50 | p90 | under 0.35 | under 0.40 |
+|---|---|---|---|---|---|
+| 60-80 | 992 | 0.22 | 0.36 | 89% | 92% |
+| 52-60 | 82 | 0.32 | 0.53 | 58% | 64% |
+| 44-52 | 7 | 0.48 | 0.55 | 14% | 28% |
+| 38-44 | 13 | 0.31 | 0.56 | 61% | 61% |
+| 25-32 | 12 | 0.62 | 0.64 | 0% | 0% |
+| under 25 | 40 | 0.69 | 0.73 | 0% | 0% |
+
+Within one distance a small face is as consistent as a large one (the `far` recording's frames to the medoid of their own eye bin: 19-30 px p50 0.20 p90 0.29, 60-80 px p50 0.15 p90 0.18), but the bins differ from each other by 0.32 (38-46 against 60-80) to 0.68 (19-30 against 60-80). **So: templates enrolled with the laptop lifted (eye 60-70) are 0.3-0.7 away from a face at a normal distance (eye 30-45) and howdy's 0.35 refuses it.** That is the unlock half of the user's report, and it is the same effect as the scan's.
+
+What is plugin-controlled and what is not. The installer (`install-engine`, `set_config_key`) writes `device_path`, `frame_width`, `frame_height`, `recording_plugin`, `timeout 5`, the snapshot flags, `end_report`, `disabled`; **`certainty`, `max_height`, `dark_threshold` and `use_cnn` stay howdy's stock** (3.5, 320, 50, false) by decision (the comment in the installer). I could not read `/usr/lib/security/howdy/config.ini` (root-only, 0600) to confirm the installed values. To show them, read-only:
+
+    sudo grep -E '^(certainty|max_height|timeout|dark_threshold|use_cnn|frame_width|frame_height|device_path|recording_plugin) *=' /usr/lib/security/howdy/config.ini
+
+Changes that are howdy's own settings, not made here, with their effect: `certainty = 4.0` (0.40) would pass the owner's 0.8-0.9-scale frames about twice as often (p50 0.39) and also every other face within 0.40 of the owner's, in each of the ~35 lit frames of a 5 s try, against dlib's own same-person threshold of 0.6; I have no stranger data to put a rate on it, so I do not recommend it. `max_height` 400 or a second upsample: no gain (table above). Neither is the fix.
+
+**What I did and did not do.** (1) `scale_word` keeps a lap's templates at one size, so a Simple or Advanced scan done at the distance you will sit at is consistent, and a leaning owner is not refused as a stranger. (2) **`EYE_MIN` stays 40.** Lowering it would let the scan run at a normal distance, but the pose indices are offsets divided by the eye distance, so their noise grows as 1/eye: projecting the held-head recording (`still`, 60 frames) to a smaller face, the share of frames the steadiness test passes is 100% at 70 px, 86% at 50, 66% at 40, 52% at 35 and 32% at 30, and the wedge angles are as noisy (about 0.7-0.9 units at 40-30 px against targets 1.5-2 units out). (3) The honest remaining gap: **a person whose normal distance is under about 45 px of eye distance cannot scan reliably with this camera; the next trace prints `eye` so we know whether that is the user.** The structural fix is to enrol at that distance with a steadiness test that scales with the eye distance, and a second lap at the other distance for Simple (today only Advanced has lap 2); that is a product change, not made here.
+
+**Tests.** e0 (230): `scale_word` (edges, yaw compensation and its cap, no centre, the words). e1 (184): `adv-scale-drift` (the owner leans back on the first bin, descriptor 0.60 from the centre: 3.1.6 `changed`, now asked to come closer, fills four bins, saved with only owner descriptors), `simple-stranger-small` (a stranger at another size: nothing encoded or stored, `too_few`, no `changed`); the trace regex has the new fields. **Not verified:** the live Advanced lap (no eye px in the old trace); that the owner's distance changes by 15% in a slow circle; helper 3.1.7 on the laptop.
+
+**What SR1 re-reads (all in `system/omarchy-face-admin`; the other 11 system files change only the version header and the pins).** (1) `scale_word` and the loop's call (after `lap2_word`, only when `centre_eye is not None and neutral is not None`): the frame gets a word and is not encoded, so `ok` cannot be reached; `centre_eye` is set where the centre is formed from `supported(centre_cands)`; the candidates carry `eye`. (2) The centre-formation line adds `"eye": pose["eye"]` to the candidate dict. (3) `trace_line`: `hard_min`, `eye`, `centre_eye`, `hm_eye`, `eye_lo`, `eye_hi`, `step_hi`, `scale` (debug only, numbers). (4) The remaining cost: a stranger at another size ends `too_few` rather than `changed`.
