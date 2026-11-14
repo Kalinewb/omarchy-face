@@ -491,7 +491,7 @@ import json, sys
 a = json.load(open(sys.argv[1]))["appearances"]
 print(sum(1 + len(x.get("extra") or []) for x in a))' "$STORE/people/emil.json")"
 
-step "dot scan, the TOP pose only (3.2.2): the guard's two bounds are DOT_TOP_CHAIN 0.60 and DOT_TOP_HARD 0.62 for it, the 3.1.x 0.40 and 0.55 for every other pose"
+step "dot scan, the TOP pose only (3.2.2): the guard's two bounds are DOT_TOP_CHAIN 0.56 and DOT_TOP_HARD 0.60 for it, the 3.1.x 0.40 and 0.55 for every other pose"
 top_stored() { # top_stored <gap> <wobble> <presses> [model] [pose]: how many fresh presses of POSE (default top) stored, with left held first
   local n=0 seed pose=${5:-top}
   for seed in $(seq 1 "$3"); do
@@ -509,17 +509,19 @@ top_stored() { # top_stored <gap> <wobble> <presses> [model] [pose]: how many fr
 }
 got=$(top_stored 0.52 0.02 20)
 same "the owner's up pose at 0.52 +-0.02 from the centre (the live presses read 0.46-0.60; 3.2.1 refused them): every one of 20 top presses stores" '20' "$got"
+got=$(top_stored 0.54 0.02 20)
+same "...at 0.54 +-0.02 (every frame 0.52-0.56, inside DOT_TOP_CHAIN): 20 of 20" '20' "$got"
 got=$(top_stored 0.56 0.02 20)
-same "...at 0.56 +-0.02: 20 of 20" '20' "$got"
+check "...at 0.56 +-0.02 (frames 0.54-0.58, the upper ones over CHAIN 0.56, so some presses fail): $got of 20 stored (18 when measured; at least 14 required)" test "$got" -ge 14
 got=$(top_stored 0.58 0.02 20)
-same "...at 0.58 +-0.02 (every frame 0.56-0.60, inside DOT_TOP_CHAIN): 20 of 20" '20' "$got"
+check "...at 0.58 +-0.02 (every frame 0.56-0.60, at or over CHAIN): $got of 20 stored (0 when measured; at most 2 allowed): what the old trace's 0.60 press would still be refused by" test "$got" -le 2
 got=$(top_stored 0.64 0.02 20)
-same "somebody at 0.64 +-0.02 (every frame over DOT_TOP_CHAIN 0.60): 0 of 20 stored" '0' "$got"
+same "somebody at 0.64 +-0.02 (every frame over DOT_TOP_HARD 0.60): 0 of 20 stored" '0' "$got"
 got=$(top_stored 0.66 0.04 20 gauss)
 check "...at 0.66, Gaussian wobble 0.04: $got of 20 stored (at most 2 allowed)" test "$got" -le 2
 for pose in left right bottom; do
-  got=$(top_stored 0.58 0.02 10 uni "$pose")
-  same "the $pose pose keeps its 3.1.x limits: the same 0.58 +-0.02 that the top pose takes is refused, 0 of 10" '0' "$got"
+  got=$(top_stored 0.54 0.02 10 uni "$pose")
+  same "the $pose pose keeps its 3.1.x limits: the same 0.54 +-0.02 that the top pose takes (20 of 20) is refused, 0 of 10" '0' "$got"
   got=$(top_stored 0.38 0.02 10 uni "$pose")
   same "...and 0.38 +-0.02 still stores at $pose (inside CHAIN 0.40): 10 of 10" '10' "$got"
 done
@@ -973,7 +975,7 @@ ADMIN=$LAB/admin-noguard
 reset_store
 scenario dot-centre dot-left "dot-straddle:0.66:0.0:1:uni:top"
 out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"dotted\",\"pose\":\"left\"} 60" "send $DOTT" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
-same "a child whose guard passes everything, a top press 0.66 from the centre (over DOT_TOP_HARD): the parent drops it with the TOP limits (not_you), and the same child at the left press 0.58 is dropped with the 3.1.x ones" '["not_you",false]' "$(q "$out" '[last("capture_failed")["code"], any(e.get("event") == "dotted" and e["pose"] == "top" for e in evs)]')"
+same "a child whose guard passes everything, a top press 0.66 from the centre (over DOT_TOP_HARD 0.60): the parent drops it with the TOP limits (not_you), and the same child at the left press 0.58 is dropped with the 3.1.x ones" '["not_you",false]' "$(q "$out" '[last("capture_failed")["code"], any(e.get("event") == "dotted" and e["pose"] == "top" for e in evs)]')"
 reset_store
 scenario dot-centre "dot-straddle:0.58:0.0:1:uni:left"
 out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
@@ -1215,13 +1217,13 @@ check("judge_dot carries 'short' for too_far only, and only an int from 1 to 99"
       and jd("centre", {"ok": False, "code": "too_far", "short": True}, []) == {"code": "too_far"} and jd("centre", {"ok": False, "code": "too_far"}, []) == {"code": "too_far"})
 def at2(a, b):
     return [a, b] + [0.0] * 126
-check("judge_dot, TOP: 0.58 from the centre and from the nearest template is kept, 0.6201 from the centre and 0.6001 from the nearest are not; LEFT, RIGHT and BOTTOM keep 0.55 and 0.40",
-      jd("top", ok_press(at(0.58)), [ZERO0])["code"] is None and jd("top", ok_press(at(0.6201)), [ZERO0])["code"] == "not_you"
-      and jd("top", ok_press(at(0.6001)), [ZERO0])["code"] == "not_you" and jd("top", ok_press(at(0.60)), [ZERO0])["code"] is None
+check("judge_dot, TOP: 0.56 from the centre and from the nearest template is kept, 0.5601 is not (CHAIN); LEFT, RIGHT and BOTTOM keep 0.55 and 0.40",
+      jd("top", ok_press(at(0.56)), [ZERO0])["code"] is None and jd("top", ok_press(at(0.5601)), [ZERO0])["code"] == "not_you"
+      and jd("top", ok_press(at(0.54)), [ZERO0])["code"] is None
       and all(jd(p, ok_press(at(0.58)), [ZERO0])["code"] == "not_you" and jd(p, ok_press(at(0.40)), [ZERO0])["code"] is None
               and jd(p, ok_press(at(0.4001)), [ZERO0])["code"] == "not_you" for p in ("left", "right", "bottom")))
-check("judge_dot, TOP: chained through a held pose it may be 0.6 from that one but never over 0.62 from the centre (HARD stays the centre's)",
-      jd("top", ok_press(at2(0.61, 0.0)), [ZERO0, at2(0.61, 0.5)])["code"] is None and jd("top", ok_press(at2(0.63, 0.0)), [ZERO0, at2(0.63, 0.5)])["code"] == "not_you")
+check("judge_dot, TOP: chained through a held pose it may be 0.59 from the centre (0.5 from the held one) but never over DOT_TOP_HARD 0.60 from the centre (HARD stays the centre's)",
+      jd("top", ok_press(at2(0.59, 0.0)), [ZERO0, at2(0.59, 0.5)])["code"] is None and jd("top", ok_press(at2(0.6001, 0.0)), [ZERO0, at2(0.6001, 0.5)])["code"] == "not_you")
 check("judge_dot refuses a pose press with an empty reference (nothing to compare with), but takes the centre's", jd("left", ok_press(at(0.1)), [])["code"] == "timeout"
       and jd("centre", ok_press(at(0.1)), [])["code"] is None)
 check("judge_dot refuses a NaN encoding", jd("centre", ok_press([float("nan")] + [0.0] * 127), [])["code"] == "timeout")

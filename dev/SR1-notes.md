@@ -686,7 +686,7 @@ The ball on the screen: e3 `dot`, `dot-screen` (the ball at the middle and four 
 
 ## Delta in 3.2.2 vs 641a25c (3.2.1): the top pose's guard is loosened (the user's explicit choice). What a security re-read must check (root code)
 
-Only `system/omarchy-face-admin` changes in `system/` (the other nine files: version header; `install.sh`: version, pins, checksum file). **This is the largest loosening of the identity rule since 3.1.x**: for ONE pose the 0.40 and 0.55 bounds become 0.60 and 0.62. The user chose it ("loosen for the top pose"); this section says what it admits.
+Only `system/omarchy-face-admin` changes in `system/` (the other nine files: version header; `install.sh`: version, pins, checksum file). **This loosens the identity rule for ONE pose**: the 0.40 and 0.55 bounds become 0.56 and 0.60. The user chose it ("loosen for the top pose"), then chose the TIGHTER of two options (0.56 / 0.60; the first draft of this delta was 0.60 / 0.62); this section says what it admits.
 
 ### 1. Which bound refused the user's top frames (live, 2026-11-14 19:54, journal `debug dot`)
 Held: the centre (eye 46) and the left (`centre_max` 0.29). Four top presses, all `why=not_you`: `centre_max` 0.52 / 0.60 / 0.54 / 0.46, `stranger` 5 / 5 / 5 / 10, `eye_lo`..`eye_hi` 37-38 / 36-38 / 39-40 / 44-46.
@@ -698,35 +698,37 @@ So CHAIN is the blocker, HARD a secondary one. Presses 1-3 were at eye 36-40 aga
 (The 3.2.1 trace has no per-frame gate field; 3.2.2 adds one, below.)
 
 ### 2. The constants, and what the recordings say
-`DOT_TOP_CHAIN = 0.60`, `DOT_TOP_HARD = 0.62` (one place: `dot_limits(pose)` in the pure half; the child's guard, `judge_dot` and `pick` all read it). 0.62 is "just above the observed 0.60-0.61 owner maximum" (3.1.7's up pose also read 0.55-0.61); `HARD` is never under `CHAIN`.
+`DOT_TOP_CHAIN = 0.56`, `DOT_TOP_HARD = 0.60` (one place: `dot_limits(pose)` in the pure half; the child's guard, `judge_dot` and `pick` all read it). 0.62 is "just above the observed 0.60-0.61 owner maximum" (3.1.7's up pose also read 0.55-0.61); `HARD` is never under `CHAIN`.
 Why not smaller: 0.56/0.60 would pass presses 1, 3, 4 for certain and press 2 only if its frames were not all near 0.60; with no per-frame values I could not show press 2 passes, and the user's rule was that the four presses pass. Why not larger: every 0.01 widens the admitted set (section 4).
-The recordings (8 sessions, `~/.cache/omarchy-face-enrol`, 168 owner frames in the up bin at eye >= 40 px, replayed against each recording's own centre and left medoid as the held templates): share of frames the guard passes at (CHAIN, HARD) = (0.40, 0.55) **83%**, (0.50, 0.55) 91%, (0.55, 0.60) 97%, **(0.60, 0.62) 97%**, (0.62, 0.65) 98%, (0.66, 0.70) 100%. The owner's up frames in the DESK session (eye 51-69, so not a size effect) read 0.51 / 0.64 / 0.66 (p50 / p90 / max) from the centre: 0.60/0.62 still refuses some of the owner's own frames there, which is acceptable because a press needs only three in a row.
+The recordings (8 sessions, `~/.cache/omarchy-face-enrol`, 168 owner frames in the up bin at eye >= 40 px, replayed against each recording's own centre and left medoid as the held templates): share of frames the guard passes at (CHAIN, HARD) = (0.40, 0.55) **83%**, (0.50, 0.55) 91%, **(0.55, 0.60) 97%** (the closest replay to the chosen 0.56 / 0.60), (0.60, 0.62) 97%, (0.62, 0.65) 98%, (0.66, 0.70) 100%. The owner's up frames in the DESK session (eye 51-69, so not a size effect) read 0.51 / 0.64 / 0.66 (p50 / p90 / max) from the centre: (0.55, 0.60) still refuses some of the owner's own frames there, which is acceptable because a press needs only three in a row.
 
 ### 3. What changed in the code (re-read all of it)
-- Pure half: `DOT_TOP_CHAIN`, `DOT_TOP_HARD`, `dot_limits(pose)` -> `(0.60, 0.62)` for `top`, `(CHAIN, HARD)` otherwise.
+- Pure half: `DOT_TOP_CHAIN`, `DOT_TOP_HARD`, `dot_limits(pose)` -> `(0.56, 0.60)` for `top`, `(CHAIN, HARD)` otherwise.
 - Child (`run_dot`): `chain_limit, hard_limit = dot_limits(pose)`; the guard is `guard_verdict(encoding, accepted, centre, chain_limit, hard_limit)` (the existing parameters); the verdict `beyond` (over HARD) or `band` (over CHAIN) is counted in `refused`; `max_run` is the longest run of passing frames. The debug line gains `refused_hard= refused_chain= maxrun= end=` (`end` is `ok`, `run` for five in a row refused, `time` for the ceiling). Counts and words only.
 - Parent: `judge_dot` takes `(chain, hard) = sw["dot_limits"](pose)` for its two independent distance checks (still by `distance`, not `guard_verdict`), so a child whose guard passes everything is stopped with the TOP numbers for a top press and the 3.1.x ones for the other three.
-- `pick` (which stored templates a use may take): bin 0 (`a000`) is taken by LOCK up to `max(HARD, DOT_TOP_HARD)` = 0.62 from its centre; every other bin stays at HARD 0.55; Sudo keeps `SUDO_CENTRE`/policy "centre" (centre only). **Without this change a stored top picture beyond 0.55 would have been stored and then never used** (pick dropped it). Note it also applies to an Advanced-stored `a000`, which was stored within 0.55 anyway, so nothing there changes.
+- `pick` (which stored templates a use may take): bin 0 (`a000`) is taken by LOCK up to `max(HARD, DOT_TOP_HARD)` = 0.60 from its centre; every other bin stays at HARD 0.55; Sudo keeps `SUDO_CENTRE`/policy "centre" (centre only). **Without this change a stored top picture beyond 0.55 (it can be stored up to 0.60) would have been stored and then never used** (pick dropped it). Note it also applies to an Advanced-stored `a000`, which was stored within 0.55 anyway, so nothing there changes.
 - Not changed: CHAIN, HARD, the three-in-a-row / five-in-a-row rules, `DOT_NOT_YOU_CAP`, the `done` floor, the centre's gates, Sudo's policy, the store format.
 
 ### 4. What the loosening admits (fake-camera harness, `dev/e1-frames.py` `dot-straddle:GAP:WOBBLE:SEED:MODEL:top`, 20 presses per cell, left already held; NO real stranger data exists)
-Stored presses out of 20 (a person whose per-frame descriptor sits GAP from the owner's centre; uniform wobble +-0.08 / Gaussian sigma 0.04):
+Stored presses out of 20 (a person whose per-frame descriptor sits GAP from the owner's centre; uniform wobble +-0.08 / Gaussian sigma 0.04); 3.2.1 (0.40 / 0.55) stored 0 of 20 in every cell up to 0.58 (both wobbles; 0.60 and above not run):
 
-| mean gap | 3.2.1 (0.40 / 0.55), uni / gauss | 3.2.2 (0.60 / 0.62), uni / gauss |
-|---|---|---|
-| 0.46 | 0 / 0 | 20 / 20 |
-| 0.50 | 0 / 0 | 20 / 20 |
-| 0.54 | 0 / 0 | 20 / 20 |
-| 0.58 | 0 / 0 | 19 / 20 |
-| 0.60 | (not run) | 18 / 17 |
-| 0.62 | (not run) | 12 / 5 |
-| 0.64 | (not run) | 4 / 0 |
-| 0.66 | (not run) | 0 / 0 |
+| mean gap | 3.2.2 (0.56 / 0.60), uniform +-0.08 | Gaussian 0.04 | owner proxy, uniform +-0.02 |
+|---|---|---|---|
+| 0.46 | 20 | 20 | |
+| 0.50 | 20 | 20 | |
+| 0.52 | 20 | 20 | 20 |
+| 0.54 | 19 | 20 | 20 |
+| 0.56 | 18 | 17 | 18 |
+| 0.58 | 12 | 5 | 0 |
+| 0.60 | 4 | 0 | 0 |
+| 0.62 | 0 | 0 | |
+| 0.64 | 0 | 0 | |
+| 0.66 | 0 | 0 | |
 
-So the top pose now stores anybody whose mean distance from the owner's first picture is up to about 0.60, and half of those at 0.62. **dlib's own "same person" default is 0.6**; this is that line. In 3.2.1 the same people were refused 40 of 40 up to 0.58 (per wobble). Who this can be: relatives and lookalikes (real impostors of unrelated people sit around 0.8-0.9 from each other in dlib's literature, not measured here). What an admitted person gets: a stored top picture for LOCK (Sudo unaffected); if the person is NOT the owner, whoever looks like that can then unlock a screen at distance <= howdy's 0.35 of it. The other four poses are as strict as before (e1: the same 0.58 that the top pose takes stores 0 of 10 at left, right and bottom; 0.38 stores 10 of 10).
-Honest weak points: (a) the up pose is the only pose with this limit, but the FIRST (centre) picture has no reference at all, so a lookalike in front at the first press is the owner's centre, as before; (b) the cap of five `not_you` presses bounds retries but a lookalike inside 0.60 is not refused at all; (c) no measurement of the owner's own up pose at the controlled size (the live presses had the face 10-20% small).
+So the top pose now stores anybody whose mean distance from the owner's first picture is up to about 0.54 every time and up to about 0.58 sometimes; nothing from 0.62. The earlier draft (0.60 / 0.62) stored 20 of 20 up to 0.54-0.58 and 4-12 of 20 at 0.62-0.64. **dlib's own "same person" default is 0.6**: the top pose now takes lookalikes up to about 0.58 from the owner, which is about 0.02-0.04 inside that line. In 3.2.1 the same people were refused 20 of 20. Who this can be: relatives and lookalikes (unrelated people sit around 0.8-0.9 from each other in dlib's literature, not measured here). What an admitted person gets: a stored top picture for LOCK (Sudo unaffected); if the person is NOT the owner, whoever looks like that can then unlock a screen at distance <= howdy's 0.35 of it. The other four poses are as strict as before (e1: the same 0.54 that the top pose takes stores 0 of 10 at left, right and bottom; 0.38 stores 10 of 10).
+Honest weak points: (a) the FIRST (centre) picture has no reference, so a lookalike in front at the first press is the owner's centre, as before; (b) the cap of five `not_you` presses bounds retries but a lookalike inside 0.56 is not refused at all; (c) the owner's up pose has not been measured at a controlled size (the live presses had the face 10-20% small); (d) the owner proxy at 0.58 or 0.60 stores 0 of 20: the live press 2 (0.60) may still be refused.
 
 ### 5. Tests
-e0: `dot_limits`, `pick` for bin 0 vs other bins at the boundaries (0.62 kept, 0.6201 dropped, 0.56 dropped for other bins), the old "drops HARD+" test moved to 0.63. e1: owner proxies at 0.52 / 0.56 / 0.58 +-0.02 store 20 of 20 at top; 0.64 +-0.02 stores 0 of 20; 0.66 Gaussian at most 2; left, right and bottom at 0.58 store 0 of 10 and at 0.38 store 10 of 10; `judge_dot` per pose at every boundary (top 0.58 kept, 0.6201 and 0.6001 refused, others refused at 0.4001 and 0.58); a child with a broken guard stopped at top 0.66 and at left 0.58; the trace says `refused_hard` for a far stranger and `refused_chain` for a frame 0.46 from the centre. e3 is unchanged (the card is the same).
+e0: `dot_limits`, `pick` for bin 0 vs other bins at the boundaries (a000 at 0.60 kept, 0.6001 dropped; 0.56 dropped for other bins), the old "drops HARD+" test moved to 0.63. e1: owner proxies at 0.52 and 0.54 +-0.02 store 20 of 20 at top, 0.56 +-0.02 at least 14 (18 measured), 0.58 +-0.02 at most 2 (0 measured); 0.64 +-0.02 stores 0 of 20; 0.66 Gaussian at most 2; left, right and bottom at 0.54 store 0 of 10 and at 0.38 store 10 of 10; `judge_dot` per pose at every boundary (top 0.56 kept, 0.5601 refused, chained 0.59 kept, 0.6001 refused; others refused at 0.4001 and 0.58); a child with a broken guard stopped at top 0.66 and at left 0.58; the trace says `refused_hard` for a far stranger and `refused_chain` for a frame 0.46 from the centre. e3 is unchanged (the card is the same).
 
-At this commit: e0 249 checks, e1 242, e3 222, lint, check-pins and check-pins-test pass.
+At this commit: e0 249 checks, e1 243, e3 222, lint, check-pins and check-pins-test pass. (e3's "unwritable state home is silent" check now ignores `qt.qpa` lines: after a reboot the desktop's portal prints a DBus "error" warning into every harness log, unrelated to Face.)

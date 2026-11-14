@@ -293,21 +293,27 @@ look like you": the up pictures sat 0.46-0.60 from the first picture (0.52, 0.60
 was 0.40 to the nearest stored picture and 0.55 to the first. Three of the four presses were refused by the 0.40 rule (their frames were under
 0.55 from the first picture), the second possibly by both; the fourth had three good frames but not three in a row. In three presses your face
 also read 36-40 px between the eyes against the first picture's 46, and a smaller face sits farther from a bigger one's picture, so part of the
-distance was your leaning back. For the **top pose only**, a picture may now be up to **0.60** from the nearest stored picture and **0.62**
+distance was your leaning back. For the **top pose only**, a picture may now be up to **0.56** from the nearest stored picture and **0.60**
 from the first (`DOT_TOP_CHAIN`, `DOT_TOP_HARD`); left, right and bottom keep 0.40 and 0.55, and the runs (three in a row to take it, five in a
-row to refuse it) and the five-refusals cap are unchanged. The lock screen takes a stored top picture up to 0.62 from the first one; Sudo is
-unchanged (the first picture only).
+row to refuse it) and the five-refusals cap are unchanged. The lock screen takes a stored top picture up to 0.60 from the first one (and so
+nothing beyond that is stored); Sudo is unchanged (the first picture only).
 
-What it admits, honestly, because it is the largest loosening Face has had. Dlib's own default for "same person" is 0.6, and the top pose now
-takes anybody who looks that much like you. In the fake-camera test (20 presses per cell, uniform wobble of 0.08 or Gaussian 0.04 from frame to
-frame), somebody whose pictures sit on average 0.46, 0.50, 0.54 or 0.58 from yours was refused every time under 3.2.1 (0 of 20, both wobbles)
-and is **stored every time** under 3.2.2 (20 of 20 at 0.46, 0.50, 0.54; 19-20 of 20 at 0.58); 0.60 stores 17-18 of 20, 0.62 5-12 of 20, 0.64
-0-4 of 20 and 0.66 none. So a lookalike (a relative, a similar face) can be enrolled as your up picture. There is no real stranger data anywhere
-in this project, so what that means for a real second person is **not measured**; what the numbers show is only where the line now is. What it
-does not do: the first picture is still needed, the other four poses are as strict as before, it needs your authorised session and a person
-in front of the camera pressing Space, and a stored up picture helps only the lock screen. If you would rather not have this, tell me and the
-top pose goes back to 0.40 and 0.55 (and you may need to lean forward a little, so your face stays as big as it was in the first picture).
-The debug trace now says which bound refused a press (`refused_hard`: over 0.62/0.55 from the first picture, `refused_chain`: over 0.60/0.40
+**It may still refuse you.** These are the tighter of the two options, chosen on purpose. Fake-camera presses of somebody whose top frames sit
+0.52 or 0.54 from the first picture (frame to frame wobble of 0.02) were all taken (20 of 20); at 0.56 18 of 20; at 0.58 or 0.60 none (0 of 20),
+because every frame is at or over the 0.56 bound. So the press at 0.60 in your old trace would most likely **still be refused**, and so would
+one whose frames all sit above 0.56. If you still fail at the top, the next answer is a **skip** for that pose, or a **correction for how big your
+face is** (leaning back made it 10-20% smaller than the first picture and pushed the distance up), not a still looser limit. Sit as you did for the
+first picture, or a little closer, and the up pictures read nearer.
+
+What it admits, honestly, because it is still the largest loosening of the top pose Face has had. In the fake-camera test (20 presses per cell,
+uniform wobble of 0.08 or Gaussian 0.04 from frame to frame; no real stranger data exists anywhere in this project, so a real second person is
+**not measured**), somebody whose pictures sit on average 0.46, 0.50, 0.52 or 0.54 from yours was refused every time under 3.2.1 (0 of 20) and is
+**stored every time** under 3.2.2 (20 of 20; 19 of 20 at 0.54 with the wider wobble). At 0.56: 18 / 17 of 20 (uniform / Gaussian); 0.58: 12 / 5;
+0.60: 4 / 0; 0.62 and above none. Dlib's own default for "same person" is 0.6, so the top pose now takes lookalikes (a relative, a similar face)
+up to about 0.58 from you; the other four poses are as strict as before. It needs your authorised session and a person in front of the camera
+pressing Space, the first picture is still needed, and a stored up picture helps only the lock screen. **To revert**, tell me and the top
+pose goes back to 0.40 and 0.55 (the constants are `DOT_TOP_CHAIN` and `DOT_TOP_HARD` in `system/omarchy-face-admin`).
+The debug trace now says which bound refused a press (`refused_hard`: over 0.60/0.55 from the first picture, `refused_chain`: over 0.56/0.40
 from the nearest stored one, `maxrun`: the longest run of good frames, `end=`: ok, run or time), so the journal answers it directly next time.
 
 ### Updating from 3.2.0 (to 3.2.1)

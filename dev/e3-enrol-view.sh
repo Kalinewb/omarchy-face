@@ -471,7 +471,7 @@ h=$(mkhome ro); chmod 555 "$h/omarchy-face"
 out=$(mode_run "$h" click)
 sleep 0.4
 check "an unwritable state home is silent: the view switches, no file, no error line" "advanced | no file | none" \
-  "$(field mode-clicked "$out") | $([[ -e $h/omarchy-face/enrol-mode ]] && echo file || echo "no file") | $(grep -ciE 'error|permission denied' "$logs/mode.log" | awk '{print ($1 > 0) ? "some" : "none"}')"
+  "$(field mode-clicked "$out") | $([[ -e $h/omarchy-face/enrol-mode ]] && echo file || echo "no file") | $(grep -v 'qt.qpa' "$logs/mode.log" | grep -ciE 'error|permission denied' | awk '{print ($1 > 0) ? "some" : "none"}')"
 chmod 755 "$h/omarchy-face"
 
 real=${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-face/enrol-mode

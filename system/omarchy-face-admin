@@ -2999,8 +2999,8 @@ DOT_FLOOR = ("left", "right")   # what a saved scan holds besides its centre
 # The TOP pose only (3.2.2): the user's own up pose sits 0.46-0.60 from their centre (live, 2026-11-14), over CHAIN and
 # near HARD, and was refused four times running. Left, right and bottom keep CHAIN and HARD. `chain` is the bound to the
 # nearest held template, `hard` the bound to the centre, as in `guard_verdict`; `hard` is never under `chain`.
-DOT_TOP_CHAIN = 0.60
-DOT_TOP_HARD = 0.62
+DOT_TOP_CHAIN = 0.56
+DOT_TOP_HARD = 0.60
 DOT_NOT_YOU_CAP = 5          # (chosen) presses of one session that may end `not_you`; the last one closes the session
 DOT_FAIL_CODES = ("black_frames", "too_dark", "multiple_faces", "no_face", "not_you", "too_far", "too_close",
                   "face_cut_off", "face_tilted", "timeout")
