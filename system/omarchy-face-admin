@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 3.2.0
+# omarchy-face-version: 3.2.1
 #
 # Every privileged thing Face does, behind one polkit action
 # (plan-engine.md §8.2, plan-merged.md §2.3).
@@ -2151,6 +2151,7 @@ def _allowed():
         "pose": lambda v: isinstance(v, str) and v in sw["DOT_POSES"],
         "poses": lambda v: (isinstance(v, list) and len(v) <= len(sw["DOT_POSES"])
                             and all(isinstance(x, str) and x in sw["DOT_POSES"] for x in v) and len(set(v)) == len(v)),
+        "short": lambda v: type(v) is int and 1 <= v <= 99,
         "good": lambda v: type(v) is int and 0 <= v <= 9, "need": lambda v: type(v) is int and 1 <= v <= 9,
     }
 
@@ -2255,7 +2256,11 @@ def judge_dot(pose, result, reference):
         return {"code": "timeout"}
     if result.get("ok") is not True:
         code = result.get("code")
-        return {"code": code if isinstance(code, str) and code in sw["DOT_FAIL_CODES"] else "timeout"}
+        code = code if isinstance(code, str) and code in sw["DOT_FAIL_CODES"] else "timeout"
+        short = result.get("short")
+        if code == "too_far" and type(short) is int and 1 <= short <= 99:
+            return {"code": code, "short": short}
+        return {"code": code}
     encoding, support = result.get("encoding"), result.get("support")
     if not _encoding_ok(encoding) or type(support) is not int or not sw["DOT_NEED"] <= support <= 99:
         return {"code": "timeout"}
@@ -2708,7 +2713,10 @@ def cmd_enroll_session(name):
                 judged = judge_dot(pose, outcome[1], reference)
                 if judged["code"] is not None:
                     drop = judged["code"]
-                    emit_checked({"event": "capture_failed", "code": drop})
+                    failure = {"event": "capture_failed", "code": drop}
+                    if "short" in judged:
+                        failure["short"] = judged["short"]
+                    emit_checked(failure)
                 else:
                     now = int(time.time())
                     if pose == "centre":
@@ -2926,7 +2934,8 @@ AMP_PITCH = 0.06             # (chosen) the weak axis: down saturates, up is twi
 NEUTRAL_FRAMES = 5
 
 # --- gates, per frame (all (chosen)) -------------------------------------------
-EYE_MIN, EYE_MAX = 40, 150   # pixels between the eye centres
+EYE_MIN, EYE_MAX = 36, 150   # pixels between the eye centres (3.2.1: EYE_MIN was 40; the user's own seat is 39-45, so
+                             # it sat on the limit and the centre press flapped. dev/SR1-notes.md, "Delta in 3.2.1")
 EDGE_MARGIN = 0.04          # share of the frame the face box keeps from each border
 DARK_MAX = 50                # percent, howdy's dark_threshold
 SATURATED_MAX = 6.0          # percent of pixels
@@ -3752,6 +3761,14 @@ def dot_why(seen):
     return worst
 
 
+def dot_short(eye):
+    """How many percent bigger a face of `eye` px between the eyes has to look to pass the centre's size gate
+    (EYE_MIN): 1 to 99, for the card to say it. A card needs a number only this coarse."""
+    if not finite(eye) or eye <= 0:
+        return 1
+    return int(min(99, max(1, round(100.0 * (EYE_MIN / float(eye) - 1.0)))))
+
+
 def dot_floor_ok(poses):
     """Can a scan with these poses be saved? The centre and DOT_FLOOR."""
     return "centre" in poses and all(p in poses for p in DOT_FLOOR)
@@ -4233,6 +4250,7 @@ def run_dot(pose, ceiling, need, reference, debug=False):
     seen = {"frames": 0, "strobe": 0, "black": 0, "dark": 0, "none": 0, "multi": 0,
             "closer": 0, "farther": 0, "edge": 0, "roll": 0, "stranger": 0}
     good, shown, agree, best = [], 0, 0, None
+    small_eyes, eye_lo, eye_hi = [], None, None     # eye px of the frames `closer` refused; the range of every measured face
     run, bad_run = 0, 0         # consecutive frames that reached the guard and passed it / failed it (changed_step's rule)
     last_lit, started, far = None, None, 0.0
     ok, ended_by_stranger = False, False
@@ -4274,6 +4292,9 @@ def run_dot(pose, ceiling, need, reference, debug=False):
                     points = [(p.x / factor, p.y / factor) for p in shape.parts()][:5]
                     measured = pose_indices(points)
                     eye = measured["eye"] if measured else 0.0
+                    if measured:
+                        eye_lo = eye if eye_lo is None else min(eye_lo, eye)
+                        eye_hi = eye if eye_hi is None else max(eye_hi, eye)
                     box = (rect.left() / factor, rect.top() / factor, rect.right() / factor, rect.bottom() / factor)
                 saturated = float(np.count_nonzero(gray_in >= 254)) * 100.0 / gray_in.size
                 roll = measured["roll"] if len(faces) == 1 and measured else 0.0
@@ -4286,6 +4307,8 @@ def run_dot(pose, ceiling, need, reference, debug=False):
                     seen["multi"] += 1
                 elif word in ("closer", "farther", "edge", "dark"):
                     seen[word] += 1
+                    if word == "closer":
+                        small_eyes.append(eye)
                 elif word == "hold":
                     seen["roll"] += 1       # frame_word says `hold` for roll or unsteadiness; only roll is passed here
                 elif word is None:
@@ -4324,17 +4347,22 @@ def run_dot(pose, ceiling, need, reference, debug=False):
         try:
             sys.stderr.write(
                 "debug dot pose=%s ok=%d agree=%d frames=%d strobe_off=%d black=%d dark=%d none=%d multi=%d "
-                "closer=%d farther=%d edge=%d roll=%d stranger=%d centre_max=%s t=%.1f why=%s\n" % (
+                "closer=%d farther=%d edge=%d roll=%d stranger=%d centre_max=%s eye_lo=%s eye_hi=%s t=%.1f why=%s\n" % (
                     pose, 1 if ok else 0, agree, seen["frames"], seen["strobe"], seen["black"], seen["dark"],
                     seen["none"], seen["multi"], seen["closer"], seen["farther"], seen["edge"], seen["roll"], seen["stranger"],
-                    "n/a" if centre is None else "%.2f" % far, now - started, why or "-"))
+                    "n/a" if centre is None else "%.2f" % far, "n/a" if eye_lo is None else int(round(eye_lo)),
+                    "n/a" if eye_hi is None else int(round(eye_hi)), now - started, why or "-"))
             sys.stderr.flush()
         except (OSError, ValueError):
             pass
     if ok:
         say({"result": {"ok": True, "encoding": best["encoding"], "support": min(agree, 99)}})
     else:
-        say({"result": {"ok": False, "code": why}})
+        result = {"ok": False, "code": why}
+        if why == "too_far" and small_eyes:
+            # how much bigger the face has to look, in percent, from the median of the frames that were too small
+            result["short"] = dot_short(median(small_eyes))
+        say({"result": result})
     return 0
 
 

@@ -617,3 +617,58 @@ passes everything, which the parent still stops (`admin-noguard`).
 4. The card: `RecordSession.qml` counts `not_you` failures and, at the cap, keeps the card open on `discarded` with the message (it exits to idle through the existing `onExit` path). Plugin-side only.
 5. Tests: e1 `dot-straddle:GAP:WOBBLE:SEED` (seeded, through `_identity`), 40 presses each at 0.46, 0.50 (at most 2 stored allowed; measured 0) and 0.30, 0.34 (40 of 40 required); the cap (five, and four then the owner);
    a tilted centre; an Advanced centre refused for a pose; a failed retake not stranding `done`; the empty reference (e1 unit, e0 child). e0 245, e1 225, e3 211.
+
+## Delta in 3.2.1 vs 5316e06 (3.2.0): the centre's size limit, and what the card says about it. What a security re-read must check (root code)
+
+Everything is in `system/omarchy-face-admin` (the other nine files of `system/` change only their version header; `install.sh` its version, pins and checksum file). The ball-on-the-screen
+change is plugin-side only (`BallLayer.qml`, `BallScreen.qml`, `ScanBall.qml`, `DotBall.qml`, `Service.qml`) and changes nothing the helper does.
+
+### 1. Why `EYE_MIN` moves (40 to 36), and how strong the evidence is
+
+**The failure.** Live 3.2.0 trace (journal, `debug dot`, 18:42-18:43): two centre presses ended `why=too_far` with `frames=62 strobe_off=31 closer=31`, that is EVERY lit frame under 40 px, and the third press
+(the user a little closer) closed in 0.4 s. It was not a flapping frame here and there: the seat was below the limit for whole presses.
+
+**The seat, measured (only live data has it).** The 3.1.7 live Advanced lap of 2026-11-14 10:11 (22 trace lines, `journalctl -t omarchy-face-sweep`): `centre_eye` 44; eye 39-45 through the lap
+(`eye_lo`/`eye_hi` 40-45 most seconds, single frames 39); `closer` rose to 25 of 159 lit frames (16%), all at 39 or 40. So the seat's median is about 42 and its lower edge touches 39-40, a
+limit of 40 sits INSIDE the seat's own spread.
+
+**What the recordings say.** `dev/measure-scale.py` and the eye table over the 8 recordings (`~/.cache/omarchy-face-enrol`): eye p50 per recording 61, 70, 67, 65, 65, 38 (the "far" one, 19-67),
+63, 59 (guided, 11-64). **None has frames at the 34-40 px seat** (these were taken close, laptop lifted; the 3.1.7 notes say so): the only frames at 30-55 are a handful of transitions, against
+references of another size. So the questions "how do same-person distances behave at eye 34-40 versus 40+" cannot be answered from real frames. Stated plainly: **no real same-person data exists at that size.**
+
+**A proxy, and its limit** (`eye3.py`/`eye4.py`, not committed: they read recordings): 120 frontal, lit, one-face frames from the recordings, each shrunk (INTER_AREA, centred on a 400x400 canvas of the frame's own mean)
+to a chosen eye distance and put through the helper's own detector (max_height 320, upsample 1), 5-point predictor and resnet encoder (jitter 1):
+- detection: 72/72 (and 120/120) at 19-37 px, 118/120 at 40 and 44, 117/120 at 50: no loss at the sizes in question;
+- the SAME frame at s px against itself at 44 px: p50/p90/max 0.22/0.26/0.30 at 19; 0.12/0.16/0.18 at 28; 0.08/0.12/0.20 at 34; 0.07/0.11/0.18 at 37; 0.06/0.09/0.13 at 40;
+- different frames of one session at one size against that size's medoid: p90 about 0.40, over CHAIN 3-11%, at every size from 28 to 50, no trend;
+- a centre taken at 44 or at 37, frames of the other sizes against it: over CHAIN 6-12% at every size, no trend.
+**The proxy under-predicts reality**: the real "far" recording's frames at 19 px sit 0.67-0.69 from its own centre at 65 px (3.1.7 notes), the synthetic 19 vs 44 gives 0.22 (19 vs 65 was not run). Real distant frames are blurrier and noisier than shrunk close ones. So the proxy says
+only: there is no cliff between 34 and 44 px in dlib's behaviour, the same-frame shift grows smoothly as the face shrinks (0.06, 0.07, 0.08, 0.12 at 40, 37, 34, 28 px). It does not say how a REAL 36 px face compares with a real 40 px one.
+
+**The decision: 36, the smallest change that clears the observed seat.** 10% below the seat's median (42), 3 px below its lowest observed frame (39); not lower, because lowering past the observed seat would be a bet on
+resolution effects nobody measured. If the new trace (below) shows `eye_lo` under 36 at the seat, 36 is not enough, and the answer is to ask the user to sit closer, not to lower it again. **The alternative, equally valid on this
+evidence: keep 40 and rely on the better message** ("Come a little closer (about N% bigger)"); the reviewer may prefer it, and reverting is `EYE_MIN = 40`, the two tests that name 36 and the version. I say this because the evidence for "no noisier" is the weak kind.
+
+### 2. What changes in the code (re-read all of it, it is short)
+
+- `EYE_MIN, EYE_MAX = 36, 150` (pure half). `EYE_MIN` is read in exactly three places: `frame_word` and `gate_failures` (`eye < EYE_MIN` is `closer`, used by the Advanced lap AND by the centre press through `dot_word`) and `lap2_want`
+  (`reference_eye * LAP2_FAR >= EYE_MIN`: lap 2 wants "farther" from a lap-1 eye of 45 px up instead of 50; lap 2 is not offered by the card). `EYE_MAX` is unchanged: nothing observed (seat 39-45, recordings 11-81) is near 150.
+- **A turned dot pose has no size gate** (3.2.0, unchanged), so only the centre press and the Advanced lap are affected.
+- **`scale_word`/`SCALE_MIN` (0.85) is unchanged**: the Advanced lap still refuses frames under 85% of the lap's own centre, so a centre at 36 px asks the rest of the lap for 31 px and up.
+- **New: `dot_short(eye)`** (pure) and a `short` key. When a centre press fails `too_far`, the child sends `{"ok": false, "code": "too_far", "short": N}` with N = whole percent the face must look bigger, from the median eye px of the frames `closer` refused (`small_eyes`);
+  `judge_dot` passes `short` through ONLY for `too_far` and only an int from 1 to 99 (anything else is dropped); the parent emits `capture_failed {code, short}`; `_allowed` gains `short` (int, 1 to 99, no bool). It leaks one small integer derived from the person's own distance
+  from the camera, to the person's own card.
+- **New in the debug line (`debug=true`)**: `eye_lo=` and `eye_hi=` (px, the smallest and largest eye distance of every measured one-face frame of the press, `n/a` if none). This is what turns "closer=31" into a number next time.
+- The card (plugin side): `Dot.why(code, short)` says "Come a little closer (about 14% bigger)".
+
+### 3. What a lower minimum does to Sudo and to strangers
+
+- **Sudo uses the centre templates only (`SUDO_POLICY = "centre"`, unchanged).** The centre is now allowed to be formed at 36 px where 40 was the floor, so the one template Sudo can use may be a lower-resolution picture than before. What I know: howdy compares at unlock
+  at whatever size the user sits, with its own threshold (0.35 certainty 3.5); at the seat (39-45) a centre formed at 36-40 is within the 0.85 ratio the scale guard uses and the proxy puts the size effect at 0.06-0.08. What I do NOT know: whether a stranger is accepted more
+  easily by a lower-resolution template. There is no stranger data in any recording, and the proxy cannot measure it. If the reviewer wants that closed, the numbers needed are the owner's genuine distances AND impostor distances (any second person, even a colleague at the desk) at a controlled 34, 36, 40 and 44 px, with howdy's compare, which cannot be done from here.
+- It does not change the identity rule (CHAIN 0.40, HARD 0.55, runs of three and five), the cap on `not_you` presses or the `done` floor.
+
+### 4. Tests
+
+e0 246 (EYE_MIN 36 at its edge, `dot_short`, lap 2's new numbers), e1: a centre at 37.8 px is taken at the first press; a centre at 31.5 and 34.7 px fails `too_far` with `short` 14 and 4; `short` is typed, dropped when wrong, and carried by `judge_dot` for `too_far` only; the debug line has `eye_lo`/`eye_hi`.
+The ball on the screen: e3 `dot`, `dot-screen` (the ball at the middle and four edges of five output sizes, 64 px in, whole; independent of the card; the window has no keyboard and no input and one is made for the card's output only), `dot-cap`, `dot-fail` (with `short`).

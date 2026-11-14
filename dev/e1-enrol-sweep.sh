@@ -394,6 +394,14 @@ retry "a room too dark (every frame lit, but dim)" dot-dim too_dark
 retry "a covered camera (nothing lit for over two seconds)" unlit-room black_frames
 retry "two faces" dot-two-faces multiple_faces
 retry "the centre with the face too small" dot-centre-far too_far
+reset_store
+scenario dot-centre-seat
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "eof")
+same "the user's seat (eyes 37.8 px: too small for the old limit of 40, fine for 36): the centre is taken at the first press, nothing failed" '[1,0]' "$(q "$out" '[len([e for e in evs if e.get("event") == "dotted"]), len([e for e in evs if e.get("event") == "capture_failed"])]')"
+reset_store
+scenario dot-centre-far dot-centre-just-small
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "awaitwhere {\"event\":\"capture_failed\"} 60" "send $DOTC" "sleep 1.5" "eof")
+same "a centre too small says how much bigger it must look: eyes 31.5 px need 14%, 34.7 px need 4% (the event carries 'short', an int, and only for too_far)" '[["too_far",14],["too_far",4]]' "$(q "$out" '[[e["code"], e.get("short")] for e in evs if e.get("event") == "capture_failed"]')"
 retry "the centre with the face too big" dot-centre-close too_close
 retry "the centre with the head tilted past ROLL_MAX (30 degrees; 3.2.0 as first built did not judge it)" dot-centre-roll face_tilted
 retry "nobody in view at the left press" dot-none no_face left
@@ -793,7 +801,7 @@ scenario dot-strobe-centre dot-strobe-left dot-stranger-left
 : >/run/omarchy-face-stub/logger.out
 out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"dotted\",\"pose\":\"left\"} 60" "send $DOTL" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
 same "dot scan with debug=true: one trace line per press (three presses, three lines), and the journal line is the child's own" '3' "$(grep -c '^debug dot ' /run/omarchy-face-stub/logger.out)"
-check "...each line is the pose, the result, the counts and the reason, in words and numbers only" bash -c "grep '^debug dot ' /run/omarchy-face-stub/logger.out | grep -qvE '^debug dot pose=(centre|left|top|right|bottom) ok=[01] agree=[0-9]+ frames=[0-9]+ strobe_off=[0-9]+ black=[0-9]+ dark=[0-9]+ none=[0-9]+ multi=[0-9]+ closer=[0-9]+ farther=[0-9]+ edge=[0-9]+ roll=[0-9]+ stranger=[0-9]+ centre_max=[0-9.a-z/]+ t=[0-9.]+ why=[a-z_-]+\$' && exit 1 || exit 0"
+check "...each line is the pose, the result, the counts and the reason, in words and numbers only" bash -c "grep '^debug dot ' /run/omarchy-face-stub/logger.out | grep -qvE '^debug dot pose=(centre|left|top|right|bottom) ok=[01] agree=[0-9]+ frames=[0-9]+ strobe_off=[0-9]+ black=[0-9]+ dark=[0-9]+ none=[0-9]+ multi=[0-9]+ closer=[0-9]+ farther=[0-9]+ edge=[0-9]+ roll=[0-9]+ stranger=[0-9]+ centre_max=[0-9.a-z/]+ eye_lo=[0-9a-z/]+ eye_hi=[0-9a-z/]+ t=[0-9.]+ why=[a-z_-]+\$' && exit 1 || exit 0"
 same "...the strobe's off frames were counted and skipped (about as many as the lit ones), and the stranger's press names its reason" 'true' "$(python3 -c "
 import re
 rows = [dict(re.findall(r'(\w+)=(\S+)', l)) for l in open('/run/omarchy-face-stub/logger.out') if l.startswith('debug dot ')]
@@ -1064,6 +1072,11 @@ check("a track or swept that carries `skipped` (Simple's, gone) is dropped", t(d
       and t({"event": "swept", "mode": "advanced", "lap": 1, "filled": [0], "skipped": [], "centreHeld": True, "kept": 3}) is None)
 check("capture_failed with each of the twelve codes passes",
       all(t({"event": "capture_failed", "code": c}) for c in ns["pure"]()["CODES"]))
+check("capture_failed with short passes (an int from 1 to 99), and without it", t({"event": "capture_failed", "code": "too_far", "short": 14}) is not None and t({"event": "capture_failed", "code": "too_far"}) is not None)
+for name, doc in [("short 0", {"event": "capture_failed", "code": "too_far", "short": 0}), ("short 100", {"event": "capture_failed", "code": "too_far", "short": 100}),
+                  ("a bool short", {"event": "capture_failed", "code": "too_far", "short": True}), ("a float short", {"event": "capture_failed", "code": "too_far", "short": 5.0}),
+                  ("a string short", {"event": "capture_failed", "code": "too_far", "short": "5"})]:
+    check(name + " is dropped", t(doc) is None)
 check("dotting, dot and dotted pass", all(t(d) is not None for d in (
     {"event": "dotting", "pose": "left", "need": 3}, {"event": "dot", "pose": "centre", "good": 2, "need": 3},
     {"event": "dotted", "pose": "bottom", "poses": ["centre", "left", "bottom"], "kept": 3})))
@@ -1141,6 +1154,9 @@ check("judge_dot refuses a pose 0.6 from the centre (over HARD) although a held 
       jd("top", ok_press([0.0, 0.0, 0.6] + [0.0] * 125), [ZERO0, [0.0, 0.0, 0.3] + [0.0] * 125])["code"] == "not_you")
 check("judge_dot keeps a pose 0.5 from the centre when a held pose is 0.3 from it (chain, inside HARD)",
       jd("top", ok_press([0.0, 0.0, 0.5] + [0.0] * 125), [ZERO0, [0.0, 0.0, 0.3] + [0.0] * 125])["code"] is None)
+check("judge_dot carries 'short' for too_far only, and only an int from 1 to 99", jd("centre", {"ok": False, "code": "too_far", "short": 14}, []) == {"code": "too_far", "short": 14}
+      and jd("centre", {"ok": False, "code": "no_face", "short": 14}, []) == {"code": "no_face"} and jd("centre", {"ok": False, "code": "too_far", "short": 100}, []) == {"code": "too_far"}
+      and jd("centre", {"ok": False, "code": "too_far", "short": True}, []) == {"code": "too_far"} and jd("centre", {"ok": False, "code": "too_far"}, []) == {"code": "too_far"})
 check("judge_dot refuses a pose press with an empty reference (nothing to compare with), but takes the centre's", jd("left", ok_press(at(0.1)), [])["code"] == "timeout"
       and jd("centre", ok_press(at(0.1)), [])["code"] is None)
 check("judge_dot refuses a NaN encoding", jd("centre", ok_press([float("nan")] + [0.0] * 127), [])["code"] == "timeout")

@@ -373,7 +373,8 @@ def test_gates():
     check("a good frame passes", word() is None)
     check("no face is 'searching'", word(faces=0) == "searching")
     check("two faces is 'multiple'", word(faces=2) == "multiple")
-    check("eye 39 closer, 40 passes", (word(eye=39), word(eye=40)) == ("closer", None), str((word(eye=39), word(eye=40))))
+    check("EYE_MIN is 36 (3.2.1; it was 40, and the user's own seat is 39-45): eye 35 closer, 36 passes, 40 passes",
+          sw.EYE_MIN == 36 and (word(eye=35), word(eye=36), word(eye=40)) == ("closer", None, None), str((word(eye=35), word(eye=36))))
     check("eye 150 passes, 151 farther", (word(eye=150), word(eye=151)) == (None, "farther"))
     margin = 0.04 * 400
     check("a box exactly 4% from each border passes",
@@ -447,9 +448,9 @@ def test_gates():
           sw.frame_word(1, 30, (0, 0, 10, 10), (400, 400), 60.0, 7.0, 0.4, 30.0, False) == "closer")
 
     check("lap 2 wants farther from a 100 px lap 1 (80 px)", sw.lap2_want(100) == "far")
-    check("lap 2 wants closer when farther would fall under the gate", sw.lap2_want(45) == "near")
-    check("farther fits from 50 px up (50 x 0.8 = 40); below that lap 2 asks for closer",
-          (sw.lap2_want(50), sw.lap2_want(49)) == ("far", "near"))
+    check("lap 2 wants closer when farther would fall under the gate", sw.lap2_want(40) == "near")
+    check("farther fits from 45 px up (45 x 0.8 = 36); below that lap 2 asks for closer",
+          (sw.lap2_want(45), sw.lap2_want(44)) == ("far", "near"))
     check("lap 2 'farther' until eye <= 0.8 x lap 1", (sw.lap2_word(81, 100, "far"), sw.lap2_word(80, 100, "far")) == ("farther", None))
     check("lap 2 'closer' until eye >= 1.25 x lap 1", (sw.lap2_word(124, 100, "near"), sw.lap2_word(125, 100, "near")) == ("closer", None))
 
@@ -1036,6 +1037,11 @@ def test_dot():
     check("the need fits the child's argument bound (1..9), a press fits inside the store's support bound (2..99), and Simple's stored cap holds five",
           1 <= sw.DOT_NEED <= 9 and 2 <= sw.DOT_NEED <= 99 and sw.SIMPLE_MAX_STORED >= 5)
     check("a press cannot out-wait its own ceiling: DOT_SECONDS is short (under 10 s) and positive", 0 < sw.DOT_SECONDS < 10)
+
+    # --- dot_short: how much bigger a too-small face has to look (3.2.1)
+    ds = sw.dot_short
+    check("dot_short: 1 to 99 percent bigger to reach EYE_MIN: 33 px needs about 9%, 30 px 20%, 35 px 3%, 18 px 100 -> 99; junk is 1",
+          (ds(33), ds(30), ds(35), ds(18), ds(sw.EYE_MIN - 0.01)) == (9, 20, 3, 99, 1) and ds(0) == 1 and ds(float("nan")) == 1 and ds(-5) == 1)
 
     # --- dot_word: the gates
     dw = sw.dot_word

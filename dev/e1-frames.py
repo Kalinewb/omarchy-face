@@ -191,6 +191,9 @@ SCENARIOS = {
     "dot-dim": lambda: build([dict(n=120, kind="dim")]),
     "dot-two-faces": lambda: build([dict(n=120, faces=2)]),
     "dot-centre-far": lambda: build([dict(n=120, scale=0.5)]),
+    # the user's own seat (3.2.1): eyes 37.8 px (scale 0.6), under the old EYE_MIN 40 and over the new 36; and one just under it (34.7 px)
+    "dot-centre-seat": lambda: build([dict(n=40, scale=0.6)]),
+    "dot-centre-just-small": lambda: build([dict(n=120, scale=0.55)]),
     "dot-centre-close": lambda: build([dict(n=120, scale=2.6)]),
     # two good frames and then nobody: not enough, so the ring must not close
     "dot-two-good": lambda: build([dict(n=2, travel=0), dict(n=118, faces=0, travel=0)]),

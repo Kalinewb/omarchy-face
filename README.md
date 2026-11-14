@@ -195,7 +195,7 @@ sudo /usr/bin/bash -c 'PATH=/usr/bin; set -o pipefail; t=$(mktemp -d) || exit 1
     bash "$t/install.sh" "$1" "$2"
   }
   run "$@"; s=$?; rm -rf -- "$t"; exit $s' \
-  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.2.0
+  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.2.1
 ```
 
 What it does, from the button or from a terminal: root copies the installer out of the
@@ -284,6 +284,33 @@ command puts it back byte for byte, moves the folders back and restarts the shel
 A git checkout goes back to the commit it came from (`v2.2.0` when the system files are
 already 3.0.0). A copy installed with `./install.sh` has no commit to go back to: run
 `git checkout v2.2.0 && ./install.sh` in your checkout afterwards.
+
+### Updating from 3.2.0 (to 3.2.1)
+
+Two things, one of them in root code (so Setup offers **Update Face's system files**, one password).
+
+**The ball is on the screen now.** In 3.2.0 the five stations were drawn inside the small card at the top of the screen, so looking
+at "left" moved your eyes, not your head. Now the ball goes to the real screen: the middle of the screen for the first picture,
+then the left edge, the top edge, the right edge and the bottom edge of the screen the card is on, 64 pixels in from the physical
+edge, so you have to turn your head towards the side of the screen. It is a second, see-through window the size of that screen,
+above the card, that takes no clicks and no keys (Space and Esc are still the card's); the other screens only keep their dimming.
+The card shrinks to what has to be read from close up: the camera's picture, the reason a press failed, the Space key and Cancel.
+The top of the screen is a few centimetres below the camera, so "look up" is a smaller turn than left or right; that is the laptop,
+not the scan. Not tried on a real screen by its author (the tests draw it at five output sizes offscreen).
+
+**"Come a little closer" at the first picture.** Your live trace had two first presses fail with every lit frame too small and the
+third work at once: your usual seat has the eyes about 39-45 pixels apart in the camera's picture, and the limit was 40, so it flapped.
+The limit is **36** now (`EYE_MIN`), and the card says how much bigger your face has to look ("Come a little closer (about 14%
+bigger)") instead of only asking. The tradeoff, honestly: the evidence for lowering it is your own seat (39-45, median about 42, in one
+live lap), and the evidence that a smaller face is no noisier is weak. Your recordings have no frames at 34-40 pixels at all, shrinking
+your own close-up frames to those sizes moves the descriptor by only 0.06-0.12 (and detection still finds the face every time), but
+the same method understates what the real distant recording shows (about 0.2 where the real one showed 0.67, at 19 pixels), so it
+is a lower bound and not a measurement. A face 10% smaller makes the stored picture a little lower in resolution; for a stranger
+the effect on false accepts at that size was **not measured** (no stranger data). Sudo uses the first picture only, so it is the one
+place a lower minimum could weaken: the first picture can now be formed at 36 pixels instead of 40. Face still asks for it, and
+unlocking compares at whatever size you sit; if you would rather keep 40, say so and it goes back. The debug trace now prints
+`eye_lo` and `eye_hi` for every press, so after one scan the journal shows how big your face really was
+(`journalctl -t omarchy-face-sweep`, with `debug=true` in `/etc/omarchy-face/config`).
 
 ### Updating from 3.1.x (to 3.2.0)
 
