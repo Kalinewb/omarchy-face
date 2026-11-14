@@ -79,6 +79,7 @@ Item {
   readonly property real seedWidthFraction: 0.35
 
   function activate() { enrol.activate() }
+  function capture() { enrol.capture() }
   function isRecorded(label) { return enrol.isRecorded(label) }
   function isCapturedNow(label) { return enrol.isCapturedNow(label) }
   function appearanceMark(label) { return enrol.appearanceMark(label) }

@@ -125,6 +125,8 @@ PanelWindow {
 
     Keys.onEscapePressed: card.requestClose()
     Keys.onReturnPressed: island.activate()
+    // Space is the dot scan's capture; a key held down is one press, not a stream of them.
+    Keys.onSpacePressed: function (event) { if (!event.isAutoRepeat) island.capture(); event.accepted = true }
 
     ScanIsland {
       id: island

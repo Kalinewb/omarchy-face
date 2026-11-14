@@ -1,5 +1,6 @@
 import QtQuick
 import "common/enrolring.js" as Ring
+import "common/dotscan.js" as Dot
 
 // What the scan will ask, shown while nothing is running (the camera is off until
 // Start): a calm head silhouette in the circle that holds still at the centre, then
@@ -21,17 +22,23 @@ Item {
   // The moment in the loop, in seconds.
   property real t: 0
 
-  readonly property var frame: Ring.demoFrame(demo.mode, demo.t)
-  readonly property var bins: frame.bins
-  readonly property var target: frame.target
-  readonly property real centre: frame.centre
+  // Simple's frame is the dot scan's (common/dotscan.js: the ball, the ring, the head turning to it);
+  // Advanced's is the ring's.
+  readonly property bool dot: demo.mode !== "advanced"
+  readonly property var frame: demo.dot ? Dot.demoFrame(demo.t) : Ring.demoFrame(demo.mode, demo.t)
+  readonly property var bins: demo.dot ? [] : frame.bins
+  readonly property var target: demo.dot ? null : frame.target
+  readonly property real centre: demo.dot ? 0 : frame.centre
   readonly property string caption: frame.caption
+  readonly property real seconds: demo.dot ? Dot.demoSeconds() : Ring.demoSeconds(demo.mode)
+  // The head is drawn for the ring's 160 px circle; the dot scan's is smaller
+  property real headScale: 1
 
   NumberAnimation on t {
     id: clock
     from: 0
-    to: Ring.demoSeconds(demo.mode)
-    duration: Ring.demoSeconds(demo.mode) * 1000
+    to: demo.seconds
+    duration: demo.seconds * 1000
     loops: Animation.Infinite
     running: demo.running
   }
@@ -47,6 +54,7 @@ Item {
     readonly property real pitch: demo.frame.pitch
     width: 84
     height: 104
+    scale: demo.headScale
 
     Rectangle {
       id: skull

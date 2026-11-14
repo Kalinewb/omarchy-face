@@ -50,6 +50,8 @@ Item {
   property var irCrop: ({ x: 0.05, y: 0.05, w: 0.9, h: 0.9 })
 
   readonly property bool legacy: !view.session || !view.session.scan || view.session.legacy
+  // Simple is the dot scan (DotCard.qml); Advanced keeps the ring.
+  readonly property bool dot: !view.legacy && view.mode === "simple"
   readonly property string phase: view.session ? view.session.phase : "idle"
   readonly property string mode: view.session ? view.session.activeMode : "simple"
 
@@ -77,10 +79,14 @@ Item {
   function actionText() { return legacyLoader.item ? legacyLoader.item.actionText() : "" }
   function actionNote() { return legacyLoader.item ? legacyLoader.item.actionNote() : "" }
 
+  // Space: one press of the dot scan, when the card is showing it.
+  function capture() { if (view.dot) dotCard.capture() }
+
   // Return: Start, Done, or Try again, whichever the view is offering.
   function activate() {
     if (!view.session) return
     if (view.legacy) { if (legacyLoader.item) legacyLoader.item.activate(); return }
+    if (view.dot) { dotCard.activate(); return }
     var s = view.session
     if (view.phase === "idle") s.start()
     else if (s.scanState === "swept") s.done()
@@ -88,11 +94,10 @@ Item {
     else if (s.scanState === "running" && s.canFinish) s.finish()
   }
 
-  implicitHeight: view.legacy ? (legacyLoader.item ? legacyLoader.item.implicitHeight : 0) : col.implicitHeight
+  implicitHeight: view.legacy ? (legacyLoader.item ? legacyLoader.item.implicitHeight : 0)
+                              : (view.dot ? dotCard.implicitHeight : col.implicitHeight)
 
-  // --- the line (section 3, Text and the outcome list) ----------------------------
-  property bool skipNote: false
-
+  // --- the line (section 3, Text and the outcome list): Advanced's. Simple's is DotCard.qml's ---------
   readonly property var gateText: ({
     "over": "A little less",
     "edge": "Centre your face",
@@ -103,14 +108,6 @@ Item {
     "other": "Face the circle and hold still."
   })
 
-  function prompt(bin) {
-    if (bin === 9) return "Turn your head to the left"
-    if (bin === 3) return "Turn your head to the right"
-    if (bin === 0) return "Tilt your head up a little"
-    if (bin === 6) return "Tilt your head down a little"
-    return "Move your head slowly to complete the circle."
-  }
-
   function lineText() {
     var s = view.session
     if (!s) return ""
@@ -120,41 +117,17 @@ Item {
     if (ph === "authorising") return "Waiting for authorisation…"
     if (ph === "closing") return "Saving…"
     if (ph === "verdict") return s.failText[s.failCode] !== undefined ? s.failText[s.failCode] : "That did not work"
-    if (s.scanState === "swept") {
-      if (s.activeMode === "advanced")
-        return s.filled.length >= 12 ? "The circle is complete." : "All set."
-      return s.kept >= 4 ? "All set." : "Enough to save."
-    }
-    // The skip note outranks the two words a far-off turn keeps saying ("A little less", and the guard's
-    // own); a gate that needs the person to do something else (centre, closer, only you) still wins.
-    if (view.skipNote && (s.trackState === "over" || s.trackState === "other")) return "We will skip that one"
+    if (s.scanState === "swept")
+      return s.filled.length >= 12 ? "The circle is complete." : "All set."
+    // a gate that needs the person to do something (centre, closer, only you) is said as it is
     if (view.gateText[s.trackState] !== undefined) return view.gateText[s.trackState]
-    if (view.skipNote) return "We will skip that one"
     if (ph === "centre") return s.centre > 0 ? "Hold still" : "Look straight at the circle"
     var bin = s.target
-    var held = typeof bin === "number" && Number(s.bins[bin]) > 0
-    if (s.activeMode === "advanced") {
-      if (Ring.filledCount(Ring.targetsFor("advanced"), s.bins) >= 12) return "The circle is complete."
-      return held ? "Hold still" : "Move your head slowly to complete the circle."
-    }
-    if (typeof bin !== "number") return "Hold still"
-    return held ? "Hold still" : view.prompt(bin)
+    if (Ring.filledCount(Ring.targetsFor("advanced"), s.bins) >= 12) return "The circle is complete."
+    return typeof bin === "number" && Number(s.bins[bin]) > 0 ? "Hold still" : "Move your head slowly to complete the circle."
   }
 
   readonly property string line: view.lineText()
-
-  Connections {
-    target: view.session
-    function onSkippedChanged() {
-      if (view.session && view.session.skipped.length > view.lastSkipped) {
-        view.skipNote = true
-        skipTimer.restart()
-      }
-      view.lastSkipped = view.session ? view.session.skipped.length : 0
-    }
-  }
-  property int lastSkipped: 0
-  Timer { id: skipTimer; interval: 2500; onTriggered: view.skipNote = false }
 
   // The circle shakes on the outcomes that shake (the outcome list): +6, -6, +3, 0.
   property real shakeX: 0
@@ -213,13 +186,31 @@ Item {
   // The idle demo (EnrolDemo.qml) plays only while the card is idle, on screen and
   // motion is allowed; Start stops it, and with reduced motion there is the static
   // glyph and one caption line instead.
-  readonly property bool demoOn: view.phase === "idle" && !view.legacy && !view.reduced && view.live
-  readonly property string staticCaption: view.mode === "advanced" ? "Then turn slowly all the way round."
-                                                                   : "Then turn left, right, up and down."
+  readonly property bool demoOn: view.phase === "idle" && !view.legacy && !view.dot && !view.reduced && view.live
+  readonly property string staticCaption: "Then turn slowly all the way round."
+
+  // --- Simple: the dot scan ---------------------------------------------------------------------
+  DotCard {
+    id: dotCard
+    objectName: "dotCard"
+    visible: view.dot
+    width: view.width
+    session: view.session
+    fg: view.fg
+    secondary: view.secondary
+    accent: view.accent
+    urgent: view.urgent
+    fontFamily: view.fontFamily
+    reduced: view.reduced
+    live: view.live
+    notice: view.notice
+    previewShown: previewLoader.active && view.dot
+    onCloseRequested: view.closeRequested()
+  }
 
   Column {
     id: col
-    visible: !view.legacy
+    visible: !view.legacy && !view.dot
     width: view.width
     spacing: Style.space(8)
 
@@ -294,19 +285,6 @@ Item {
           running: view.demoOn
           foreground: view.fg
           secondary: view.secondary
-        }
-
-        // The RGB preview, mirrored, in the circle. The Loader exists, and so
-        // does the camera, only while `previewOn` and a device is named.
-        Loader {
-          id: previewLoader
-          objectName: "previewLoader"
-          anchors.centerIn: parent
-          width: parent.width
-          height: parent.height
-          scale: 1 / Math.min(view.irCrop.w, view.irCrop.h)
-          active: view.previewOn && view.previewDevice !== "" && !view.legacy
-          sourceComponent: view.previewComponent
         }
 
         // Completion draws a check in 180 ms; there is no celebration.
@@ -447,53 +425,18 @@ Item {
         onClicked: view.session.tryAgain()
       }
 
-      // After a lap that saved only a little (three templates, under four): one quiet
-      // way to take the lap again. It is a new lap 1, not an addition: root replaces the
-      // appearance's pending set with the new one (hence "Scan again", not "Add more").
-      // Same session and mode, no second password; the one way out of a running scan is Cancel
-      // ("Start over" was taken out of the live view on the user's request, 2026-11-03).
-      EnrolLink {
-        id: moreLink
-        objectName: "moreLink"
+      // Simple or Advanced, while idle: both shown, the one in use filled (common/EnrolMode.qml).
+      EnrolMode {
+        id: modeChoice
+        objectName: "modeChoiceAdv"
         anchors.horizontalCenter: parent.horizontalCenter
-        text: "Scan again"
-        quiet: true
-        quietColor: view.secondary
-        fontFamily: view.fontFamily
-        fontSize: Style.font.caption
-        visible: links.scanLive && links.scanState === "swept" && view.session.kept < 4
-        onClicked: view.session.startOver()
-      }
-
-      // The mode: the quietest line, in `idle` only, naming the OTHER mode, so it
-      // shows what pressing it does while the ring already shows which is on.
-      EnrolLink {
-        id: modeLink
-        objectName: "modeLink"
-        anchors.horizontalCenter: parent.horizontalCenter
-        text: view.mode === "simple" ? "Advanced" : "Simple setup"
-        quiet: true
-        quietColor: view.secondary
-        fontFamily: view.fontFamily
-        fontSize: Style.font.caption
         visible: view.phase === "idle" && !!view.session && view.session.simpleAllowed
-        onClicked: view.session.setMode(view.mode === "simple" ? "advanced" : "simple")
-      }
-
-      // One line, pulled by hover or keyboard focus (explanation is pulled).
-      Text {
-        id: modeHint
-      objectName: "modeHint"
-        textFormat: Text.PlainText
-        anchors.horizontalCenter: parent.horizontalCenter
-        visible: modeLink.visible
-        opacity: modeLink.hot || modeLink.activeFocus ? 1 : 0
-        text: view.mode === "simple" ? "All twelve positions in any order"
-                                     : "Five positions, one at a time, about 15 seconds"
-        color: view.secondary
-        font.family: view.fontFamily
-        font.pixelSize: Style.font.caption
-        Behavior on opacity { NumberAnimation { duration: view.reduced ? 0 : 90 } }
+        mode: view.mode
+        accentColor: view.accent
+        quietColor: view.secondary
+        foregroundColor: view.fg
+        fontFamily: view.fontFamily
+        onChosen: function (word) { view.session.setMode(word) }
       }
     }
 
@@ -508,5 +451,19 @@ Item {
       horizontalAlignment: Text.AlignHCenter
       wrapMode: Text.WordWrap
     }
+  }
+
+  // The RGB preview, mirrored, in the circle (the ring's in Advanced, the stage's in Simple). The
+  // Loader exists, and so does the camera, only while `previewOn` and a device is named.
+  Loader {
+    id: previewLoader
+    objectName: "previewLoader"
+    parent: view.dot ? dotCard.circle : ring.circle
+    anchors.centerIn: parent
+    width: parent ? parent.width : 0
+    height: parent ? parent.height : 0
+    scale: 1 / Math.min(view.irCrop.w, view.irCrop.h)
+    active: view.previewOn && view.previewDevice !== "" && !view.legacy
+    sourceComponent: view.previewComponent
   }
 }

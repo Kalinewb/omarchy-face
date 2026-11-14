@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import "common/dotscan.js" as Dot
 
 // One `enroll-session`, as a state machine with no window around it
 // (plan-merged.md §2.4, plan-gui.md §5.3).
@@ -48,8 +49,10 @@ Item {
   //   verdict      what came back, with Again / Done
   //   closing      the session is finishing; the card is on its way out
   // The scan (`scan` on, helper 3.1.0 or later): `idle` in place of `framing`,
-  //   centre       the middle is the first target
-  //   lap1         Simple's whole target sequence, or Advanced's first lap
+  //   centre       Advanced: the middle is the first target
+  //   lap1         Advanced's first lap
+  //   dot          Simple (3.2.0): the ball, from the centre to the last pose; what is
+  //                taken and what the ball waits for are `dotHeld` and `dotState`
   // and `verdict` is a lap that ended in failure, with Try again. `swept` is not a
   // phase: the view stays in lap1 with the ring full and only its links change.
   property string phase: "framing"
@@ -119,6 +122,32 @@ Item {
   property var bins: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
   property var skipped: []
   property bool canFinish: false
+
+  // --- the dot scan (Simple, 3.2.0) -------------------------------------------------
+  // The helper listed `dot`. The ball is on the first pose it does not hold; Space (`capture`)
+  // sends ONE press for it and everything after that is the helper's word: `dot` counts the
+  // frames it has gathered, `dotted` says the pose is taken (and which are), `capture_failed`
+  // says why it was not. Nothing here decides whether a face is good.
+  //   waiting    the ball is on its pose, the ring breathes; Space presses
+  //   capturing  a press is running; the ring closes in, never past what the helper has gathered
+  //   landed     the pose was taken: the ring is closed for a beat, then the ball moves on
+  //   done       all five are held
+  property bool dotFlow: false
+  property string dotState: "waiting"
+  property var dotHeld: []
+  property int dotGood: 0
+  property int dotNeed: 3
+  // The helper's code for why the last press did not work, "" when it did or none was made
+  property string dotWhy: ""
+  // The pose the last `dotted` took: the ball stays on it for a beat before it moves on
+  property string dotLast: ""
+  property real dotPressedAt: 0
+  property var dotPending: null
+  readonly property string dotPose: session.dotFlow ? Dot.nextPose(session.dotHeld) : ""
+  // The card's Save: the centre, left and right are held (the helper's own floor)
+  readonly property bool dotCanSave: session.dotFlow && Dot.canSave(session.dotHeld)
+  readonly property bool dotAllHeld: session.dotFlow && session.dotHeld.length >= Dot.POSES.length
+
   property var targets: []
   property var filled: []
   property int kept: 0
@@ -138,7 +167,7 @@ Item {
   // a verdict, closing or a failure (plan-face-enroll.md 6a.1). A session that
   // is not the scan keeps the card's old behaviour (the card decides).
   readonly property bool previewWanted: !scan
-      || phase === "authorising" || phase === "centre" || phase === "lap1" || phase === "lap2"
+      || phase === "authorising" || phase === "centre" || phase === "lap1" || phase === "lap2" || phase === "dot"
       || phase === "trial" || phase === "countdown" || phase === "capturing"
 
   // --- the mode: Simple or Advanced, remembered ----------------------------------
@@ -307,9 +336,17 @@ Item {
       // record itself is not written until `done`, so this is still a session
       // that can be discarded without trace.
       if (session.isNew) session.send({cmd: "create", label: session.label})
-      // The scan only on a helper that says it knows `sweep`: an older one would
-      // ignore the verb and the view would wait for ever (section 6).
-      if (session.scan && session.listsVerb(event.verbs, "sweep")) {
+      // The scan only on a helper that says it knows the verb: an older one would
+      // ignore it and the view would wait for ever (section 6). Simple is the dot scan
+      // (`dot`, 3.2.0), Advanced the sweep.
+      if (session.scan && session.activeMode === "simple") {
+        if (session.listsVerb(event.verbs, "dot")) {
+          session.sweepFlow = true
+          session.dotFlow = true
+          session.startDots()
+          return
+        }
+      } else if (session.scan && session.listsVerb(event.verbs, "sweep")) {
         session.sweepFlow = true
         session.sendSweep()
         return
@@ -385,6 +422,10 @@ Item {
     if (session.scan) {
       // Back to the start, with the reason on it and the circle shaking.
       session.sweepFlow = false
+      session.dotFlow = false
+      session.dotState = "waiting"
+      landTimer.stop()
+      beatTimer.stop()
       session.legacy = false
       session.scanState = "ready"
       session.failSerial += 1
@@ -466,6 +507,7 @@ Item {
   // replaces the pending set (root's rule). Same session, same mode, no second
   // password. There is no way to restart a lap that is running: Cancel is EOF.
   function startOver() {
+    if (session.dotFlow) { if (session.dotAllHeld) session.startDots(); return }
     if (session.sweepFlow && session.scanState === "swept") session.sendSweep()
   }
 
@@ -488,8 +530,103 @@ Item {
     return true
   }
 
+  // --- the dot scan's verbs and events --------------------------------------------------
+
+  // The ball at the centre, nothing held. No helper message: the first press (Space) sends the
+  // centre, and a centre that is taken replaces whatever the helper still holds (a retake).
+  function startDots() {
+    landTimer.stop()
+    beatTimer.stop()
+    session.clearRing()
+    session.message = ""
+    session.verdict = ""
+    session.failCode = ""
+    session.captures = 0
+    session.capturedLabels = session.capturedLabels.filter(function (l) { return l !== session.appearance })
+    session.dotHeld = []
+    session.dotWhy = ""
+    session.dotGood = 0
+    session.dotPending = null
+    session.dotState = "waiting"
+    session.scanState = "running"
+    session.phase = "dot"
+    session.lastAttempt = session.appearance
+  }
+
+  // Space: one press, for the pose the ball is on. Only while the ball waits, so a second Space
+  // (or a held key) during a press does nothing; the helper refuses it as well.
+  function capture() {
+    if (!session.dotFlow || session.phase !== "dot" || session.dotState !== "waiting" || !session.proc) return
+    var pose = Dot.nextPose(session.dotHeld)
+    if (pose === "") return
+    session.dotWhy = ""
+    session.dotGood = 0
+    session.dotState = "capturing"
+    session.dotPressedAt = Date.now()
+    session.lastAttempt = session.appearance
+    session.send({cmd: "dot", appearance: session.appearance, pose: pose})
+  }
+
+  // `dotted` ends a press well, and it may arrive before the ring has had its second: the ring
+  // is what the person sees, so the pose is applied when it has closed.
+  function onDotEvent(event) {
+    if (event.event === "dotting") {
+      session.dotNeed = Number(event.need) || 3
+      return true
+    }
+    if (event.event === "dot") {
+      if (session.dotState === "capturing") session.dotGood = Number(event.good) || 0
+      return true
+    }
+    if (event.event === "dotted") {
+      session.dotPending = event
+      var wait = Dot.RING_MS - (Date.now() - session.dotPressedAt)
+      if (wait > 0) { landTimer.interval = wait; landTimer.restart() }
+      else session.applyDotted()
+      return true
+    }
+    if (event.event === "capture_failed") {
+      var code = String(event.code || "timeout")
+      // A press that did not work: the ring opens again and the line says why. Anything the
+      // helper refuses at another moment (a Save before its floor) is not a press.
+      if (session.dotState === "capturing") {
+        session.dotWhy = code
+        session.dotState = "waiting"
+        session.failSerial += 1
+      }
+      return true
+    }
+    return event.event === "aborted"
+  }
+
+  function applyDotted() {
+    var event = session.dotPending
+    session.dotPending = null
+    if (!event) return
+    session.dotHeld = event.poses || []
+    session.dotLast = String(event.pose || "")
+    session.dotGood = session.dotNeed
+    session.dotWhy = ""
+    session.kept = Number(event.kept) || 0
+    session.captures = 1
+    session.capturedLabels = session.hasCaptured(session.appearance)
+                             ? session.capturedLabels : session.capturedLabels.concat([session.appearance])
+    session.scanState = Dot.canSave(session.dotHeld) ? "swept" : "running"
+    session.dotState = "landed"
+    beatTimer.restart()
+  }
+
+  Timer { id: landTimer; onTriggered: session.applyDotted() }
+  // The ring stays closed for a beat before the ball moves on
+  Timer {
+    id: beatTimer
+    interval: 320
+    onTriggered: if (session.dotState === "landed") session.dotState = session.dotAllHeld ? "done" : "waiting"
+  }
+
   // The scan's events. True when taken.
   function onScanEvent(event) {
+    if (session.dotFlow) return session.onDotEvent(event)
     if (event.event === "sweeping") {
       session.targets = event.targets || []
       return true
@@ -575,6 +712,8 @@ Item {
   // by the user, so closing its stdin is what ends it -- and before `done` that
   // means nothing was written (plan-merged.md §2 rule 7, §2.4).
   function discard() {
+    landTimer.stop()
+    beatTimer.stop()
     countdownTimer.stop()
     idleTimer.stop()
     lifeTimer.stop()

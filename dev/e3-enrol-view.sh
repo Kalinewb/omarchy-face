@@ -102,11 +102,17 @@ echo "${DIM}shell: $SHELL_PATH/shell   plugin: $REPO   no window, no camera${RES
 # =============================================================================
 
 step "static checks on the files"
-view_files=(EnrolView.qml EnrolRing.qml common/EnrolLink.qml common/enrolring.js)
+view_files=(EnrolView.qml EnrolRing.qml DotCard.qml DotStage.qml common/EnrolLink.qml common/EnrolMode.qml common/enrolring.js common/dotscan.js)
 check "no 'Accessibility options' anywhere in the QML" "0" \
   "$(cd "$REPO" && cat ./*.qml common/*.qml | grep -ci 'accessibility options')"
 check "the new files hard-code no colour (hex, rgba or a colour name) outside comments" "" \
-  "$(cd "$REPO" && for f in EnrolView.qml EnrolRing.qml common/EnrolLink.qml; do sed -E 's#//.*$##' "$f" | grep -nE '#[0-9a-fA-F]{3,8}\b|Qt\.rgba\(|"(white|black|red|green|blue|gray|grey)"' | sed "s#^#$f:#"; done)"
+  "$(cd "$REPO" && for f in EnrolView.qml EnrolRing.qml DotCard.qml DotStage.qml common/EnrolLink.qml common/EnrolMode.qml; do sed -E 's#//.*$##' "$f" | grep -nE '#[0-9a-fA-F]{3,8}\b|Qt\.rgba\(|"(white|black|red|green|blue|gray|grey)"' | sed "s#^#$f:#"; done)"
+check "Space is the dot scan's capture, and a held key is one press (RecordCard: Space, not auto-repeat, to island.capture)" "1 1" \
+  "$(grep -c 'Keys.onSpacePressed: function (event) { if (!event.isAutoRepeat) island.capture()' "$REPO/RecordCard.qml") $(grep -c 'function capture() { enrol.capture() }' "$REPO/ScanIsland.qml")"
+check "only EnrolView makes a DotCard, and only DotCard a DotStage" "EnrolView.qml|DotCard.qml" \
+  "$(cd "$REPO" && for f in *.qml; do sed -E 's#//.*$##' "$f" | grep -q '\bDotCard *{' && echo "$f"; done | tr '\n' ' ' | sed 's/ $//')|$(cd "$REPO" && for f in *.qml; do sed -E 's#//.*$##' "$f" | grep -q '\bDotStage *{' && echo "$f"; done | tr '\n' ' ' | sed 's/ $//')"
+check "a click leaves no outline on the card's controls: every link and the mode choice hand the focus back after a click" "1 1" \
+  "$(grep -c 'function onClicked() { Qt.callLater(function () { link.focus = false }) }' "$REPO/common/EnrolLink.qml") $(grep -c 'function onClicked() { Qt.callLater(function () { option.focus = false }) }' "$REPO/common/EnrolMode.qml")"
 check "the view has no background of its own (no window, no scrim, no container animation)" "0" \
   "$(cd "$REPO" && sed -E 's#//.*$##' EnrolView.qml | grep -cE 'PanelWindow|PopupWindow|FloatingWindow|ParallelAnimation|enterAnim')"
 check "EnrolView and EnrolRing never read Commons.Color.accent (the host's accent arrives in colors); only the fallbacks name the theme" "0" \
@@ -125,91 +131,123 @@ check "a pure #000000 under it is the host's: the view paints no background of i
   "$(cd "$REPO" && sed -E 's#//.*$##' EnrolView.qml EnrolRing.qml | grep -cE '^\s*color: *"?#?(black|000)')"
 
 # =============================================================================
-# Simple, start to finish
+# Simple: the dot scan, start to finish
 # =============================================================================
 
-step "Simple: idle, Start, the centre, four targets, the end"
-out=$(run simple)
+ball() { jq -r "$2" <<<"$(field "$1" "$out")"; }
+
+step "Simple: idle, Start, the ball at the centre, a press, four more, Done"
+out=$(run dot)
 echo "${DIM}$(sed 's/^/  /' <<<"$out" | head -3)  ...${RESET}"
-check "the session opens in idle, in Simple" "idle simple" "$(field idle-phase "$out") $(field idle-mode "$out")"
-check "idle: 60 ticks, no 61st" "60 true true true" "$(field idle-ticks "$out")"
-check "idle: the four target arcs are at rest (8 px, 0.7)" \
-  "rest,rest,rest,rest,rest | rest,rest,rest,rest,rest | rest,rest,rest,rest,rest | rest,rest,rest,rest,rest" "$(field idle-targets "$out")"
-check "idle: …drawn 8 px at opacity 0.7" "8/0.7 8/0.7 8/0.7 8/0.7 8/0.7" "$(field idle-target-look "$out")"
-check "idle: Simple's other eight bins are 5 px at 0.2 (inactive)" "5/0.2 5/0.2 5/0.2 5/0.2 5/0.2" "$(field idle-inactive "$out")"
-check "idle: the demo is playing in the circle (the static glyph is hidden) with a caption under the line" "false demo true true caption Look at the camera" "$(field idle-glyph "$out")"
-check "idle: no camera exists, previewOn is false, the preview Loader holds nothing" "0 false true" "$(field idle-cameras "$out")"
-check "idle: the line is 'Fit your face in the circle.'" "Fit your face in the circle." "$(field idle-line "$out")"
-check "idle: Cancel, Start and the mode link; no Done, Try again or Scan again" \
-  "cancel=1 start=1 done=0 again=0 more=0 mode=1" "$(field idle-links "$out")"
-check "idle: the mode link names the OTHER mode" "Advanced" "$(field idle-modelink "$out")"
-check "idle: nothing was sent and the helper was not started" "ready 0" "$(field idle-state "$out")"
-check "authorising: the camera comes on (previewOn) and the line says why we wait" "1 true Waiting for authorisation…" \
-  "$(field auth-cameras "$out") $(field auth-line "$out")"
-check "authorising: only Cancel; the mode link is gone" "cancel=1 start=0 done=0 again=0 more=0 mode=0" "$(field auth-links "$out")"
-check "the mode is fixed from Start: the link and setMode change nothing" "true simple" "$(field mode-after-start "$out") $(field mode-inert-after-start "$out")"
-check "ready with verbs: the view sends sweep, lap 1, mode simple, exactly [9,3,0,6], and nothing else" \
-  '[{"cmd":"sweep","appearance":"No glasses","mode":"simple","lap":1,"targets":[9,3,0,6]}]' "$(field centre-sent "$out")"
-check "…the phase is centre" "centre running" "$(field centre-phase "$out")"
-check "centre: 'Look straight at the circle', then 'Hold still' once the dwell runs" \
-  "Look straight at the circle|Look straight at the circle|Hold still" "$(field centre-line "$out")|$(field centre0-line "$out")|$(field centre50-line "$out")"
-check "centre: the rim arc is half swept at centre 0.5" "0.5" "$(field centre50-arc "$out")"
-check "centre: near the middle the head dot is absent (opacity 0)" "0" "$(jq -r .op <<<"$(field centre50-dot "$out")")"
-check "centre: only Cancel is on offer (no Start over in the live view)" "cancel=1 start=0 done=0 again=0 more=0 mode=0" "$(field centre50-links "$out")"
-check "lap1: the phase moves on and the rim is closed" "lap1 1" "$(field lap1-phase "$out") $(field lap1-arc "$out")"
-check "lap1: the engine's first target (left) is current: 14 px, foreground, 1.0, static" \
-  "14/1 14/1 14/1 14/1 14/1 | current,current,current,current,current" "$(field lap1-cur "$out")"
-check "lap1: the other three targets stay at rest, the eight others inactive" \
-  "8/0.7 8/0.7 8/0.7 8/0.7 8/0.7 | 8/0.7 8/0.7 8/0.7 8/0.7 8/0.7 | 8/0.7 8/0.7 8/0.7 8/0.7 8/0.7" "$(field lap1-rest "$out")"
-check "…and the inactive ones never change" "5/0.2 5/0.2 5/0.2 5/0.2 5/0.2 | 5/0.2 5/0.2 5/0.2 5/0.2 5/0.2" "$(field lap1-inactive "$out")"
-check "lap1: the line names the target" "Turn your head to the left" "$(field lap1-line "$out")"
-check "lap1: Done is hidden while a Simple lap runs" "cancel=1 start=0 done=0 again=0 more=0 mode=0" "$(field lap1-links "$out")"
-check "progress 0.4: two of the five ticks are covered (20 px accent look), three still current" \
-  "done,done,current,current,current | 20/0.9 20/0.9 14/1 14/1 14/1" "$(field p40-kinds "$out") | $(field p40-look "$out")"
-check "…and the line says 'Hold still' while the wedge is held" "Hold still" "$(field p40-line "$out")"
-check "progress 0.55: the third tick interpolates (monotone, one tick moving)" "20/0.9 20/0.9 18.5/0.93 14/1 14/1" "$(field p55-look "$out")"
-check "the dot sits about 90 px out at the engine's ring angle (u -1.5: the left, 270 degrees; it is still easing in over 100 ms)" "true true" \
-  "$(jq -r '"\((.x < -88.5 and .x > -90.5)) \(.shown)"' <<<"$(field p40-dot "$out")")"
-check "a target that fills stays filled (20 px, covered) after the highlight leaves" \
-  "20/0.9 20/0.9 20/0.9 20/0.9 20/0.9 | done,done,done,done,done" "$(field next-9 "$out")"
-check "…the next arc is current, and its line changed in the same frame" \
-  "14/1 14/1 14/1 14/1 14/1 | current,current,current,current,current | Turn your head to the right" \
-  "$(field next-3 "$out") | $(field next-line "$out")"
-check "state words: over, edge" "A little less|Centre your face" "$(field over-line "$out")|$(field edge-line "$out")"
-check "3.1.5: the skip note outranks `over` (a far-off turn keeps saying it), but not a gate that needs something else (edge)" "We will skip that one | Centre your face" \
-  "$(field skip-over-line "$out") | $(field skip-edge-line "$out")"
-check "a skipped bin goes back to the rest look and the line says so" "We will skip that one | 8/0.7 8/0.7 8/0.7 8/0.7 8/0.7 | rest,rest,rest,rest,rest" \
-  "$(field skip-line "$out") | $(field skip-rest "$out")"
-check "a track with every bin full and canFinish shows no Done in Simple (Done arrives with swept)" \
-  "cancel=1 start=0 done=0 again=0 more=0 mode=0" "$(field allfull-links "$out")"
-check "swept with kept 5: 'All set.' and Done" "All set. | cancel=1 start=0 done=1 again=0 more=0 mode=0" "$(field swept-line "$out") | $(field swept-links "$out")"
-check "…the ring stays full (four covered arcs) and the session holds one capture" "20/0.9 20/0.9 20/0.9 20/0.9 | swept 1" \
-  "$(field swept-filled "$out") | $(field swept-state "$out")"
-check "swept with kept 5: only Done (no Scan again), and the next lap begins at once through the session" \
-  'more=0 | [{"cmd":"sweep","appearance":"No glasses","mode":"simple","lap":1,"targets":[9,3,0,6]}] | 8/0.7 8/0.7 8/0.7 8/0.7 8/0.7 | centre' \
-  "$(field kept5-more "$out" | sed 's/^/more=/;s/^more=1$/more=1/') | $(field again-sent "$out") | $(field again-ring "$out")"
-check "swept with kept 3: the line is a plain 'Enough to save.', Done and one quiet 'Scan again'" \
-  "Enough to save. | cancel=1 start=0 done=1 again=0 more=1 mode=0 | Scan again" "$(field kept3-line "$out") | $(field kept3-links "$out") | $(field kept3-more-text "$out")"
-check "Scan again is lap 1 again on the same session and mode (no second password), the ring empties and nothing is offered" \
-  '[{"cmd":"sweep","appearance":"No glasses","mode":"simple","lap":1,"targets":[9,3,0,6]}] | 8/0.7 8/0.7 8/0.7 8/0.7 8/0.7 | centre | cancel=1 start=0 done=0 again=0 more=0 mode=0' \
-  "$(field more-sent "$out") | $(field more-ring "$out" | sed 's/ | centre | / | centre | /')"
-check "after the second lap kept 5 offers Done only" "cancel=1 start=0 done=1 again=0 more=0 mode=0" "$(field kept5-again "$out")"
-check "Done on swept sends done and the session ends saved" "done 1 true" "$(field done-sent "$out") $(field done-finished "$out" | tr -d '\n')" 2>/dev/null
-check "the view never triggered a bad_sweep (the fake enforces table V)" "0" "$(field violations "$out")"
-check "…never sent capture when the helper lists sweep" "true" "$(field capture-never "$out")"
-check "…and Simple never sends finish" "true" "$(field finish-never-simple "$out")"
-echo "${DIM}  contrast over #000 (rest, current, done, centre arc, done vs rest): theme: $(field contrast-theme "$out"); mono (accent = foreground): $(field contrast-mono "$out"); coloured: $(field contrast-coloured "$out")${RESET}"
-for p in theme mono coloured; do
-  read -r rest cur done arc dvr <<<"$(field contrast-$p "$out")"
-  check_ge "contrast: the rest look is at least 3:1 over #000 ($p palette)" 3 "$rest"
-  check_ge "contrast: the current look is at least 3:1 ($p)" 3 "$cur"
-  check_ge "contrast: the done look is at least 3:1 ($p)" 3 "$done"
-  check_ge "contrast: the centre arc is at least 3:1 ($p)" 3 "$arc"
-  check_ge "contrast: the done colour is not within 1.5:1 of the rest colour ($p)" 1.5 "$dvr"
+check "the session opens in idle, in Simple, and the card is the dot scan's (the ring's column is not drawn)" \
+  "idle false|simple dot=true legacy=false|true ring-column false" "$(field idle-phase "$out")|$(field idle-mode "$out")|$(field idle-card "$out")"
+check "idle: the line says what the scan is in plain words, with the Space key in it" "Look at the ball, then press Space." "$(field idle-line "$out")"
+check "idle: the demo plays in the circle (the glyph is hidden) with its caption under the line" "false demo true caption 'Look at the ball'" "$(field idle-glyph "$out")"
+check "idle: no camera exists, previewOn is false, the preview Loader holds nothing" "0 previewOn false previewLoader empty" "$(field idle-cameras "$out")"
+check "idle: Cancel, Start and the Simple/Advanced choice; no Save, Done or Scan again" "cancel=1 start=1 save=0 done=0 again=0 mode=1" "$(field idle-links "$out")"
+check "idle: the choice shows BOTH modes and which is on (Simple filled)" "true/false Simple,Advanced" "$(field idle-modes "$out")"
+check "idle: the five stations are on the stage as faint marks (the ball covers the centre's)" \
+  "centre:open/0 left:open/0.55 top:open/0.55 right:open/0.55 bottom:open/0.55" "$(field idle-marks "$out")"
+check "idle: the Space key is not offered yet (nothing to press)" "hidden opacity 0 enabled false text to take the picture" "$(field idle-key "$out")"
+check "idle: nothing was sent and the helper was not started" "ready sent 0" "$(field idle-state "$out")"
+check "authorising: the camera comes on, the line says why we wait, only Cancel is offered" \
+  "1 true|Waiting for authorisation…|cancel=1 start=0 save=0 done=0 again=0 mode=0" "$(field auth-cameras "$out")|$(field auth-line "$out")|$(field auth-links "$out")"
+check "a Space before the helper has said ready sends nothing" "0" "$(field auth-space-sent "$out")"
+check "the mode is fixed from Start: setMode changes nothing" "true simple" "$(field mode-after-start "$out") $(field mode-inert-after-start "$out")"
+check "ready lists dot: phase dot, the ball waits on the centre, and NOTHING was sent (the first Space sends the first press)" \
+  "dot flow true waiting pose centre|[]" "$(field ready-phase "$out")|$(field ready-sent "$out")"
+check "the line names the pose, in plain words" "Look at the ball" "$(field ready-line "$out")"
+check "the Space key is shown as a key, and Start, Save and Done are not" "cancel=1 start=0 save=0 done=0 again=0 mode=0" "$(field ready-links "$out")"
+check "the ball is on the centre, its ring is open and breathing (between 20 and 24 px, and it moves)" \
+  "0 0 waiting centre|within true moves true" "$(ball ready-ball '"\(.x) \(.y) \(.state) \(.pose)"')|$(field breath "$out" | sed 's/^min [0-9.]* max [0-9.]* //')"
+check "the camera is on while the ball waits" "1" "$(field ready-cameras "$out")"
+check "Space is ONE press: the verb dot with the appearance and the pose, nothing else" '[{"cmd":"dot","appearance":"No glasses","pose":"centre"}]' "$(field press-sent "$out")"
+check "...the ball is capturing, the line says to hold still, and the key is off (no second press)" "capturing centre|Hold still|enabled false" "$(field press-state "$out")|$(field press-line "$out")|$(field press-key "$out" | grep -o 'enabled false')"
+check "a second Space and a click on the key during the press send nothing" "1 dot" "$(field press-twice "$out")"
+check "the ring closes in while frames come, and one of three does not close it" "capturing|1 of 3" "$(ball closing-1of3 .state)|$(field closing-good "$out")"
+check "two of three: the ring is held at most 0.3 + 0.7 x 2/3 of the way (0.77) and nothing is taken" "0.77 capturing held 0 line Hold still" "$(field closing-2of3 "$out")"
+check "three of three but the helper has not said dotted: the ring is as far as the frames allow, the ball is still capturing" "1 capturing pose centre" "$(field closing-3of3-undotted "$out")"
+check "dotted closes the ring on the ball (11 px, just outside it): landed, 'Got it', the centre is held, one capture is on the session" \
+  "landed held centre line Got it|0 0 11 1 landed centre|1 No glasses" "$(field landed "$out" | sed 's/ {.*//')|$(field landed "$out" | sed 's/^.* line Got it //' | jq -r '"\(.x) \(.y) \(.r) \(.close) \(.state) \(.pose)"')|$(field landed-captures "$out")"
+check "a Space in the beat after the ring closed is ignored" "ignored" "$(field landed-space "$out")"
+check "then the ball is on the left (120 px out), its ring open again, and the line names it" "true true waiting left|Turn to the ball on the left" "$(ball left-ball '"\((.x + 120 | fabs) < 3) \((.y | fabs) < 3) \(.state) \(.pose)"')|$(field left-line "$out")"
+check "the centre's station is filled in the accent (taken) and the left's is under the ball" "centre:taken/0.95 left:open/0 top:open/0.55 right:open/0.55 bottom:open/0.55" "$(field left-marks "$out")"
+check "the second press is for the left" '[{"cmd":"dot","appearance":"No glasses","pose":"left"}]' "$(field left-sent "$out")"
+check "somebody else (not_you): the ring opens again, the ball STAYS on the left, the line says why in plain words and in the urgent colour, and the key offers a retry" \
+  "waiting | That did not look like you | true waiting left | shown opacity 1 enabled true text to try again | colour urgent" \
+  "$(field fail-notyou "$out" | awk -F' [|] ' '{print $1" | "$2}') | $(field fail-notyou "$out" | awk -F' [|] ' '{print $3}' | jq -r '"\((.x + 120 | fabs) < 3) \(.state) \(.pose)"') | $(field fail-notyou "$out" | awk -F' [|] ' '{print $4" | "$5}')"
+check "...a failed press holds nothing new, and the retry is the same pose" 'centre|[{"cmd":"dot","appearance":"No glasses","pose":"left"}]' "$(field fail-held "$out" | sed 's/ links.*//')|$(field retry-sent "$out" | sed 's/ line.*//')"
+check "the top: the ball is 96 px above the centre, 'Look up at the ball', two stations filled" "true true waiting top|Look up at the ball|centre:taken/0.95 left:taken/0.95 top:open/0 right:open/0.55 bottom:open/0.55" \
+  "$(ball top-ball '"\((.x | fabs) < 3) \((.y + 96 | fabs) < 3) \(.state) \(.pose)"')|$(field top-line "$out")|$(field top-marks "$out")"
+check "the right: 'Turn to the ball on the right', 120 px out" "true true waiting right|Turn to the ball on the right" "$(ball right-ball '"\((.x - 120 | fabs) < 3) \((.y | fabs) < 3) \(.state) \(.pose)"')|$(field right-line "$out")"
+check "after the right, Save is offered (the centre, left and right are held) and Done is not: the ball is on the bottom" \
+  "true true waiting bottom|Look down at the ball|cancel=1 start=0 save=1 done=0 again=0 mode=0" "$(ball bottom-ball '"\((.x | fabs) < 3) \((.y - 96 | fabs) < 3) \(.state) \(.pose)"')|$(field bottom-line "$out")|$(field bottom-links "$out")"
+check "...four stations are filled" "centre:taken/0.95 left:taken/0.95 top:taken/0.95 right:taken/0.95 bottom:open/0" "$(field bottom-marks "$out")"
+check "too dark at the bottom says so; Save stays on offer" "Too dark | cancel=1 start=0 save=1 done=0 again=0 mode=0 | shown opacity 1 enabled true text to try again" "$(field bottom-fail "$out")"
+check "all five held: 'All set.', Done and Scan again, no Save; the ball is gone, the check is drawn, five stations filled" \
+  "done all true line All set. | cancel=1 start=0 save=0 done=1 again=1 mode=0|true|centre:taken/0.95 left:taken/0.95 top:taken/0.95 right:taken/0.95 bottom:taken/0.95" \
+  "$(field done-state "$out")|$(field done-ball "$out" | grep -o 'check [a-z]*' | sed 's/check //')|$(field done-marks "$out")"
+check "...the session holds one capture and is swept (Done is legal), the key is gone, a screen reader is told" "swept 1|hidden opacity 0 enabled false text to take the picture|All five pictures taken" \
+  "$(field done-state-scan "$out")|$(field done-key "$out" | sed 's/^shown /hidden /')|$(field done-descr "$out")"
+check "the idle description told a screen reader the demo is not recording" "A demonstration of the scan, nothing is recording" "$(field idle-descr "$out")"
+check "Scan again: nothing is sent (the next centre replaces the pending set), the centre is the ball's again, nothing is held" \
+  "waiting held 0 pose centre line Look at the ball | cancel=1 start=0 save=0 done=0 again=0 mode=0|7 dots in all|running 0" \
+  "$(field again "$out")|$(field again-sent "$out" | sed 's/no new message: //')|$(field again-state "$out")"
+check "Return before all five does nothing, and the next Space is the centre again" "dot|{\"cmd\":\"dot\",\"appearance\":\"No glasses\",\"pose\":\"centre\"}" \
+  "$(field again-return "$out")|$(field retake-sent "$out" | sed 's/^\[\(.*\)\]$/\1/')"
+check "Return does not save a partial scan; the Save link does, and the session ends saved" "dot|done|1 true" "$(field save-return "$out")|$(field save-sent "$out")|$(field save-finished "$out")"
+check "the view never triggered a bad_sweep, never sent capture, sweep or finish" "0 true true true" "$(field violations "$out") $(field capture-never "$out") $(field sweep-never "$out") $(field finish-never "$out")"
+
+step "Simple: Esc and Cancel in every state discard (they never save)"
+out=$(run dot-esc)
+check "idle: Esc closes with nothing to discard (no process)" "0 1 false" "$(field esc-idle "$out")"
+check "authorising: EOF to the pkexec'd session, no camera" "1 closing 1 0" "$(field esc-authorising "$out")"
+check "the ball waiting: EOF, no camera, nothing saved" "dot waiting|1 1 false 0 last EOF" "$(field esc-waiting-phase "$out")|$(field esc-waiting "$out")"
+check "a press running: EOF ends it, the camera goes" "capturing|1 1 false 0" "$(field esc-capturing-phase "$out")|$(field esc-capturing "$out")"
+check "Cancel with the centre, left and right held (Save was on offer): EOF, nothing saved" "cancel=1 start=0 save=1 done=0 again=0 mode=0|1 1 false sent EOF" "$(field esc-save-offered "$out")|$(field esc-save "$out")"
+check "all five held: Esc discards (Done is the one way to keep a scan)" "done cancel=1 start=0 save=0 done=1 again=1 mode=0|1 1 false" "$(field esc-done-phase "$out")|$(field esc-done "$out")"
+check "the 'Nothing was saved' line stays until the session finishes, and nothing the view sent was refused" "Nothing was saved|0" "$(field esc-line-discarding "$out")|$(field esc-end "$out")"
+
+step "Simple: a press that did not work says why, in plain words, and the ball stays"
+out=$(run dot-fail)
+for pair in no_face:"No face found" too_dark:"Too dark" multiple_faces:"More than one face" not_you:"That did not look like you" black_frames:"Too dark" too_far:"Come a little closer" too_close:"Move back a little" face_cut_off:"Keep your whole face in view" timeout:"That took too long" camera_busy:"The camera is in use" bad_sweep:"Something went wrong"; do
+  code=${pair%%:*}; text=${pair#*:}
+  check "$code: '$text', the ball waits on the centre, nothing is held, the key offers a retry" \
+    "waiting | $text | held 0 pose centre | shown opacity 1 enabled true text to try again" "$(field fail-$code "$out" | sed 's/opacity 0\.9[0-9]*/opacity 1/')"
 done
-check "accessibility: the ring says its step and progress" \
-  "A demonstration of the scan, nothing is recording|Step 2 of 5, turn your head to the left, 0 percent|Step 2 of 5, turn your head to the left, 40 percent|Step 3 of 5, turn your head to the right, 0 percent|Step 3 of 5, turn your head to the right, 40 percent" \
-  "$(field idle-descr "$out")|$(field lap1-descr "$out")|$(field p40-descr "$out")|$(field next-descr "$out")|$(field three-descr "$out")"
+check "a code from a later release still says something plain" "That did not work" "$(field fail-unknown "$out")"
+check "a failed press leaves what is held as it was; the next press is for the same pose" "left,left held centre" "$(field fail-same-pose "$out")"
+check "a refusal that is not about a press (a Save before the floor) is not a failed press: no reason appears" "| state waiting line Look up at the ball" "$(field fail-not-a-press "$out")"
+check "no failure made the view send a verb the table refuses" "0" "$(field fail-violations "$out")"
+
+step "Simple: the ring completes only with enough good frames, and never early"
+out=$(run dot-ring)
+check "two good frames of three, held for over two seconds: the ring never passes 0.77 and nothing is taken" "true|state capturing good 2 held 0" "$(field held-short-below "$out")|$(field held-short "$out" | sed 's/^max close [0-9.]* state/state/;s/ ring.*//')"
+check "dotted closes it (1, 11 px) and the pose is held" "1 landed held centre ring 11" "$(field closed "$out" | sed 's/ ring 11\.[0-9]*/ ring 11/')"
+check "a dotted that arrives early (a quick camera) still waits for the ring's second before the pose is applied" "held 1 state capturing|a second" "$(field early-dotted "$out")|$(field early-waited "$out")"
+check "a press that fails opens the ring again, from wherever it had got to, and the ball waits" "mid closing then 0 ring 2" "$(field reopened "$out" | sed 's/ ring 2[0-9.]* state waiting/ ring 2/;s/ ring 20\.[0-9]*.*/ ring 2/')"
+
+step "Simple under reduced motion: nothing depends on a running animation"
+out=$(run dot-reduced)
+check "idle: no demo, the glyph and one caption line" "demo none glyph true caption 'The ball moves left, up, right and down.'" "$(field reduced-idle "$out" | sed 's/^demo present/demo none/')"
+check "the ring is still (22 px, no breath), and stays so" "r 22 pulse running 0|r 22 pulse 0|waiting r 22" "$(field reduced-ring "$out")|$(field reduced-static "$out")|$(field reduced-waiting "$out")"
+check "a press closes the ring in steps with the frames (1 of 3: 0.53), and the ball is on its next station at once, no easing" "0.53|-120 0 waiting left easing true" \
+  "$(ball reduced-1of3 .close)|$(ball reduced-moved '"\(.x) \(.y) \(.state) \(.pose)"') easing $(field reduced-moved "$out" | sed 's/.*easing //')"
+check "a failed press opens the ring at once and says why" "close 0 line Too dark" "$(field reduced-failed "$out")"
+
+step "Simple: the idle demo is the scan, played with no camera"
+out=$(run dot-demo)
+check "idle: it plays, in the circle, with no camera object and the static glyph hidden" "true true cameras 0 glyph false" "$(field demo-state "$out")"
+check "the captions follow the ball (centre, left, top, right, bottom, all set)" "Look at the ball | Turn left | Look up | Turn right | Look down | All set." "$(field demo-captions "$out")"
+check "the ball goes to each station, the head turns to it to the limit, the ring closes in, the key is shown pressed, four are taken before the last, then the check" \
+  '{"keyPressed":true,"leftBall":true,"leftYaw":true,"leftClosed":true,"topBall":true,"upPitch":true,"rightBall":true,"rightYaw":true,"fourTaken":true,"bottomBall":true,"downPitch":true,"check":true}' "$(field demo-seen "$out")"
+check "Start stops it: not running, not drawn, and the camera is on" "false false cameras 1" "$(field start-stopped "$out")"
+
+step "Simple on a helper that does not know dot (3.1.x): the single capture, with a plain note"
+out=$(run dot-skew)
+check "before Start nothing is different" "idle dot=true legacy=false" "$(field skew-idle "$out")"
+check "ready without dot: the old single capture's countdown, in the legacy view, and the dot scan is not used" "countdown legacy true dotFlow false sweepFlow false|legacy true dot false" "$(field skew-phase "$out")|$(field skew-view "$out")"
+check "...nothing was sent (no sweep and no dot to a helper that would ignore them), and it says why" "|Finish the update in a terminal for the full scan" "$(field skew-sent "$out")|$(field skew-note "$out")"
 
 # =============================================================================
 # Advanced
@@ -217,18 +255,18 @@ check "accessibility: the ring says its step and progress" \
 
 step "Advanced: twelve spots, any order, Done = finish, then done"
 out=$(run advanced)
-check "the remembered choice can be switched in idle; the link then names Simple" "advanced advanced | Simple setup" \
-  "$(field adv-mode "$out") | $(field adv-idle-modelink "$out")"
+check "the remembered choice can be switched in idle; the choice then shows Advanced filled" "advanced advanced | false/true" \
+  "$(field adv-mode "$out") | $(field adv-idle-modes "$out")"
 check "idle: all twelve bins are on the ring at rest" "rest,rest,rest,rest,rest | rest,rest,rest,rest,rest | rest,rest,rest,rest,rest" "$(field adv-idle-rest "$out")"
 check "the sweep names all twelve bins in ascending order, mode advanced" \
   '[{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":1,"targets":[0,1,2,3,4,5,6,7,8,9,10,11]}]' "$(field adv-sent "$out")"
 check "lap1 with no target under the head: no highlight at all" "rest,rest,rest,rest,rest" "$(field adv-no-current "$out")"
 check "the reference's line, kept" "lap1 | Move your head slowly to complete the circle." "$(field adv-phase "$out") | $(field adv-line "$out")"
-check "no Done while canFinish is false" "cancel=1 start=0 done=0 again=0 more=0 mode=0" "$(field adv-links "$out")"
+check "no Done while canFinish is false" "cancel=1 start=0 done=0 again=0 mode=0" "$(field adv-links "$out")"
 check "a wedge being held: highlight on it, 'Hold still'" "Hold still | done,current,current,current,current | 20/0.9 14/1 14/1 14/1 14/1" \
   "$(field adv-hold-line "$out") | $(field adv-current "$out")"
 check "any fill order renders (5 full, 2 partial)" "done,done,done,done,done | done,done,current,current,current | 20/0.9 20/0.9 14/1 14/1 14/1" "$(field adv-any-order "$out")"
-check "Done appears once canFinish is true" "cancel=1 start=0 done=1 again=0 more=0 mode=0" "$(field adv-done-shown "$out")"
+check "Done appears once canFinish is true" "cancel=1 start=0 done=1 again=0 mode=0" "$(field adv-done-shown "$out")"
 check "…and sends finish; swept then offers Done again (done), twice by design" "finish | All set. | done" \
   "$(field adv-finish-sent "$out") | $(field adv-swept-line "$out") | $(field adv-done-sent "$out")"
 check "accessibility: one ProgressBar for the ring plus one per target (13 in Advanced)" "13" "$(field adv-target-items "$out")"
@@ -259,15 +297,15 @@ for code in too_few lap_timeout bad_sweep changed; do
     changed) text="That was not you" ;;
   esac
   check "$code: verdict, its line, Try again, the circle shakes, the ring is empty, no camera" \
-    "verdict | $text | cancel=1 start=0 done=0 again=1 more=0 mode=0 | shake true | ring 8/0.7 | cameras 0 | ready" "$(field fail-$code "$out")"
+    "verdict | $text | cancel=1 start=0 done=0 again=1 mode=0 | shake true | ring 8/0.7 | cameras 0 | ready" "$(field fail-$code "$out")"
   check "$code: Try again is lap 1 again, same mode, and the camera is back" \
-    'centre | {"cmd":"sweep","appearance":"No glasses","mode":"simple","lap":1,"targets":[9,3,0,6]} | cameras 1' "$(field retry-$code "$out")"
+    'centre | {"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":1,"targets":[0,1,2,3,4,5,6,7,8,9,10,11]} | cameras 1' "$(field retry-$code "$out")"
 done
 check "'other' is a word: its line, no shake, the lap goes on" "Face the circle and hold still. | shake false | phase lap1" "$(field other-line "$out")"
 check "not_enough leaves the lap running with its line" "lap1 | A few more positions first. | running" "$(field not-enough "$out")"
 check "sweep_stalled leaves the lap running with its line" "lap1 | Try turning a little further." "$(field stalled "$out")"
 check "polkit refused: back to idle with the reason, a shake, no camera, Start offered again" \
-  "idle | Fit your face in the circle. | Not authorised. | shake true | previewOn false | cameras 0 | cancel=1 start=1 done=0 again=0 more=0 mode=1" "$(field declined "$out")"
+  "idle | Fit your face in the circle. | Not authorised. | shake true | previewOn false | cameras 0 | cancel=1 start=1 done=0 again=0 mode=1" "$(field declined "$out")"
 check "no failure case made the view send a verb the table refuses" "0" "$(field fail-violations "$out")"
 
 step "Version skew: a helper older than 3.1.0 gets the existing single capture"
@@ -308,19 +346,15 @@ check "…runs on an accepted frame, rests when done, re-arms on the next" "true
 step "The idle demo: what the scan will ask, played while nothing runs (no camera)"
 out=$(run demo)
 check "idle: it plays, in the circle, with no camera object and the static glyph hidden" "true true cameras 0 glyph false" "$(field demo-state "$out")"
-check "Simple: the captions follow the order the engine takes (centre, left, right, up, down, all set)" \
-  "Look at the camera | Turn your head to the left | Turn your head to the right | Tilt your head up | Tilt your head down | All set." "$(field simple-captions "$out")"
-check "…the head turns to each side as the matching arc fills (turn left/right to the limit, nod up/down), the rim closes, all four fill" \
-  '{"rim":true,"leftYaw":true,"leftFill":"done,done,done,done,done","rightYaw":true,"rightFill":"done,done,done,done,done","upPitch":true,"downPitch":true,"allFilled":true}' "$(field simple-seen "$out")"
 check "Advanced: one slow turn under the reference's line, and all twelve arcs fill in one sweep, never emptying on the way" \
   'advanced|Move your head slowly to complete the circle. | The circle is complete.|{"top":12,"monotone":true}' \
   "$(field adv-mode "$out")|$(field adv-captions "$out")|$(field adv-seen "$out")"
 check "Start stops it at once: not running, not drawn, its clock frozen, no caption, and the ring is the session's (empty, no target)" \
   "false false true caption '' [0,0,0,0] target null cameras 1" "$(field start-stopped "$out") $(field start-ring "$out")"
 out=$(run demo-reduced)
-check "reduced motion: not running, not drawn, the clock never moves, the static glyph and one caption line (per mode)" \
-  "false false|0|true|Then turn left, right, up and down.|Then turn slowly all the way round." \
-  "$(field running "$out")|$(field t "$out")|$(field glyph "$out")|$(field caption "$out")|$(field caption-advanced "$out")"
+check "reduced motion: not running, not drawn, the clock never moves, the static glyph and one caption line" \
+  "false false|0|true|Then turn slowly all the way round." \
+  "$(field running "$out")|$(field t "$out")|$(field glyph "$out")|$(field caption "$out")"
 check "…and the ring is at rest (nothing fills, no rim)" "8/0.7 8/0.7 8/0.7 8/0.7 8/0.7 | 0" "$(field ring "$out")"
 out=$(run demo-hidden)
 check "a card that is not on screen costs nothing: not running, clock frozen; and it plays again when shown" "false true|true" "$(field hidden "$out")|$(field shown "$out")"
@@ -449,6 +483,8 @@ echo "${DIM}  bar $(field bar "$out"), view at $(field inner "$out")${RESET}"
 check "retracting: still on its way after 120 ms, and gone (answered once) a moment later" "0 true|1 0 0" \
   "$(field retract-early "$out" | awk '{print $1" "($2 > 0 && $2 < 1 ? "true" : "false")}')|$(field retract-late "$out")"
 check "retracting twice answers once, and it can drop again" "1 1 1" "$(field retract-twice "$out") $(field retract-twice-late "$out") $(field again "$out")"
+check "the card's keys reach the session through the island: Space is ONE press for the centre, and a second does nothing while it runs" \
+  '[{"cmd":"dot","appearance":"No glasses","pose":"centre"}]|dot' "$(field island-space "$out")|$(field island-space-twice "$out")"
 out=$(run island-reduced)
 check "reduced motion: reduced is on, and it is simply there (1, 1)" "reduced true|1 1" "$(field first "$out")|$(field drop-end "$out")"
 check "reduced motion: it never leaves its place while it 'drops' (no frames of motion: the peak is exactly 1)" "1" "$(field drop-peak "$out")"
@@ -492,7 +528,7 @@ if (( frames > 0 )); then
   # The island's top edge is flush: the pixel row 0 is black across its width and
   # the desktop's grey beyond the fillets; the corner pixel of the strip is grey.
   check "the silhouette is black on the grey desktop (centre of the top edge black, far corner grey)" "true true" \
-    "$(magick "$root/strip/simple-3-left30.png" -format '%[fx:p{200,2}.r < 0.02 ? 1 : 0] %[fx:p{3,2}.r > 0.15 ? 1 : 0]' info: | sed 's/1/true/g;s/0/false/g')"
+    "$(magick "$root/strip/simple-4-left.png" -format '%[fx:p{200,2}.r < 0.02 ? 1 : 0] %[fx:p{3,2}.r > 0.15 ? 1 : 0]' info: | sed 's/1/true/g;s/0/false/g')"
 fi
 [[ -n ${E3_KEEP:-} ]] && note "PNG strip and GIF kept in $E3_KEEP"
 

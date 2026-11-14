@@ -5,6 +5,7 @@ import qs.Commons
 import qs.Commons as Commons
 import "face" as Face
 import "face/common/enrolring.js" as Ring
+import "face/common/dotscan.js" as Dot2
 
 // The enrol view, offscreen, for dev/e3-enrol-view.sh (plan-face-enroll.md
 // section 7.4, Phase 4). The REAL EnrolView.qml, EnrolRing.qml and
@@ -15,8 +16,9 @@ import "face/common/enrolring.js" as Ring
 // asked of a camera: the preview the circle would hold is a counting stand-in,
 // so "no camera in idle" is a count of zero and not a promise.
 //
-//   E3_CASE   simple | advanced | esc | fail | skew | plain | reduced | fence |
-//             mode | strip
+//   E3_CASE   dot | dot-esc | dot-fail | dot-ring | dot-reduced | dot-demo | dot-skew |
+//             advanced | esc | fail | skew | plain | reduced | fence | mode | strip
+//             (the ring's cases run the session in Advanced, whatever the mode file says)
 //   E3_STATE_HOME  the state home the mode file lives under (mode, with
 //                  OMARCHY_FACE_DEV_BIN set, as RemoveView's rule says)
 //   E3_STORED  templates the appearance already holds (rule R)
@@ -32,11 +34,15 @@ ShellRoot {
   readonly property int stored: Number(Quickshell.env("E3_STORED") || "0")
   readonly property string outDir: Quickshell.env("E3_OUT") || "/tmp"
   readonly property string accentEnv: Quickshell.env("E3_ACCENT") || ""
-  readonly property bool reducedCase: caseName === "reduced" || caseName === "island-reduced" || caseName === "demo-reduced" || caseName === "scrim-reduced"
+  readonly property bool reducedCase: caseName === "reduced" || caseName === "island-reduced" || caseName === "demo-reduced" || caseName === "scrim-reduced" || caseName === "dot-reduced"
   // The island cases draw the whole card body (ScanIsland.qml), no window around it.
   readonly property bool islandCase: caseName === "strip" || caseName === "island" || caseName === "island-reduced" || caseName === "scrim" || caseName === "scrim-reduced"
 
   function log(key, value) { console.log("HARNESS " + key, value) }
+
+  // Advanced draws the ring and Simple the dot scan; the cases about the ring run in Advanced.
+  readonly property var ringCases: ["advanced", "esc", "fail", "reduced", "hairline", "demo", "demo-reduced", "demo-hidden", "fence"]
+  readonly property string startMode: ringCases.indexOf(caseName) >= 0 ? "advanced" : "simple"
 
   // ---- the harness's own palette: the card's, -------------------------
   QtObject {
@@ -56,7 +62,9 @@ ShellRoot {
   property int eofs: 0
   property string fakeState: "ready"
   property var fakeProc: null
-  property var verbs: ["capture", "sweep", "abort", "finish"]
+  property var verbs: ["capture", "sweep", "dot", "abort", "finish"]
+  // The poses the fake root holds (the dot scan), as the real parent's `dotted` event lists them
+  property var fakeHeld: []
 
   function emit(event) { if (fakeProc && fakeProc.eventCb) fakeProc.eventCb(event) }
 
@@ -71,10 +79,9 @@ ShellRoot {
     var s = shellRoot.fakeState
     if (c.cmd === "create") return
     if (c.cmd === "sweep") {
-      var simple = c.mode === "simple" && c.lap === 1 && sameBins(c.targets, [0, 3, 6, 9])
-                   && c.targets.join(",") === "9,3,0,6"
+      // Simple is the dot scan now: the helper refuses a Simple sweep
       var advanced = c.mode === "advanced" && c.lap === 1 && sameBins(c.targets, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
-      if (!((s === "ready" || s === "swept") && (simple || advanced))) {
+      if (!((s === "ready" || s === "swept") && advanced)) {
         violations++
         emit({event: "capture_failed", code: "bad_sweep"})
         return
@@ -84,13 +91,29 @@ ShellRoot {
             targets: c.targets.slice().sort(function (x, y) { return x - y }), quota: 2})
       return
     }
+    if (c.cmd === "dot") {
+      // The parent's own rules: legal in ready and swept, never while one runs; the centre first
+      var poses = ["centre", "left", "top", "right", "bottom"]
+      if (!((s === "ready" || s === "swept") && poses.indexOf(c.pose) >= 0
+            && (c.pose === "centre" || shellRoot.fakeHeld.indexOf("centre") >= 0))) {
+        violations++
+        emit({event: "capture_failed", code: "bad_sweep"})
+        return
+      }
+      if (c.pose === "centre") shellRoot.fakeHeld = []
+      fakeState = "running"
+      emit({event: "dotting", pose: c.pose, need: 3})
+      return
+    }
     if (c.cmd === "finish") return          // ignored unless a lap runs; the script answers it
     if (c.cmd === "abort") {
       if (s === "running") { fakeState = "ready"; emit({event: "aborted"}) }
       return
     }
     if (c.cmd === "done") {
-      if (s !== "swept") { violations++; emit({event: "capture_failed", code: "bad_sweep"}); return }
+      var held = shellRoot.fakeHeld
+      var floor = held.length === 0 || (held.indexOf("centre") >= 0 && held.indexOf("left") >= 0 && held.indexOf("right") >= 0)
+      if (s !== "swept" || !floor) { violations++; emit({event: "capture_failed", code: "bad_sweep"}); return }
       emit({event: "saved", person: {name: "anna"}})
       var p = fakeProc
       fakeProc = null
@@ -158,6 +181,7 @@ ShellRoot {
         label: "Anna"
         ask: fakeAsk
         scan: shellRoot.scanSession
+        mode: shellRoot.startMode
         stored: shellRoot.stored
         onFinished: function (saved) { shellRoot.finishedCount += 1; shellRoot.finishedSaved = saved }
       }
@@ -233,15 +257,19 @@ ShellRoot {
   readonly property var view: viewLoader.item ? (viewLoader.item.enrolView || viewLoader.item) : null
 
   // ---- looking at the view -------------------------------------------------------------------
-  function find(item, name) {
-    if (!item) return null
-    if (item.objectName === name) return item
+  // Both cards (the ring's and the dot scan's) are in the view, and only one is shown: the item of that
+  // name that is on screen wins, else the first there is.
+  function collect(item, name, out) {
+    if (!item) return
+    if (item.objectName === name) out.push(item)
     var kids = item.children || []
-    for (var i = 0; i < kids.length; i++) {
-      var found = find(kids[i], name)
-      if (found) return found
-    }
-    return null
+    for (var i = 0; i < kids.length; i++) collect(kids[i], name, out)
+  }
+  function find(item, name) {
+    var all = []
+    collect(item, name, all)
+    for (var i = 0; i < all.length; i++) if (all[i].visible) return all[i]
+    return all.length > 0 ? all[0] : null
   }
   function ring() { return find(view, "ring") }
   function demoItem() { return find(view, "demo") }
@@ -268,9 +296,10 @@ ShellRoot {
     return {len: r.height, op: r.parent.opacity, color: r.color}
   }
   function linkState(name) { var l = named(name); return l ? (l.visible ? "1" : "0") : "-" }
+  function choiceName() { return view.dot ? "modeChoice" : "modeChoiceAdv" }
   function links() {
-    return ["cancelLink", "startLink", "doneLink", "againLink", "moreLink", "modeLink"]
-      .map(function (n) { return n.replace("Link", "") + "=" + linkState(n) }).join(" ")
+    return ["cancelLink", "startLink", "doneLink", "againLink", choiceName()]
+      .map(function (n) { return n.replace("Link", "").replace("Choice", "").replace("Adv", "") + "=" + linkState(n) }).join(" ")
   }
   function line() { return named("line").text }
   function dotInfo() {
@@ -282,7 +311,9 @@ ShellRoot {
 
   function feed(ev) {
     if (ev.event === "swept") fakeState = "swept"
-    if (ev.event === "capture_failed" && ["not_enough", "sweep_stalled"].indexOf(ev.code) < 0) fakeState = "ready"
+    if (ev.event === "dotted") { fakeState = "swept"; fakeHeld = ev.poses.slice() }
+    if (ev.event === "capture_failed" && ["not_enough", "sweep_stalled"].indexOf(ev.code) < 0)
+      fakeState = fakeHeld.length > 0 ? "swept" : "ready"
     emit(ev)
   }
   function ready(withVerbs) {
@@ -343,7 +374,13 @@ ShellRoot {
 
   function build() {
     var c = caseName
-    if (c === "simple") buildSimple()
+    if (c === "dot") buildDot()
+    else if (c === "dot-esc") buildDotEsc()
+    else if (c === "dot-fail") buildDotFail()
+    else if (c === "dot-ring") buildDotRing()
+    else if (c === "dot-reduced") buildDotReduced()
+    else if (c === "dot-demo") buildDotDemo()
+    else if (c === "dot-skew") buildDotSkew()
     else if (c === "advanced") buildAdvanced()
     else if (c === "esc") buildEsc()
     else if (c === "fail") buildFail()
@@ -361,174 +398,434 @@ ShellRoot {
     else if (c === "scrim" || c === "scrim-reduced") buildScrim()
   }
 
-  // ---- Simple ----------------------------------------------------------------------------------------
-  function buildSimple() {
+  // ---- the dot scan (Simple) -------------------------------------------------------------------------
+  function stageItem() { return named("stage") }
+  function ballItem() { return named("ball") }
+  function ringItem() { return named("ring") }
+  // Where the ball is on the stage, from the stage's middle, and the ring's radius
+  function ballInfo() {
+    var st = stageItem(), b = ballItem()
+    return {x: Math.round(b.x - st.stageW / 2), y: Math.round(b.y - st.stageH / 2), r: r1(ring2().r), close: r1(st.close),
+            state: st.shownState, pose: st.pose, op: r1(b.opacity)}
+  }
+  function ring2() { return find(ballItem(), "ballRing") }
+  function dotLinks() {
+    return ["cancelLink", "startLink", "saveLink", "doneLink", "againLink", "modeChoice"]
+      .map(function (n) { return n.replace("Link", "").replace("Choice", "") + "=" + linkState(n) }).join(" ")
+  }
+  function keyInfo() {
+    var h = named("spaceHint"), k = named("spaceKey")
+    return (h.visible ? "shown" : "hidden") + " opacity " + r1(h.opacity) + " enabled " + k.enabled + " text " + named("spaceHintText").text
+  }
+  function marks() {
+    return ["centre", "left", "top", "right", "bottom"].map(function (p) {
+      var m = named("station-" + p)
+      return p + ":" + (m.taken ? "taken" : "open") + "/" + r1(m.opacity)
+    }).join(" ")
+  }
+  function pressSpace() { view.capture() }
+  function dotted(pose, held) {
+    feed({event: "dotted", pose: pose, poses: held, kept: held.length})
+  }
+  function untilState(state) { return function () { return session.dotState === state } }
+  function pressAndTake(pose, held) {
+    at(function () { pressSpace() }, 80)
+    at(function () { feed({event: "dot", pose: pose, good: 1, need: 3}) }, 60)
+    at(function () { feed({event: "dot", pose: pose, good: 3, need: 3}); dotted(pose, held) }, 60)
+    // the pose is applied when the ring has had its second; then a beat; then the ball moves on
+    at(function () { return function () { return session.dotHeld.length === held.length && session.dotState !== "capturing" } }, 20)
+    at(function () { return function () { return session.dotState === "waiting" || session.dotState === "done" } }, 20)
+    at(function () { return function () {
+      var b = ballInfo()
+      var st = Dot2.STATION[session.dotPose]
+      return session.dotPose === "" || (Math.abs(b.x - st.x * stageItem().reachX) < 2 && Math.abs(b.y - st.y * stageItem().reachY) < 2)
+    } }, 20)
+  }
+
+  function buildDot() {
+    var T = {}
     at(function () {
-      log("idle-phase", session.phase)
-      log("idle-mode", view.mode)
-      log("idle-ticks", Ring.TICKS + " " + (tick(0) !== null) + " " + (tick(59) !== null) + " " + (tick(60) === null))
-      log("idle-targets", [9, 3, 0, 6].map(function (k) { return binKinds(k) }).join(" | "))
-      log("idle-target-look", binLook(9))
-      log("idle-inactive", [1, 2, 4, 5, 7, 8, 10, 11].map(function (k) { return binLook(k) }).filter(function (v, i, a) { return a.indexOf(v) === i }).join(" | "))
-      log("idle-glyph", named("glyph").visible + " demo " + demoItem().visible + " " + demoItem().running + " caption " + named("caption").text)
-      log("idle-cameras", cameras + " " + view.previewOn + " " + (named("previewLoader").item === null))
+      log("idle-phase", session.phase + " " + session.dotFlow)
+      log("idle-mode", view.mode + " dot=" + view.dot + " legacy=" + view.legacy)
+      log("idle-card", named("dotCard").visible + " ring-column " + (ring() !== null && ring().visible))
       log("idle-line", line())
-      log("idle-links", links())
-      log("idle-modelink", named("modeLink").text)
-      log("idle-descr", ring().description)
-      log("idle-state", session.scanState + " " + sent.length)
-    }, 700)
+      log("idle-glyph", named("glyph").visible + " demo " + (demoItem() !== null && demoItem().visible) + " caption '" + named("caption").text + "'")
+      log("idle-cameras", cameras + " previewOn " + view.previewOn + " previewLoader " + (named("previewLoader").item === null ? "empty" : "full"))
+      log("idle-links", dotLinks())
+      log("idle-key", keyInfo())
+      log("idle-modes", named("mode-simple").selected + "/" + named("mode-advanced").selected + " " + named("mode-simple").text + "," + named("mode-advanced").text)
+      log("idle-marks", marks())
+      log("idle-state", session.scanState + " sent " + sent.length)
+      log("idle-descr", stageItem().Accessible.description)
+    }, 900)
     at(function () { session.start() })
     at(function () {
       log("auth-phase", session.phase)
       log("auth-cameras", cameras + " " + view.previewOn)
       log("auth-line", line())
-      log("auth-demo", demoItem().running + " " + demoItem().visible + " caption '" + named("caption").text + "'")
-      shellRoot.tAtStart = demoItem().t
-      log("auth-links", links())
+      log("auth-links", dotLinks())
+      log("auth-key", keyInfo())
       log("mode-after-start", session.modeFixed)
       session.setMode("advanced")
       log("mode-inert-after-start", session.mode)
+      // Space before the helper has said ready does nothing
+      pressSpace()
+      log("auth-space-sent", sent.length)
       ready(true)
     })
     at(function () {
-      log("demo-frozen", demoItem().t === shellRoot.tAtStart)
-      log("centre-sent", JSON.stringify(sent))
-      log("centre-phase", session.phase + " " + session.scanState)
-      log("centre-line", line())
-      log("centre-cameras", cameras)
-      track({state: "searching", centre: 0})
-    })
-    at(function () { log("centre0-line", line()); track({state: "hold", centre: 0.5, u: 0.1, v: 0.1}) })
+      log("ready-phase", session.phase + " flow " + session.dotFlow + " " + session.dotState + " pose " + session.dotPose)
+      log("ready-sent", JSON.stringify(sent))
+      log("ready-line", line())
+      log("ready-links", dotLinks())
+      log("ready-key", keyInfo())
+      log("ready-ball", JSON.stringify(ballInfo()))
+      log("ready-cameras", cameras)
+      log("ready-marks", marks())
+      // the ring breathes: its radius changes while the ball waits
+      T.radii = []
+    }, 120)
+    for (var b = 0; b < 8; b++) at(function () { T.radii.push(ring2().r) }, 250)
     at(function () {
-      log("centre50-line", line())
-      log("centre50-arc", ring().arc)
-      log("centre50-dot", JSON.stringify(dotInfo()))
-      log("centre50-links", links())
-      track({state: "hold", centre: 1.0, target: 9, u: 0, v: 0})
-    })
+      var lo = Math.min.apply(null, T.radii), hi = Math.max.apply(null, T.radii)
+      log("breath", "min " + r1(lo) + " max " + r1(hi) + " within " + (lo >= 19.9 && hi <= 24.1) + " moves " + (hi - lo > 1))
+      pressSpace()
+    }, 10)
     at(function () {
-      log("lap1-phase", session.phase)
-      log("lap1-arc", ring().arc)
-      log("lap1-line", line())
-      log("lap1-cur", binLook(9) + " | " + binKinds(9))
-      log("lap1-rest", binLook(3) + " | " + binLook(0) + " | " + binLook(6))
-      log("lap1-inactive", binLook(1) + " | " + binLook(5))
-      log("lap1-links", links())
-      log("lap1-descr", ring().description)
-      track({state: "hold", target: 9, centre: 1, bins: bins({9: 0.4}), u: -1.5, v: 0})
-    })
+      log("press-sent", JSON.stringify(sent.slice(-1)))
+      log("press-state", session.dotState + " " + session.dotPose)
+      log("press-line", line())
+      log("press-key", keyInfo())
+      // a second Space during the press does nothing (and so does a click on the key, which is off)
+      pressSpace()
+      named("spaceKey").clicked()
+      log("press-twice", sent.length + " " + sentCmds())
+      T.sentBefore = sent.length
+    }, 80)
+    // the ring closes in while frames come: one of three is not enough to close it
+    at(function () { feed({event: "dot", pose: "centre", good: 1, need: 3}) }, 400)
     at(function () {
-      log("p40-line", line())
-      log("p40-kinds", binKinds(9))
-      log("p40-look", binLook(9))
-      log("p40-descr", ring().description)
-      log("p40-dot", JSON.stringify(dotInfo()))
-      // Dot at the engine's ring angle: u -1.5 is the left, 270 degrees.
-      track({state: "hold", target: 9, centre: 1, bins: bins({9: 0.55}), u: -1.5, v: 0})
-    })
+      log("closing-1of3", JSON.stringify(ballInfo()))
+      log("closing-good", session.dotGood + " of " + session.dotNeed)
+      feed({event: "dot", pose: "centre", good: 2, need: 3})
+    }, 700)
     at(function () {
-      log("p55-look", binLook(9))
-      // 9 fills: the next arc and its line change in the same frame.
-      track({state: "hold", target: 3, centre: 1, bins: bins({9: 1}), u: 0.1, v: 0.1})
-    })
+      var i = ballInfo()
+      log("closing-2of3", i.close + " " + i.state + " held " + session.dotHeld.length + " line " + line())
+      feed({event: "dot", pose: "centre", good: 3, need: 3})
+    }, 300)
+    // all three gathered but no `dotted` yet: the ring is held short of closed (the helper has not said)
     at(function () {
-      log("next-line", line())
-      log("next-9", binLook(9) + " | " + binKinds(9))
-      log("next-3", binLook(3) + " | " + binKinds(3))
-      log("next-descr", ring().description)
-      log("next-dot-absent", JSON.stringify(dotInfo()))
-      track({state: "over", target: 3, centre: 1, bins: bins({9: 1}), u: 3.0, v: 0.2})
-    })
+      var i = ballInfo()
+      log("closing-3of3-undotted", i.close + " " + i.state + " pose " + session.dotPose)
+      dotted("centre", ["centre"])
+    }, 120)
     at(function () {
-      log("over-line", line())
-      track({state: "edge", target: 3, centre: 1, bins: bins({9: 1}), u: 1, v: 0})
-    })
+      log("landed", session.dotState + " held " + session.dotHeld.join(",") + " line " + line() + " " + JSON.stringify(ballInfo()))
+      log("landed-links", dotLinks())
+      log("landed-captures", session.captures + " " + session.capturedLabels.join(","))
+      // Space in the beat does nothing
+      pressSpace()
+      log("landed-space", sent.length === T.sentBefore ? "ignored" : "sent")
+    }, 100)
+    at(function () { return function () { return session.dotState === "waiting" } }, 20)
+    at(function () { return function () { return Math.abs(ballInfo().x + 120) < 2 } }, 20)
     at(function () {
-      log("edge-line", line())
-      track({state: "hold", target: 3, centre: 1, bins: bins({9: 1, 3: 0.4}), u: 1.4, v: 0})
-    })
+      log("left-ball", JSON.stringify(ballInfo()))
+      log("left-line", line())
+      log("left-marks", marks())
+      log("left-key", keyInfo())
+      pressSpace()
+    }, 100)
     at(function () {
-      log("three-descr", ring().description)
-      log("three-line", line())
-      track({state: "hold", target: 0, centre: 1, bins: bins({9: 1, 3: 1}), u: 0, v: -1.4})
-    })
+      log("left-sent", JSON.stringify(sent.slice(-1)))
+      // somebody else: the helper says not_you, the ring opens again and the ball stays
+      feed({event: "dot", pose: "left", good: 2, need: 3})
+    }, 120)
+    at(function () { feed({event: "capture_failed", code: "not_you"}) }, 400)
+    at(function () { return function () { return ballInfo().close < 0.05 } }, 20)
     at(function () {
-      track({state: "hold", target: 6, centre: 1, bins: bins({9: 1, 3: 1}), skipped: [0], u: 0, v: 1.4})
-    })
+      log("fail-notyou", session.dotState + " | " + line() + " | " + JSON.stringify(ballInfo()) + " | " + keyInfo() + " | colour " + (named("line").color.toString() === harnessColors.urgent.toString() ? "urgent" : "normal"))
+      log("fail-held", session.dotHeld.join(",") + " links " + dotLinks())
+      pressSpace()
+    }, 150)
     at(function () {
-      log("skip-line", line())
-      log("skip-rest", binLook(0) + " | " + binKinds(0))
-      // 3.1.5: the next target's first frames say "over" (a far-off frame in the CHAIN..HARD band): the note still shows
-      track({state: "over", target: 6, centre: 1, bins: bins({9: 1, 3: 1}), skipped: [0], u: 0, v: 1.4})
-      log("skip-over-line", line())
-      track({state: "edge", target: 6, centre: 1, bins: bins({9: 1, 3: 1}), skipped: [0], u: 0, v: 1.4})
-      log("skip-edge-line", line())
-      track({state: "hold", target: 6, centre: 1, bins: bins({9: 1, 3: 1}), skipped: [0], u: 0, v: 1.4})
-      // Every bin full in a track does NOT show Done in Simple; it arrives with swept.
-      track({state: "hold", target: 6, centre: 1, bins: bins({9: 1, 3: 1, 0: 1, 6: 1}), canFinish: true, u: 0, v: 1.4})
-    })
+      log("retry-sent", JSON.stringify(sent.slice(-1)) + " line " + line())
+      feed({event: "dot", pose: "left", good: 3, need: 3}); dotted("left", ["centre", "left"])
+    }, 150)
+    at(function () { return function () { return session.dotPose === "top" && session.dotState === "waiting" } }, 20)
+    at(function () { return function () { return Math.abs(ballInfo().y + 96) < 2 && Math.abs(ballInfo().x) < 2 } }, 20)
     at(function () {
-      log("allfull-links", links())
-      feed({event: "swept", mode: "simple", lap: 1, filled: [0, 3, 6, 9], skipped: [], centreHeld: true, kept: 5})
-    })
+      log("top-ball", JSON.stringify(ballInfo()))
+      log("top-line", line())
+      log("top-marks", marks())
+    }, 50)
+    pressAndTake("top", ["centre", "left", "top"])
     at(function () {
-      log("swept-line", line())
-      log("swept-links", links())
-      log("swept-state", session.scanState + " " + session.captures)
-      log("swept-filled", [9, 3, 0, 6].map(function (k) { return binLook(k).split(" ")[0] }).join(" "))
-      log("swept-check", named("check").visible + " " + named("check").width + " " + named("check").drawn + " " + named("check").x + "," + named("check").y)
-      // Kept 5 (all four targets): no "Scan again", only Done. A second lap is begun through the
-      // session (test plumbing: there is no link for it here) to reach the kept-3 ending.
-      log("kept5-more", linkState("moreLink"))
-      view.session.startOver()
-    })
+      log("right-ball", JSON.stringify(ballInfo()))
+      log("right-line", line())
+      log("right-links-before", dotLinks())
+    }, 50)
+    pressAndTake("right", ["centre", "left", "top", "right"])
     at(function () {
-      log("again-sent", JSON.stringify(sent.slice(-1)))
-      log("again-ring", binLook(9) + " | " + session.phase)
-      log("again-violations", violations)
-      track({state: "hold", centre: 1, target: 9})
-      feed({event: "swept", mode: "simple", lap: 1, filled: [0, 3, 9], skipped: [6], centreHeld: true, kept: 3})
-    })
+      log("bottom-ball", JSON.stringify(ballInfo()))
+      log("bottom-line", line())
+      log("bottom-links", dotLinks())
+      log("bottom-marks", marks())
+      pressSpace()
+    }, 100)
+    at(function () { feed({event: "capture_failed", code: "too_dark"}) }, 200)
     at(function () {
-      log("kept3-line", line())
-      log("kept3-links", links())
-      log("kept3-more-text", named("moreLink").text)
-      log("kept3-skipped-rest", binLook(6))
-      // "Scan again": lap 1 again at once, same mode, no second password; the ring empties.
-      named("moreLink").clicked()
-    })
+      log("bottom-fail", line() + " | " + dotLinks() + " | " + keyInfo())
+      // a Save before all five (the centre, left and right are held): it asks the helper to save, nothing else
+      T.sentBefore = sent.length
+    }, 150)
+    pressAndTake("bottom", ["centre", "left", "top", "right", "bottom"])
     at(function () {
-      log("more-sent", JSON.stringify(sent.slice(-1)))
-      log("more-ring", binLook(9) + " | " + session.phase + " | " + links())
-      track({state: "hold", centre: 1, target: 9})
-      feed({event: "swept", mode: "simple", lap: 1, filled: [0, 3, 6, 9], skipped: [], centreHeld: true, kept: 5})
-    })
+      log("done-state", session.dotState + " all " + session.dotAllHeld + " line " + line() + " | " + dotLinks())
+      log("done-ball", JSON.stringify(ballInfo()) + " check " + named("check").visible + " " + r1(named("check").drawn))
+      log("done-marks", marks())
+      log("done-state-scan", session.scanState + " " + session.captures)
+      log("done-key", keyInfo())
+      log("done-descr", stageItem().Accessible.description)
+    }, 300)
+    at(function () { named("againLink").clicked() })
     at(function () {
-      // Done on swept sends done, which ends the session.
-      log("kept5-again", links())
+      log("again", session.dotState + " held " + session.dotHeld.length + " pose " + session.dotPose + " line " + line() + " | " + dotLinks())
+      log("again-sent", "no new message: " + (sentCmds().split(",").filter(function (c) { return c === "dot" }).length) + " dots in all")
+      log("again-state", session.scanState + " " + session.captures)
+    }, 150)
+    at(function () { return function () { return Math.abs(ballInfo().x) < 2 && Math.abs(ballInfo().y) < 2 } }, 20)
+    // a Return before all five does nothing; the retake: the centre again
+    at(function () { view.activate(); log("again-return", sentCmds().split(",").pop()); pressSpace() }, 100)
+    at(function () { log("retake-sent", JSON.stringify(sent.slice(-1))); feed({event: "dot", pose: "centre", good: 3, need: 3}); dotted("centre", ["centre"]) }, 100)
+    at(function () { return function () { return session.dotState === "waiting" && session.dotHeld.length === 1 } }, 20)
+    pressAndTake("left", ["centre", "left"])
+    pressAndTake("top", ["centre", "left", "top"])
+    pressAndTake("right", ["centre", "left", "top", "right"])
+    at(function () {
+      log("save-shown", dotLinks() + " scanState " + session.scanState)
+      // Return does not save a partial scan; the Save link does
       view.activate()
-    })
+      log("save-return", sentCmds().split(",").pop())
+      named("saveLink").clicked()
+    }, 100)
     at(function () {
-      log("done-sent", sent[sent.length - 1].cmd)
-      log("done-finished", finishedCount + " " + finishedSaved)
+      log("save-sent", sent[sent.length - 1].cmd)
+      log("save-finished", finishedCount + " " + finishedSaved)
       log("violations", violations)
       log("capture-never", sentCmds().indexOf("capture") < 0)
-      log("finish-never-simple", sentCmds().indexOf("finish") < 0)
-      // The look's contrast over #000 (section 3), for this palette and two more:
-      // a theme whose accent equals its foreground and a coloured one.
-      var pals = {theme: harnessColors.accent, mono: harnessColors.foreground, coloured: "#34c759"}
-      for (var name in pals) {
-        var acc = pals[name]
-        log("contrast-" + name, [
-          r1(contrastOf(harnessColors.secondary, Ring.REST_OPACITY)),
-          r1(contrastOf(harnessColors.foreground, 1.0)),
-          r1(contrastOf(acc, Ring.DONE_OPACITY)),
-          r1(contrastOf(harnessColors.secondary, 0.7)),
-          r1(Ring.contrast(Ring.over(rgb(Qt.color(acc)), Ring.DONE_OPACITY), Ring.over(rgb(harnessColors.secondary), Ring.REST_OPACITY)))
-        ].join(" "))
-      }
+      log("sweep-never", sentCmds().indexOf("sweep") < 0)
+      log("finish-never", sentCmds().indexOf("finish") < 0)
+    }, 200)
+  }
+
+  // ---- Esc and Cancel in every state of the dot scan ---------------------------------------------------
+  function buildDotEsc() {
+    function fresh() {
+      at(function () { shellRoot.finishedCount = 0; sessionLoader.active = false; sessionLoader.active = true; shellRoot.fakeHeld = [] }, 120)
+    }
+    at(function () { shellRoot.eofs = 0; session.requestClose() }, 200)
+    at(function () { log("esc-idle", eofs + " " + finishedCount + " " + finishedSaved) })
+    fresh()
+    at(function () { session.start() })
+    at(function () { eofs = 0; session.requestClose() }, 150)
+    at(function () { log("esc-authorising", eofs + " " + session.phase + " " + finishedCount + " " + cameras) }, 200)
+    fresh()
+    at(function () { session.start() })
+    at(function () { ready(true) })
+    at(function () { eofs = 0; log("esc-waiting-phase", session.phase + " " + session.dotState); session.requestClose() }, 150)
+    at(function () { log("esc-waiting", eofs + " " + finishedCount + " " + finishedSaved + " " + cameras + " last " + sentCmds().split(",").pop()) }, 200)
+    // a press running: Esc cancels it, the camera goes
+    fresh()
+    at(function () { session.start() })
+    at(function () { ready(true) })
+    at(function () { pressSpace() }, 100)
+    at(function () { eofs = 0; log("esc-capturing-phase", session.dotState); session.requestClose() }, 150)
+    at(function () { log("esc-capturing", eofs + " " + finishedCount + " " + finishedSaved + " " + cameras) }, 200)
+    // Cancel with the centre, left and right held (a Save was on offer): nothing is saved
+    fresh()
+    at(function () { session.start() })
+    at(function () { ready(true) })
+    at(function () { feed({event: "dotted", pose: "right", poses: ["centre", "left", "right"], kept: 3}) }, 100)
+    at(function () { return function () { return session.dotState === "waiting" && session.dotHeld.length === 3 } }, 20)
+    at(function () { log("esc-save-offered", dotLinks()); eofs = 0; named("cancelLink").clicked() }, 100)
+    at(function () { log("esc-save", eofs + " " + finishedCount + " " + finishedSaved + " sent " + sentCmds().split(",").pop()) }, 200)
+    // all five held: Esc still discards (it never saves); Done is the way to keep it
+    fresh()
+    at(function () { session.start() })
+    at(function () { ready(true) })
+    at(function () { feed({event: "dotted", pose: "bottom", poses: ["centre", "left", "top", "right", "bottom"], kept: 5}) }, 100)
+    at(function () { return function () { return session.dotState === "done" } }, 20)
+    at(function () { eofs = 0; log("esc-done-phase", session.dotState + " " + dotLinks()); session.requestClose() }, 100)
+    at(function () { log("esc-done", eofs + " " + finishedCount + " " + finishedSaved) }, 200)
+    // the "Nothing was saved" line stays until the session finishes
+    fresh()
+    at(function () { session.start() })
+    at(function () { ready(true) })
+    at(function () { session.discard() }, 5)
+    at(function () { log("esc-line-discarding", line()) }, 5)
+    at(function () { log("esc-end", violations) }, 150)
+  }
+
+  // ---- why a press did not work: the helper's codes, in plain words ---------------------------------------
+  function buildDotFail() {
+    var codes = ["no_face", "too_dark", "multiple_faces", "not_you", "black_frames", "too_far", "too_close", "face_cut_off", "timeout", "camera_busy", "bad_sweep"]
+    at(function () { session.start() }, 150)
+    at(function () { ready(true) })
+    codes.forEach(function (code) {
+      at(function () { pressSpace() }, 80)
+      at(function () { feed({event: "capture_failed", code: code}) }, 100)
+      at(function () {
+        log("fail-" + code, session.dotState + " | " + line() + " | held " + session.dotHeld.length + " pose " + session.dotPose + " | " + keyInfo())
+      }, 60)
     })
+    // an unknown code still says something plain
+    at(function () { pressSpace() }, 80)
+    at(function () { feed({event: "capture_failed", code: "from_the_future"}) }, 100)
+    at(function () { log("fail-unknown", line()) }, 60)
+    // a failed press leaves the held poses as they were, and the next press is for the same pose
+    at(function () { pressSpace() }, 80)
+    at(function () { feed({event: "dotted", pose: "centre", poses: ["centre"], kept: 1}) }, 80)
+    at(function () { return function () { return session.dotState === "waiting" && session.dotHeld.length === 1 } }, 20)
+    at(function () { pressSpace() }, 100)
+    at(function () { feed({event: "capture_failed", code: "no_face"}) }, 100)
+    at(function () { pressSpace() }, 100)
+    at(function () {
+      log("fail-same-pose", sent.slice(-2).map(function (c) { return c.pose }).join(",") + " held " + session.dotHeld.join(","))
+      // a refusal that is not about a press (a Save before the floor) is not a failed press
+      feed({event: "dotted", pose: "left", poses: ["centre", "left"], kept: 2})
+    }, 100)
+    at(function () { return function () { return session.dotState === "waiting" && session.dotHeld.length === 2 } }, 20)
+    at(function () {
+      var before = session.dotWhy
+      feed({event: "capture_failed", code: "bad_sweep"})
+      log("fail-not-a-press", before + "|" + session.dotWhy + " state " + session.dotState + " line " + line())
+      log("fail-violations", violations)
+    }, 100)
+  }
+
+  // ---- the ring completes only with enough good frames -------------------------------------------------------
+  function buildDotRing() {
+    var T = {}
+    at(function () { session.start() }, 150)
+    at(function () { ready(true) })
+    at(function () { pressSpace() }, 100)
+    // two of three, for two seconds: the ring is held short of closed, no matter how long it waits
+    at(function () { feed({event: "dot", pose: "centre", good: 1, need: 3}) }, 100)
+    at(function () { feed({event: "dot", pose: "centre", good: 2, need: 3}) }, 400)
+    at(function () { T.samples = [] }, 600)
+    for (var i = 0; i < 6; i++) at(function () { T.samples.push(ballInfo().close) }, 400)
+    at(function () {
+      var top = Math.max.apply(null, T.samples)
+      log("held-short", "max close " + r1(top) + " state " + session.dotState + " good " + session.dotGood + " held " + session.dotHeld.length + " ring " + r1(ring2().r))
+      log("held-short-below", top < 1 && top <= 0.3 + 0.7 * 2 / 3 + 0.01)
+      // it is the helper's `dotted` that closes it: arriving after the second, it applies at once
+      feed({event: "dot", pose: "centre", good: 3, need: 3})
+      dotted("centre", ["centre"])
+    }, 100)
+    at(function () {
+      log("closed", ballInfo().close + " " + session.dotState + " held " + session.dotHeld.join(",") + " ring " + r1(ring2().r))
+    }, 400)
+    // a `dotted` that arrives early (a quick camera) still waits for the ring's second
+    at(function () { return function () { return session.dotState === "waiting" } }, 20)
+    at(function () { T.t0 = Date.now(); pressSpace() }, 100)
+    at(function () { feed({event: "dot", pose: "left", good: 3, need: 3}); dotted("left", ["centre", "left"]) }, 60)
+    at(function () {
+      log("early-dotted", "held " + session.dotHeld.length + " state " + session.dotState)
+      return function () { return session.dotHeld.length === 2 }
+    }, 20)
+    at(function () {
+      var waited = Date.now() - T.t0
+      log("early-waited", waited >= 950 ? "a second" : "too soon " + waited)
+    }, 10)
+    // a press that fails opens the ring again, from wherever it had got to
+    at(function () { return function () { return session.dotState === "waiting" } }, 20)
+    at(function () { pressSpace() }, 100)
+    at(function () { feed({event: "dot", pose: "top", good: 1, need: 3}) }, 500)
+    at(function () { T.mid = ballInfo().close; feed({event: "capture_failed", code: "no_face"}) }, 100)
+    at(function () { return function () { return ballInfo().close < 0.02 } }, 20)
+    at(function () { log("reopened", "mid " + (T.mid > 0.1 ? "closing" : "open") + " then " + ballInfo().close + " ring " + r1(ring2().r) + " state " + session.dotState) }, 50)
+  }
+
+  // ---- reduced motion: nothing depends on a running animation --------------------------------------------------
+  function buildDotReduced() {
+    at(function () { }, 900)
+    at(function () {
+      log("reduced-idle", "demo " + (demoItem() === null ? "none" : "present") + " glyph " + named("glyph").visible + " caption '" + named("caption").text + "'")
+      log("reduced-ring", "r " + r1(ring2().r) + " pulse running " + stageItem().pulse)
+      session.start()
+    }, 200)
+    at(function () { ready(true) })
+    at(function () {
+      var a = ring2().r
+      log("reduced-waiting", ballInfo().state + " r " + r1(a))
+    }, 300)
+    at(function () { log("reduced-static", "r " + r1(ring2().r) + " pulse " + stageItem().pulse) }, 500)
+    at(function () { pressSpace() }, 50)
+    at(function () { feed({event: "dot", pose: "centre", good: 1, need: 3}) }, 100)
+    at(function () { log("reduced-1of3", JSON.stringify(ballInfo())); feed({event: "dot", pose: "centre", good: 3, need: 3}); dotted("centre", ["centre"]) }, 100)
+    at(function () { return function () { return session.dotState === "waiting" } }, 20)
+    at(function () { log("reduced-moved", JSON.stringify(ballInfo()) + " easing " + (ballItem().x === stageItem().stageW / 2 + stageItem().targetX)) }, 5)
+    at(function () { pressSpace(); feed({event: "capture_failed", code: "too_dark"}) }, 100)
+    at(function () { log("reduced-failed", "close " + ballInfo().close + " line " + line()) }, 5)
+  }
+
+  // ---- the idle demo: the ball, the ring and the head, no camera ------------------------------------------------------
+  function buildDotDemo() {
+    var captions = [], seen = {}
+    function note() {
+      var c = named("caption").text
+      if (c !== "" && captions[captions.length - 1] !== c) captions.push(c)
+    }
+    at(function () {
+      log("demo-state", demoItem().running + " " + demoItem().visible + " cameras " + cameras + " glyph " + named("glyph").visible)
+      log("demo-line", line())
+    }, 400)
+    var t0 = 0
+    at(function () {
+      t0 = Date.now()
+      return function () {
+        note()
+        var f = demoItem().frame, i = ballInfo()
+        if (f.pose === "left" && f.close >= 0.95 && i.close >= 0.9) seen.leftClosed = true
+        if (f.pose === "left" && i.x < -100) seen.leftBall = true
+        if (f.pose === "top" && i.y < -80) seen.topBall = true
+        if (f.pose === "right" && i.x > 100) seen.rightBall = true
+        if (f.pose === "bottom" && i.y > 80) seen.bottomBall = true
+        if (f.pose === "left" && f.yaw < -0.9) seen.leftYaw = true
+        if (f.pose === "right" && f.yaw > 0.9) seen.rightYaw = true
+        if (f.pose === "top" && f.pitch > 0.9) seen.upPitch = true
+        if (f.pose === "bottom" && f.pitch < -0.9) seen.downPitch = true
+        if (f.held.length === 4 && f.pose === "bottom" && f.close < 0) seen.fourTaken = true
+        if (f.pressed) seen.keyPressed = true
+        if (f.done && named("check").visible) seen.check = true
+        return captions.indexOf("All set.") >= 0
+      }
+    }, 100)
+    at(function () {
+      log("demo-captions", captions.join(" | "))
+      log("demo-seen", JSON.stringify(seen))
+      log("demo-seconds", Math.round((Date.now() - t0) / 1000))
+      shellRoot.tAtStart = 0
+      session.start()
+    }, 200)
+    at(function () { shellRoot.tAtStart = demoItem() ? demoItem().t : -1 }, 300)
+    at(function () {
+      log("start-stopped", (demoItem() === null ? "gone" : demoItem().running + " " + demoItem().visible) + " cameras " + cameras)
+    }, 400)
+  }
+
+  // ---- a 3.1.x helper (no `dot`): Simple falls back to the single capture ---------------------------------------
+  function buildDotSkew() {
+    at(function () { log("skew-idle", session.phase + " dot=" + view.dot + " legacy=" + view.legacy); session.start() }, 250)
+    at(function () { shellRoot.verbs = ["capture", "sweep", "abort", "finish"]; ready(true) })
+    at(function () {
+      log("skew-phase", session.phase + " legacy " + session.legacy + " dotFlow " + session.dotFlow + " sweepFlow " + session.sweepFlow)
+      log("skew-view", "legacy " + view.legacy + " dot " + view.dot)
+      log("skew-sent", sentCmds())
+      log("skew-note", session.legacyNote)
+    }, 400)
   }
 
   // ---- Advanced -----------------------------------------------------------------------------------------
@@ -536,7 +833,7 @@ ShellRoot {
     at(function () {
       session.setMode("advanced")
       log("adv-mode", view.mode + " " + session.mode)
-      log("adv-idle-modelink", named("modeLink").text)
+      log("adv-idle-modes", named("mode-simple").selected + "/" + named("mode-advanced").selected)
       log("adv-idle-rest", binKinds(0) + " | " + binKinds(5) + " | " + binKinds(11))
       log("adv-idle-descr", ring().description)
       session.start()
@@ -765,7 +1062,7 @@ ShellRoot {
     })
   }
 
-  // ---- the idle demo (no camera): plays only in idle, stops on Start, still under reduced motion ----
+  // ---- the ring's idle demo (Advanced; Simple's is "dot-demo"): plays only in idle, stops on Start ----
   function buildDemo() {
     var captions = [], seen = {}
     function note() {
@@ -776,32 +1073,9 @@ ShellRoot {
       log("demo-state", demoItem().running + " " + demoItem().visible + " cameras " + cameras + " glyph " + named("glyph").visible)
       log("demo-line", line())
     }, 300)
-    // Simple: one full loop, noting the captions in order, the arcs filling and the rim closing.
     var t0 = 0
     at(function () {
       t0 = Date.now()
-      return function () {
-        note()
-        var b = ring().bins
-        if (ring().target === 9 && b[9] > 0.5) seen.leftFill = ring().look9 || binKinds(9)
-        if (ring().target === 3 && b[3] > 0.5) seen.rightFill = binKinds(3)
-        if (ring().arc >= 0.99) seen.rim = true
-        if (ring().target === 9 && demoItem().frame.yaw < -0.9) seen.leftYaw = true
-        if (ring().target === 3 && demoItem().frame.yaw > 0.9) seen.rightYaw = true
-        if (ring().target === 0 && demoItem().frame.pitch > 0.9) seen.upPitch = true
-        if (ring().target === 6 && demoItem().frame.pitch < -0.9) seen.downPitch = true
-        if (named("caption").text === "All set." && b[9] >= 0.999 && b[3] >= 0.999 && b[0] >= 0.999 && b[6] >= 0.999) seen.allFilled = true
-        return captions.indexOf("All set.") >= 0 && seen.allFilled === true
-      }
-    }, 100)
-    at(function () {
-      log("simple-captions", captions.join(" | "))
-      log("simple-seen", JSON.stringify(seen))
-      log("simple-seconds", Math.round((Date.now() - t0) / 1000))
-      captions = []; seen = {}
-      session.setMode("advanced")
-    }, 300)
-    at(function () {
       var top = 0, monotone = true, last = -1
       return function () {
         note()
@@ -838,9 +1112,7 @@ ShellRoot {
       log("glyph", named("glyph").visible)
       log("caption", named("caption").text)
       log("ring", binLook(9) + " | " + ring().arc)
-      session.setMode("advanced")
     }, 300)
-    at(function () { log("caption-advanced", named("caption").text) }, 10)
   }
 
   // The card is not on screen (the host hides it): nothing runs.
@@ -909,12 +1181,13 @@ ShellRoot {
     var t0 = Date.now()
     at(function () {
       log("mode-first", view.mode + " phase " + session.phase + " after " + (Date.now() - t0) + "ms")
-      log("mode-allowed", session.simpleAllowed + " " + session.activeMode + " link " + linkState("modeLink") + " " + named("modeLink").text)
+      log("mode-allowed", session.simpleAllowed + " " + session.activeMode + " link " + linkState(choiceName()) + " " + named("mode-advanced").text)
     }, 1800)
     at(function () {
       log("mode-settled", view.mode)
       if (act === "click") {
-        named("modeLink").clicked()
+        // the other mode's button, as a person would press it
+        named(view.mode === "simple" ? "mode-advanced" : "mode-simple").clicked()
         log("mode-clicked", view.mode)
       } else if (act === "start") {
         session.start()
@@ -922,7 +1195,7 @@ ShellRoot {
     }, 100)
     at(function () {
       if (act === "start") {
-        log("mode-start-phase", session.phase + " " + linkState("modeLink"))
+        log("mode-start-phase", session.phase + " " + linkState(choiceName()))
         session.setMode("advanced")
         log("mode-after-start-click", session.mode)
       }
@@ -1011,6 +1284,12 @@ ShellRoot {
     at(function () { island.retract(); log("retract-twice", shellRoot.retractedCount) }, 100)
     at(function () { log("retract-twice-late", shellRoot.retractedCount); island.drop() }, 400)
     at(function () { log("again", r1(island.heightP)) }, 700)
+    // The card's keys reach the session through the island: Space is one press, Return is Start and Done
+    at(function () { session.start() }, 100)
+    at(function () { ready(true) }, 100)
+    at(function () { island.capture() }, 150)
+    at(function () { log("island-space", JSON.stringify(sent.slice(-1))); island.capture() }, 100)
+    at(function () { log("island-space-twice", sentCmds()) }, 50)
   }
   property real t1: 0
   property real tAtStart: 0
@@ -1029,11 +1308,11 @@ ShellRoot {
     // The idle demo, caught at a few of its steps (the demo is time-driven, so each
     // is waited for rather than timed).
     var stops = m === "simple"
-      ? [["d1-centre", function () { return demoItem().caption === "Look at the camera" && ring().arc > 0.6 }],
-         ["d2-left", function () { return ring().target === 9 && ring().bins[9] > 0.6 }],
-         ["d3-right", function () { return ring().target === 3 && ring().bins[3] > 0.6 }],
-         ["d4-up", function () { return ring().target === 0 && ring().bins[0] > 0.6 }],
-         ["d5-down", function () { return ring().target === 6 && ring().bins[6] > 0.6 }]]
+      ? [["d1-centre", function () { return demoItem().frame.pose === "centre" && demoItem().frame.close > 0.6 }],
+         ["d2-left", function () { return demoItem().frame.pose === "left" && demoItem().frame.close > 0.6 }],
+         ["d3-top", function () { return demoItem().frame.pose === "top" && demoItem().frame.close > 0.6 }],
+         ["d4-right", function () { return demoItem().frame.pose === "right" && demoItem().frame.close > 0.6 }],
+         ["d5-bottom", function () { return demoItem().frame.pose === "bottom" && demoItem().frame.close > 0.6 }]]
       : [["d1-quarter", function () { return ring().bins[2] > 0.9 && ring().bins[3] < 0.2 }],
          ["d2-half", function () { return ring().bins[5] > 0.9 && ring().bins[6] < 0.2 }],
          ["d3-threequarters", function () { return ring().bins[8] > 0.9 && ring().bins[9] < 0.2 }],
@@ -1046,20 +1325,27 @@ ShellRoot {
     at(function () { shoot(m + "-1-idle") }, 250)
     at(function () { session.start() })
     at(function () { ready(true) })
-    at(function () { track({state: "hold", centre: 0.5, u: 0.1, v: 0}) }, 250)
-    at(function () { shoot(m + "-2-centre") }, 400)
     if (m === "simple") {
-      at(function () { track({state: "hold", centre: 1, target: 9, bins: bins({9: 0.3}), u: -1.4, v: 0.2}) }, 700)
-      at(function () { shoot(m + "-3-left30") }, 400)
-      at(function () { track({state: "hold", centre: 1, target: 9, bins: bins({9: 0.8}), u: -1.5, v: 0.1}) }, 700)
-      at(function () { shoot(m + "-4-left80") }, 400)
-      at(function () { track({state: "hold", centre: 1, target: 3, bins: bins({9: 1, 3: 0.5}), u: 1.5, v: 0}) }, 800)
-      at(function () { shoot(m + "-5-right50") }, 400)
-      at(function () { track({state: "hold", centre: 1, target: 6, bins: bins({9: 1, 3: 1, 0: 1, 6: 0.4}), u: 0, v: 1.3}) }, 900)
-      at(function () { shoot(m + "-6-down40") }, 400)
-      at(function () { track({state: "hold", centre: 1, target: 6, bins: bins({9: 1, 3: 1, 0: 1, 6: 1}), u: 0, v: 1.3}); feed({event: "swept", mode: "simple", lap: 1, filled: [0, 3, 6, 9], skipped: [], centreHeld: true, kept: 5}) }, 900)
-      at(function () { shoot(m + "-7-swept") }, 600)
+      at(function () { }, 700)
+      at(function () { shoot(m + "-2-centre") }, 400)
+      at(function () { pressSpace() }, 300)
+      at(function () { feed({event: "dot", pose: "centre", good: 2, need: 3}) }, 500)
+      at(function () { shoot(m + "-3-closing") }, 300)
+      at(function () { feed({event: "dot", pose: "centre", good: 3, need: 3}); dotted("centre", ["centre"]) }, 100)
+      at(function () { return function () { return session.dotState === "waiting" && Math.abs(ballInfo().x + 120) < 2 } }, 20)
+      at(function () { shoot(m + "-4-left") }, 300)
+      at(function () { pressSpace() }, 100)
+      at(function () { feed({event: "capture_failed", code: "no_face"}) }, 300)
+      at(function () { shoot(m + "-5-nofacefound") }, 300)
+      at(function () { feed({event: "dotted", pose: "right", poses: ["centre", "left", "top", "right"], kept: 4}) }, 100)
+      at(function () { return function () { return session.dotState === "waiting" && Math.abs(ballInfo().y - 96) < 2 } }, 20)
+      at(function () { shoot(m + "-6-save") }, 300)
+      at(function () { feed({event: "dotted", pose: "bottom", poses: ["centre", "left", "top", "right", "bottom"], kept: 5}) }, 100)
+      at(function () { return function () { return session.dotState === "done" } }, 20)
+      at(function () { shoot(m + "-7-done") }, 600)
     } else {
+      at(function () { track({state: "hold", centre: 0.5, u: 0.1, v: 0}) }, 250)
+      at(function () { shoot(m + "-2-centre") }, 400)
       at(function () { track({state: "hold", centre: 1, target: 3, bins: bins({3: 0.4}), u: 1.4, v: 0}) }, 700)
       at(function () { shoot(m + "-3-right40") }, 400)
       at(function () { track({state: "hold", centre: 1, target: 8, bins: bins({3: 1, 4: 1, 5: 1, 8: 0.5}), u: -1.2, v: 0.8}) }, 800)
