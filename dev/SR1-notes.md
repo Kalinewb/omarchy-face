@@ -581,6 +581,8 @@ This is the root-side twin of the card's Save link: the card cannot save less th
 
 ### 8. Tests that pin the above
 
+At this commit: `e0` 243 checks, `e1` 211, `e3` 206, `lint`, `check-pins`, `check-pins-test`, all passing. (3.1.7 had e0 230, e1 184, e3 187; the drop in e0 and the changes in e1 are the Simple-only tests that went with Simple's sweep.)
+
 `e0` (`dev/e0-pose.py`, `test_dot`): the constants and their relations (the poses are the ring bins 3.1.x's Simple held; `DOT_R` inside the store's range and past `SUDO_R_MAX`; every code is in `CODES`), `dot_word`
 for the centre's gates and the turned pose's lack of them, `dot_agree`, `dot_why`, `dot_floor_ok`, `valid_dot` (14 cells), table V for `dot`, and the child's argument refusals.
 `e1` (`dev/e1-enrol-sweep.sh`, the steps starting "the dot scan"): the five-press happy path and what is stored (poses, `r`, `support`, counts, Sudo's one template), a failed press for each of
