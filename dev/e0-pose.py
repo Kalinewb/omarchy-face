@@ -1057,11 +1057,125 @@ def test_sequencer():
     check("pick under the shipped centre policy: Sudo gets the centre alone, Lock all five",
           [key_of(person, r)[1] for r in sw.pick(person, "sudo", 4)] == ["centre"]
           and [key_of(person, r)[1] for r in sw.pick(person, "lock", 12)] == lock)
-    check("the code and word enums are the plan's twelve and ten",
-          len(sw.CODES) == 12 and len(set(sw.CODES)) == 12 and len(sw.GATE_WORDS) == 10)
+    check("the code and word enums are the plan's twelve (and the dot scan's four) and ten",
+          len(sw.CODES) == 16 and len(set(sw.CODES)) == 16 and len(sw.GATE_WORDS) == 10)
     check("finite() rejects bools, NaN, Infinity and 1e400 and accepts ints and floats",
           not any(sw.finite(x) for x in (True, float("nan"), float("inf"), 10 ** 400, "1", None))
           and sw.finite(0) and sw.finite(-1.5))
+
+
+# --- 9. the dot scan's pure half (3.2.0) -----------------------------------------------
+def test_dot():
+    print("the dot scan")
+    check("the card's poses are the centre, then left, top, right, bottom",
+          sw.DOT_POSES == ("centre", "left", "top", "right", "bottom"))
+    check("each pose but the centre is a ring bin that SIMPLE_TARGETS already held (left 9, top 0, right 3, bottom 6), a legal stored pose",
+          sw.DOT_BINS == {"left": 9, "top": 0, "right": 3, "bottom": 6}
+          and sorted(sw.DOT_BINS.values()) == sorted(sw.SIMPLE_TARGETS)
+          and [sw.pose_name(k) for k in sw.DOT_BINS.values()] == ["a270", "a000", "a090", "a180"])
+    check("the nominal r is inside what the store accepts (0..4) and R_MIN..R_MAX, and past SUDO_R_MAX (no policy could give these to Sudo by r)",
+          sw.R_MIN <= sw.DOT_R <= sw.R_MAX and sw.DOT_R <= 4 and sw.DOT_R > sw.SUDO_R_MAX)
+    check("every code the child may send, and every reason's code, is in the allow-list's CODES; each reason is distinct",
+          set(sw.DOT_FAIL_CODES) <= set(sw.CODES) and {c for _, c in sw.DOT_REASONS} <= set(sw.DOT_FAIL_CODES)
+          and len({k for k, _ in sw.DOT_REASONS}) == len(sw.DOT_REASONS))
+    check("the need fits the child's argument bound (1..9), a press fits inside the store's support bound (2..99), and Simple's stored cap holds five",
+          1 <= sw.DOT_NEED <= 9 and 2 <= sw.DOT_NEED <= 99 and sw.SIMPLE_MAX_STORED >= 5)
+    check("a press cannot out-wait its own ceiling: DOT_SECONDS is short (under 10 s) and positive", 0 < sw.DOT_SECONDS < 10)
+
+    # --- dot_word: the gates
+    dw = sw.dot_word
+    size = (400, 400)
+    inside = (100, 100, 300, 300)
+    check("the centre: no face is 'searching', two are 'multiple'",
+          dw("centre", 0, 0, inside, size, 20, 0) == "searching" and dw("centre", 2, 80, inside, size, 20, 0) == "multiple")
+    check("the centre keeps 3.1.x's size gates: eyes under EYE_MIN are 'closer', over EYE_MAX 'farther', a face at the border 'edge'",
+          dw("centre", 1, sw.EYE_MIN - 1, inside, size, 20, 0) == "closer" and dw("centre", 1, sw.EYE_MAX + 1, inside, size, 20, 0) == "farther"
+          and dw("centre", 1, 80, (2, 100, 300, 300), size, 20, 0) == "edge")
+    check("the centre keeps the brightness gates: over DARK_MAX or over SATURATED_MAX is 'dark'",
+          dw("centre", 1, 80, inside, size, sw.DARK_MAX + 1, 0) == "dark" and dw("centre", 1, 80, inside, size, 20, sw.SATURATED_MAX + 1) == "dark")
+    check("a good centre frame passes, and so does one exactly at each limit",
+          dw("centre", 1, 80, inside, size, 20, 0) is None and dw("centre", 1, sw.EYE_MIN, inside, size, sw.DARK_MAX, sw.SATURATED_MAX) is None
+          and dw("centre", 1, sw.EYE_MAX, inside, size, 20, 0) is None)
+    check("a turned head (any other pose) is judged on faces and light only: small eyes, a face at the border and a roll are all fine",
+          all(dw(p, 1, 20, (0, 0, 40, 40), size, 20, 0) is None for p in ("left", "top", "right", "bottom")))
+    check("...but one face and light still apply: none, two, dark and saturated",
+          dw("left", 0, 0, inside, size, 20, 0) == "searching" and dw("left", 2, 80, inside, size, 20, 0) == "multiple"
+          and dw("left", 1, 80, inside, size, sw.DARK_MAX + 1, 0) == "dark" and dw("left", 1, 80, inside, size, 20, sw.SATURATED_MAX + 1) == "dark")
+
+    # --- dot_agree: the ring closes on frames of ONE face
+    ag = sw.dot_agree
+    check("no frames: no medoid and none agree", ag([]) == (None, 0))
+    tight = [frame(i * 0.1, 0.0, 0.01 * i) for i in range(3)]
+    check("three frames within SUPPORT of each other all agree (the count the ring is drawn from)", ag(tight)[1] == 3)
+    check("one odd frame (1.0 away) among three does not count and does not become the medoid: two agree",
+          ag(tight[:2] + [frame(0.5, 0.0, 1.0)])[1] == 2)
+    spread = [frame(i * 0.1, 0.0, 0.2 * i) for i in range(4)]       # 0, 0.2, 0.4, 0.6 on one axis
+    best, count = ag(spread)
+    check("a spread of 0.2 steps: the medoid is a middle one and only those within SUPPORT (0.30) of it count",
+          best["encoding"][0] in (0.2, 0.4) and count == 3, str((best["encoding"][0], count)))
+    check("two people alternating (0 and 0.6 apart) never reach three together until one of them has three frames of his own",
+          ag([frame(i * 0.1, 0.0, 0.6 * (i % 2)) for i in range(4)])[1] == 2 and ag([frame(i * 0.1, 0.0, 0.6 * (i % 2)) for i in range(5)])[1] == 3)
+
+    # --- dot_why: what a failed press says
+    def seen(**counts):
+        base = {"frames": 60, "strobe": 0, "black": 0, "dark": 0, "none": 0, "multi": 0, "closer": 0, "farther": 0,
+                "edge": 0, "stranger": 0}
+        base.update(counts)
+        return base
+    why = sw.dot_why
+    check("no lit frame at all (a strobe with nothing lit, or black ones) is black_frames", why(seen(strobe=60)) == "black_frames"
+          and why(seen(strobe=30, black=30)) == "black_frames" and why(seen(frames=0)) == "black_frames")
+    check("the commonest reason of the lit frames: no face, a dark room, two faces, somebody else, too far, too close, cut off",
+          [why(seen(**{k: 40})) for k in ("none", "dark", "multi", "stranger", "closer", "farther", "edge")]
+          == ["no_face", "too_dark", "multiple_faces", "not_you", "too_far", "too_close", "face_cut_off"])
+    check("a tie goes to the first reason (two faces before no face before dark before somebody else)",
+          why(seen(none=10, multi=10)) == "multiple_faces" and why(seen(dark=10, none=10)) == "no_face" and why(seen(stranger=10, dark=10)) == "too_dark")
+    check("the unlit half of a strobe is never a reason: lit frames that are all fine but too few are 'timeout'",
+          why(seen(strobe=30)) == "timeout")
+    check("...and strobe frames do not outvote the lit ones (30 unlit, 4 lit with no face: no_face)", why(seen(strobe=30, none=4)) == "no_face")
+
+    # --- floor, validity, verbs
+    fl = sw.dot_floor_ok
+    check("a scan can be saved with the centre, left and right (any others too), and with no fewer",
+          fl({"centre", "left", "right"}) and fl({"centre", "left", "top", "right", "bottom"}) and fl({"centre", "left", "top", "right"})
+          and not fl({"centre", "left"}) and not fl({"centre", "right", "top", "bottom"}) and not fl({"left", "right", "top"}) and not fl(set()))
+    vd = sw.valid_dot
+    cells = [
+        (("centre", dict(state="ready", centre=False, stored=0)), None), (("centre", dict(state="swept", centre=True, stored=0)), None),
+        (("left", dict(state="swept", centre=True, stored=0)), None), (("bottom", dict(state="ready", centre=True, stored=0)), None),
+        (("left", dict(state="ready", centre=False, stored=0)), "the centre comes first"),
+        (("centre", dict(state="running", centre=True, stored=0)), "a scan is running or the session is closed"),
+        (("left", dict(state="closed", centre=True, stored=0)), "a scan is running or the session is closed"),
+        (("up", dict(state="ready", centre=True, stored=0)), "pose"), ((None, dict(state="ready", centre=True, stored=0)), "pose"),
+        ((7, dict(state="ready", centre=True, stored=0)), "pose"), ((["centre"], dict(state="ready", centre=True, stored=0)), "pose"),
+        (("centre", dict(state="ready", centre=False, stored=5)), None),
+        (("centre", dict(state="ready", centre=False, stored=6)), "the dot scan may not replace a larger stored set"),
+        (("left", dict(state="swept", centre=True, stored=13)), None),
+    ]
+    wrong = [(c, vd(*c[0])) for c in cells if vd(*c[0]) != c[1]]
+    check("valid_dot: all %d cells" % len(cells), not wrong, str(wrong))
+    check("verb_allowed: a press is allowed in ready and swept, refused while running or closed",
+          [sw.verb_allowed(st, "dot") for st in ("ready", "swept", "running", "trialing", "closed")] == ["allow", "allow", "refuse", "refuse", "refuse"])
+    check("...and a done after a press with nothing taken stays refused (ready after a swept_before)", sw.verb_allowed("ready", "done", swept_before=True) == "refuse")
+
+    # --- the child's arguments, as root's python would see them
+    with tempfile.TemporaryDirectory() as scratch:
+        def child(arguments):
+            return subprocess.run([sys.executable, "-I", "-c", SOURCE, "dot"] + arguments, capture_output=True, text=True,
+                                  cwd=scratch, stdin=subprocess.DEVNULL)
+        good = ["left", "4.0", "3", "5", "0"]
+        refused = [good[:i] + [bad] + good[i + 1:] for i, bad in ((0, "up"), (0, ""), (0, "Centre"), (1, "0"), (1, "-1"), (1, "nan"), (1, "inf"),
+                                                                 (1, "61"), (1, "abc"), (2, "0"), (2, "10"), (2, "x"), (3, "2"), (3, "65"),
+                                                                 (4, "2"), (4, "yes"), (4, ""))]
+        refused += [good[:-1], good + ["0"], []]
+        runs = [child(a) for a in refused]
+        check("%d malformed argument lists are refused before anything starts (exit 2, 'not started by omarchy-face-admin')" % len(refused),
+              all(d.returncode == 2 and "not started by omarchy-face-admin" in d.stderr and "Traceback" not in d.stderr for d in runs),
+              str([(a, d.stderr.strip()[-50:]) for a, d in zip(refused, runs) if d.returncode != 2][:3]))
+        done = child(good)
+        check("a good list gets past parsing (it dies at the reference descriptor the test does not provide, which is not open)",
+              "not started by omarchy-face-admin" not in done.stderr and "read_reference" in done.stderr, done.stderr.strip()[-120:])
+        check("it left nothing behind in its directory", os.listdir(scratch) == [])
 
 
 # --- run ----------------------------------------------------------------------------
@@ -1081,6 +1195,7 @@ def main():
     test_pick()
     test_plain_turns()
     test_sequencer()
+    test_dot()
     print()
     print("findings (the synthetic model, not a measurement; Phase 0 replaces them):")
     for line in FINDINGS:

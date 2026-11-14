@@ -2040,7 +2040,8 @@ def sweep_bounds():
     environment: it is handed these numbers as arguments."""
     sw = pure()
     bounds = {"simple": sw["SIMPLE_LAP_SECONDS"], "advanced": sw["ADVANCED_LAP_SECONDS"],
-              "patience": sw["TARGET_PATIENCE"], "lead": sw["PROMPT_LEAD"], "stall": sw["STALL_SECONDS"]}
+              "patience": sw["TARGET_PATIENCE"], "lead": sw["PROMPT_LEAD"], "stall": sw["STALL_SECONDS"],
+              "dot": sw["DOT_SECONDS"]}
     if real_root():
         return bounds
     try:
@@ -2120,7 +2121,7 @@ class line_reader(object):
 
 # --- the sweep, from the parent's side (plan-face-enroll.md section 6) ---------------
 
-SWEEP_EVENTS = ("sweeping", "track", "swept", "aborted", "capture_failed")
+SWEEP_EVENTS = ("sweeping", "track", "swept", "aborted", "capture_failed", "dotting", "dot", "dotted")
 
 
 def _in_range(low, high):
@@ -2149,6 +2150,10 @@ def _allowed():
         "kept": lambda v: type(v) is int and 0 <= v <= 99,
         "code": lambda v: isinstance(v, str) and v in sw["CODES"],
         "best": _in_range(0, 4), "threshold": _in_range(0, 1), "margin": _in_range(-4, 1),
+        "pose": lambda v: isinstance(v, str) and v in sw["DOT_POSES"],
+        "poses": lambda v: (isinstance(v, list) and len(v) <= len(sw["DOT_POSES"])
+                            and all(isinstance(x, str) and x in sw["DOT_POSES"] for x in v) and len(set(v)) == len(v)),
+        "good": lambda v: type(v) is int and 0 <= v <= 9, "need": lambda v: type(v) is int and 1 <= v <= 9,
     }
 
 
@@ -2241,6 +2246,31 @@ def judge(mode, lap, targets, result, held_centre=None):
             "eye": float(eye) if finite_number(eye) and eye > 0 else None}
 
 
+def judge_dot(pose, result, reference):
+    """The press's answer, from what the child sent: -> {"code": C} to drop it, or {"encoding", "support"}
+    to keep it. Like `judge` it re-checks what the child exists to guarantee with the same pure
+    functions, so a child whose own guard silently passes still cannot store somebody else: a pose
+    other than the centre must be within HARD of the centre and within CHAIN of the nearest
+    template this appearance already holds (`reference`, the centre first). What it cannot re-check
+    is what only a frame shows (one face, lit): that is the child's."""
+    sw = pure()
+    if not isinstance(result, dict):
+        return {"code": "timeout"}
+    if result.get("ok") is not True:
+        code = result.get("code")
+        return {"code": code if isinstance(code, str) and code in sw["DOT_FAIL_CODES"] else "timeout"}
+    encoding, support = result.get("encoding"), result.get("support")
+    if not _encoding_ok(encoding) or type(support) is not int or not sw["DOT_NEED"] <= support <= 99:
+        return {"code": "timeout"}
+    if reference:
+        # the guard's two bounds, stated here and not through `guard_verdict`: the same numbers, a second
+        # reading of them
+        near = min(sw["distance"](encoding, other) for other in reference)
+        if sw["distance"](encoding, reference[0]) > sw["HARD"] or near > sw["CHAIN"]:
+            return {"code": "not_you"}
+    return {"code": None, "encoding": encoding, "support": support}
+
+
 def kill_group(proc):
     try:
         os.killpg(proc.pid, 9)
@@ -2266,12 +2296,31 @@ def sweep_stderr():
 
 
 def run_sweep(reader, mode, lap, targets, bounds, reference, eye, ends_at):
-    """One lap in a child. -> ("result", dict) | ("aborted",) | ("eof",) | ("expired",)
+    """One lap in a child (see run_child)."""
+    ceiling = bounds["simple"] if mode == "simple" else bounds["advanced"]
+    return run_child(
+        reader, reference, eye, ceiling, ends_at,
+        lambda rfd: [mode, str(lap), ",".join(str(k) for k in targets), repr(float(ceiling)),
+                     repr(float(bounds["patience"])), repr(float(bounds["lead"])),
+                     repr(float(bounds["stall"])), str(rfd), "1" if config_get("debug") == "true" else "0"])
+
+
+def run_press(reader, pose, reference, bounds, ends_at):
+    """One press of the dot scan in a child (see run_child)."""
+    sw = pure()
+    return run_child(
+        reader, reference, None, bounds["dot"], ends_at,
+        lambda rfd: ["dot", pose, repr(float(bounds["dot"])), str(sw["DOT_NEED"]), str(rfd),
+                     "1" if config_get("debug") == "true" else "0"])
+
+
+def run_child(reader, reference, eye, ceiling, ends_at, arguments):
+    """One scan in a child. -> ("result", dict) | ("aborted",) | ("eof",) | ("expired",)
     | ("failed", code). The child is in its own session and process group under
     `timeout -k 2`, is killed in `finally` however this function ends, and exits by
-    itself when its stdin closes (the parent is gone)."""
+    itself when its stdin closes (the parent is gone). `arguments(rfd)` is what the program
+    is given after its text: the reference pipe's descriptor is the one thing it cannot know."""
     text = sweep_text()
-    ceiling = bounds["simple"] if mode == "simple" else bounds["advanced"]
     payload = json.dumps({"reference": [[round(x, 7) for x in e] for e in reference], "eye": eye},
                          separators=(",", ":"), allow_nan=False).encode("utf-8")
     try:
@@ -2282,10 +2331,7 @@ def run_sweep(reader, mode, lap, targets, bounds, reference, eye, ends_at):
     proc, rfd, wfd, logger = None, None, None, None
     try:
         rfd, wfd = os.pipe()
-        argv = ["timeout", "-k", "2", str(int(ceiling) + 15), "python3", "-I", "-c", text,
-                mode, str(lap), ",".join(str(k) for k in targets), repr(float(ceiling)),
-                repr(float(bounds["patience"])), repr(float(bounds["lead"])),
-                repr(float(bounds["stall"])), str(rfd), "1" if config_get("debug") == "true" else "0"]
+        argv = ["timeout", "-k", "2", str(int(ceiling) + 15), "python3", "-I", "-c", text] + arguments(rfd)
         err, logger = sweep_stderr()
         # The camera lock goes down with the reference pipe, as the daemon hands its lock
         # fd to compare.py (omarchy-faced:484-499): the lock then lives as long as the
@@ -2349,7 +2395,7 @@ def run_sweep(reader, mode, lap, targets, bounds, reference, eye, ends_at):
                             pass
                 elif command == "abort":
                     return ("aborted",)
-                elif command in ("sweep", "trial", "done", "capture", "create"):
+                elif command in ("sweep", "dot", "trial", "done", "capture", "create"):
                     refuse("%s while a scan is running" % command)
                 else:
                     prose("ignoring an unknown command")
@@ -2411,13 +2457,14 @@ def cmd_enroll_session(name):
 
     lock_cap, sudo_cap = caps(person) if person else (LOCK_TEMPLATES, SUDO_TEMPLATES)
     emit({"event": "ready", "person": public(person) if person else None,
-          "verbs": ["capture", "sweep", "abort", "finish"],
+          "verbs": ["capture", "sweep", "dot", "abort", "finish"],
           "limits": {"lock": lock_cap, "sudo": sudo_cap}, "sudoPolicy": sudo_policy()})
 
     created = None          # the record a `create` proposed, not yet written
     captured = {}           # appearance label -> appearance, this session only
     committable = set()     # the labels whose set passed root's check (rule F)
     kept = {}               # label -> {"mode", "laps", "eye"}: the kept sweep laps
+    dotted = {}             # label -> the dot scan's poses held, "centre" and DOT_POSES
     state = "ready"         # table V
     swept_before = False
     committed = False
@@ -2538,6 +2585,7 @@ def cmd_enroll_session(name):
                 captured.pop(label, None)
                 committable.discard(label)
                 kept.pop(label, None)
+                dotted.pop(label, None)
                 reference, eye = [], None
             else:
                 reference = [captured[label]["encoding"]] + [e["encoding"] for e in captured[label]["extra"]]
@@ -2607,6 +2655,90 @@ def cmd_enroll_session(name):
                 else:
                     state = "swept"
 
+        elif command == "dot":
+            target = person if person is not None else created
+            if target is None:
+                raise Fatal("invalid_name")
+            try:
+                label = check_label(message.get("appearance"))
+            except Fatal:
+                refuse("label")
+                continue
+            labels = set(a["label"] for a in target["appearances"]) | set(captured)
+            if label not in labels and len(labels) >= MAX_APPEARANCES:
+                raise Fatal("appearance_limit")
+            pose = message.get("pose")
+            fresh = find(read_all(), name)
+            why = sw["valid_dot"](pose, {
+                "state": state, "centre": label in captured and label in committable,
+                "stored": stored_count(fresh, label) if fresh else 0})
+            if why or sw["verb_allowed"](state, "dot", swept_before=swept_before) != "allow":
+                refuse(why or "not allowed in this state")
+                continue
+            swept_before = True
+            stored_pose = None if pose == "centre" else sw["pose_name"](sw["DOT_BINS"][pose])
+            if pose == "centre":
+                # the retake: a new centre replaces everything pending for this appearance, as a new lap 1 does
+                captured.pop(label, None)
+                committable.discard(label)
+                kept.pop(label, None)
+                dotted.pop(label, None)
+                reference = []
+            else:
+                # the centre first, then what is held (this pose's own earlier take is being replaced)
+                reference = [captured[label]["encoding"]] + [
+                    e["encoding"] for e in (captured[label].get("extra") or []) if e["pose"] != stored_pose]
+            state = "running"
+            emit_checked({"event": "dotting", "pose": pose, "need": sw["DOT_NEED"]})
+            outcome = run_press(reader, pose, reference, bounds, ends_at)
+            if outcome[0] == "eof":
+                state = "closed"
+                break
+            if outcome[0] == "expired":
+                prose("the session expired (the session limit); nothing was written")
+                audit("enroll-session for %s expired (the session limit) during a dot scan" % name)
+                state = "closed"
+                break
+            drop = None
+            if outcome[0] == "aborted":
+                emit_checked({"event": "aborted"})
+                drop = "aborted"
+            elif outcome[0] == "failed":
+                drop = outcome[1]
+                emit_checked({"event": "capture_failed", "code": drop})
+            else:
+                judged = judge_dot(pose, outcome[1], reference)
+                if judged["code"] is not None:
+                    drop = judged["code"]
+                    emit_checked({"event": "capture_failed", "code": drop})
+                else:
+                    now = int(time.time())
+                    if pose == "centre":
+                        candidate = {"label": label, "time": now, "encoding": judged["encoding"], "extra": []}
+                    else:
+                        candidate = dict(captured[label])
+                        candidate["extra"] = [e for e in (candidate.get("extra") or []) if e["pose"] != stored_pose] + [
+                            {"pose": stored_pose, "band": "near", "time": now, "r": sw["DOT_R"],
+                             "support": judged["support"], "encoding": judged["encoding"]}]
+                    try:
+                        validate_appearance(candidate, lambda: (_ for _ in ()).throw(Fatal("store_corrupt")))
+                    except Fatal:
+                        prose("the dot scan's result did not validate")
+                        drop = "timeout"
+                        emit_checked({"event": "capture_failed", "code": drop})
+                    else:
+                        captured[label] = candidate
+                        committable.add(label)
+                        held = dotted.setdefault(label, set())
+                        held.add(pose)
+                        emit_checked({"event": "dotted", "pose": pose,
+                                      "poses": [p for p in sw["DOT_POSES"] if p in held],
+                                      "kept": 1 + len(candidate["extra"])})
+                        state = "swept"
+            if drop is not None:
+                # a press that fails leaves what was held as it was; the first one leaves nothing to save
+                state = "swept" if label in committable else "ready"
+
         elif command == "trial":
             refuse("trial is not in this release")
 
@@ -2619,6 +2751,10 @@ def cmd_enroll_session(name):
                 refuse("done in this state")
                 continue
             to_commit = dict((l, a) for l, a in captured.items() if l in committable)
+            if any(l in dotted and not sw["dot_floor_ok"](dotted[l]) for l in to_commit):
+                # a dot scan is saved with its centre and at least left and right (it is the card's Save)
+                refuse("done before the dot scan has its centre, left and right")
+                continue
             if not to_commit:
                 # Nothing was recorded, so there is nothing to save -- and a
                 # person with no appearances is exactly what "no empty people"
@@ -2831,7 +2967,27 @@ STROBE_SILENCE = 2.0         # s: a strobing emitter lights a frame every few hu
 STROBE_DARKNESS = 85.0       # percent in the darkest bin after CLAHE, at least
 STROBE_MEAN = 12.0           # raw mean brightness (0-255), under
 CODES = ("black_frames", "too_dark", "multiple_faces", "no_face", "timeout", "camera_busy",
-         "changed", "sweep_stalled", "lap_timeout", "bad_sweep", "not_enough", "too_few")
+         "changed", "sweep_stalled", "lap_timeout", "bad_sweep", "not_enough", "too_few",
+         "not_you", "too_far", "too_close", "face_cut_off")
+
+# --- the dot scan (3.2.0): Simple's enrolment ---------------------------------------
+# A ball on the card visits the centre, then left, top, right and bottom; the person
+# looks towards it and presses Space, and each press is ONE capture: this child opens
+# the camera, keeps the frames that are good, and answers when DOT_NEED of them are
+# one face (or when DOT_SECONDS have gone). No pose is measured and nothing is timed
+# against a head: the press is the person's word that they are looking where the ball is.
+DOT_POSES = ("centre", "left", "top", "right", "bottom")
+DOT_BINS = {"left": 9, "top": 0, "right": 3, "bottom": 6}   # the stored pose of each: the ring's bins, as in 3.1.x
+DOT_NEED = 3                 # (chosen) lit frames of one face, within SUPPORT of each other, that close the ring
+DOT_SECONDS = 4.0            # (chosen) the most one press may take, from its first frame
+DOT_R = 1.6                  # nominal r of a stored pose: none is measured. Past SUDO_R_MAX on purpose, so no
+                             # policy that lets Sudo take pose templates by r could take these
+DOT_FLOOR = ("left", "right")   # what a saved scan holds besides its centre
+DOT_FAIL_CODES = ("black_frames", "too_dark", "multiple_faces", "no_face", "not_you", "too_far", "too_close",
+                  "face_cut_off", "timeout")
+# What a failed press says, from the reason most of its unusable frames had (ties: the first of these)
+DOT_REASONS = (("multi", "multiple_faces"), ("none", "no_face"), ("dark", "too_dark"), ("stranger", "not_you"),
+               ("closer", "too_far"), ("farther", "too_close"), ("edge", "face_cut_off"))
 
 # --- what each use may take (plan-face-enroll.md 2b) ----------------------------
 # STORE_PY holds its own copy of the four numbers on the next two lines (it validates
@@ -3551,7 +3707,76 @@ def verb_allowed(state, verb, lap=None, set_mode=None, swept_before=False):
         return "allow"
     if verb in ("trial", "usual"):
         return "allow" if state == "swept" and set_mode == "advanced" else "refuse"
+    if verb == "dot":
+        return "allow"
     return "refuse"
+
+
+# --- the dot scan: the pure half (3.2.0) ---------------------------------------------
+
+def valid_dot(pose, prior):
+    """None for a press the session may take, else the reason (and the answer is `bad_sweep`).
+
+    `prior` is "state" (table V), "centre" (this appearance has a pending centre) and "stored"
+    (templates the store already holds for the label). A press is legal in `ready` and `swept`,
+    never while one is running; the centre comes first; and, as for the 3.1.x Simple lap (rule R),
+    a new centre may not replace a stored set larger than Simple can produce."""
+    if prior.get("state") not in ("ready", "swept"):
+        return "a scan is running or the session is closed"
+    if pose not in DOT_POSES:
+        return "pose"
+    if pose == "centre":
+        if type(prior.get("stored")) is int and prior["stored"] > SIMPLE_MAX_STORED:
+            return "the dot scan may not replace a larger stored set"
+    elif not prior.get("centre"):
+        return "the centre comes first"
+    return None
+
+
+def dot_word(pose, faces, eye, box, size, dark, saturated):
+    """The first reason a LIT frame cannot count towards a press, as the gates' words; None when it can.
+
+    The centre keeps 3.1.x's gates (one face, the size of the face, all of it in the picture, not too
+    dark or too bright: `frame_word` with the two it does not use, sharpness and steadiness, passed
+    as fine). A turned head is judged on less: one face and the light. Its eyes are closer together
+    than a face looking straight at the camera and it may be partly out of the picture, and what
+    decides whether it is the same person is `guard_verdict`, not the size of it."""
+    if faces == 0:
+        return "searching"
+    if faces > 1:
+        return "multiple"
+    if pose != "centre":
+        return "dark" if dark > DARK_MAX or saturated > SATURATED_MAX else None
+    return frame_word(faces, eye, box, size, dark, saturated, 1.0, 0.0, True)
+
+
+def dot_agree(frames):
+    """(the frame the rest are measured from, how many frames sit within SUPPORT of it, itself
+    included). A frame is {"t", "r", "encoding"}; the frame is the medoid, never an extremum.
+    The ring closes on the count, so one odd frame never closes it."""
+    best = medoid(frames)
+    if best is None:
+        return None, 0
+    return best, sum(1 for f in frames if distance(f["encoding"], best["encoding"]) <= SUPPORT)
+
+
+def dot_why(seen):
+    """The code a press that ended without enough frames fails with. `seen` counts `frames`, `strobe`
+    (the emitter's off phase, never evidence), `black` (black frames called dark), and one count per
+    reason in DOT_REASONS. No lit frame at all is `black_frames`; otherwise the commonest reason; a
+    press whose frames were all fine and only too few (a slow camera) is `timeout`."""
+    if seen["frames"] - seen["strobe"] - seen["black"] <= 0:
+        return "black_frames"
+    worst, count = "timeout", 0
+    for key, code in DOT_REASONS:
+        if seen[key] > count:
+            worst, count = code, seen[key]
+    return worst
+
+
+def dot_floor_ok(poses):
+    """Can a scan with these poses be saved? The centre and DOT_FLOOR."""
+    return "centre" in poses and all(p in poses for p in DOT_FLOOR)
 
 
 # ==== THE CAPTURE HALF ===========================================================
@@ -4008,7 +4233,161 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
     return 0
 
 
+def dot_parse(argv):
+    """(pose, ceiling, need, reference fd, debug) or None: the arguments of one press."""
+    try:
+        pose, ceiling, need, refd, debug = argv
+        ceiling, need, refd = float(ceiling), int(need), int(refd)
+    except (ValueError, TypeError):
+        return None
+    if (pose not in DOT_POSES or not finite(ceiling) or not 0 < ceiling <= 60 or not 1 <= need <= 9
+            or not 3 <= refd <= 64 or debug not in ("0", "1")):
+        return None
+    return pose, ceiling, need, refd, debug == "1"
+
+
+def run_dot(pose, ceiling, need, reference, debug=False):
+    """One press of the dot scan: the camera is opened, every LIT frame is judged, and the answer is
+    one line, {"result": {"ok": true, "encoding", "support"}} or {"result": {"ok": false, "code"}}.
+
+    A frame counts when it has exactly one face, is lit (the emitter's off phase is skipped: it is
+    not a frame about anything), passes dot_word, and is `ok` for the guard: within CHAIN of the
+    nearest template this appearance already holds and within HARD of the centre (the centre
+    itself has no reference). It ends when DOT_NEED counted frames are one face (within SUPPORT of
+    one another) or when `ceiling` seconds have gone by since the first frame. `dot` events carry
+    the count to the ring, and never more than it."""
+    import configparser
+    import os
+    import select
+    import time
+    import cv2
+    import numpy as np
+    import dlib
+    sys.path.append(HOWDY_DIR)
+    from recorders.video_capture import VideoCapture
+
+    config = configparser.ConfigParser()
+    config.read(HOWDY_DIR + "/config.ini")
+    dark_threshold = config.getfloat("video", "dark_threshold", fallback=DARK_MAX)
+    max_height = config.getfloat("video", "max_height", fallback=0.0)
+    detector = dlib.get_frontal_face_detector()
+    predictor = dlib.shape_predictor(HOWDY_DIR + "/dlib-data/shape_predictor_5_face_landmarks.dat")
+    encoder = dlib.face_recognition_model_v1(HOWDY_DIR + "/dlib-data/dlib_face_recognition_resnet_model_v1.dat")
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    camera = VideoCapture(config)
+
+    centre = reference[0] if reference else None
+    accepted = [list(e) for e in reference]
+    seen = {"frames": 0, "strobe": 0, "black": 0, "dark": 0, "none": 0, "multi": 0,
+            "closer": 0, "farther": 0, "edge": 0, "stranger": 0}
+    good, shown, agree, best = [], 0, 0, None
+    last_lit, started, far = None, None, 0.0
+    ok = False
+    while True:
+        frame, gray_in = camera.read_frame()
+        now = time.monotonic()
+        if started is None:
+            started = now
+        seen["frames"] += 1
+        gray = clahe.apply(gray_in)
+        hist = cv2.calcHist([gray], [0], None, [8], [0, 256])
+        total = float(np.sum(hist))
+        darkness = float(hist[0] / total * 100) if total else 100.0
+        if last_lit is None:
+            last_lit = now
+        blank = is_strobe(total, darkness, float(np.mean(gray_in)))
+        if blank:
+            # the emitter's off phase is skipped (it is not a frame about anything); a blank frame after
+            # STROBE_SILENCE with nothing lit is a covered or dead camera, and counts as dark
+            seen["strobe" if strobe_phase(blank, now, last_lit) else "black"] += 1
+        else:
+            last_lit = now
+            if darkness > dark_threshold:
+                seen["dark"] += 1
+            else:
+                native_h, native_w = frame.shape[0], frame.shape[1]
+                factor = (max_height / native_h) if max_height > 0 else 1.0
+                if factor != 1.0:
+                    small = cv2.resize(frame, None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA)
+                    small_gray = cv2.resize(gray, None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA)
+                else:
+                    small, small_gray = frame, gray
+                faces = detector(small_gray, 1)
+                eye, box = 0.0, (0, 0, 0, 0)
+                shape = None
+                if len(faces) == 1:
+                    rect = faces[0]
+                    shape = predictor(small, rect)
+                    points = [(p.x / factor, p.y / factor) for p in shape.parts()][:5]
+                    measured = pose_indices(points)
+                    eye = measured["eye"] if measured else 0.0
+                    box = (rect.left() / factor, rect.top() / factor, rect.right() / factor, rect.bottom() / factor)
+                saturated = float(np.count_nonzero(gray_in >= 254)) * 100.0 / gray_in.size
+                word = dot_word(pose, len(faces), eye, box, (native_w, native_h), darkness, saturated)
+                if word is None and eye <= 0:
+                    word = "searching"      # five points that put both eyes on one spot: no face we can use
+                if word == "searching":
+                    seen["none"] += 1
+                elif word == "multiple":
+                    seen["multi"] += 1
+                elif word in ("closer", "farther", "edge", "dark"):
+                    seen[word] += 1
+                elif word is None:
+                    encoding = [float(x) for x in encoder.compute_face_descriptor(small, shape, 1)]
+                    if centre is not None:
+                        far = max(far, distance(encoding, centre))
+                    if guard_verdict(encoding, accepted, centre) == "ok":
+                        good = add_candidate(good, {"t": now, "r": 0.0, "encoding": encoding})
+                        best, agree = dot_agree(good)
+                    else:
+                        seen["stranger"] += 1
+        if agree > shown:
+            shown = agree
+            say({"event": "dot", "pose": pose, "good": min(shown, need), "need": need})
+        if agree >= need:
+            ok = True
+            break
+        if now - started >= ceiling:
+            break
+        # the parent's stdin is only ever read for its end: the parent is gone
+        if select.select([0], [], [], 0)[0] and not os.read(0, 256):
+            sys.exit(3)
+    camera.release()
+    why = None if ok else dot_why(seen)
+    if debug:
+        try:
+            sys.stderr.write(
+                "debug dot pose=%s ok=%d agree=%d frames=%d strobe_off=%d black=%d dark=%d none=%d multi=%d "
+                "closer=%d farther=%d edge=%d stranger=%d centre_max=%s t=%.1f why=%s\n" % (
+                    pose, 1 if ok else 0, agree, seen["frames"], seen["strobe"], seen["black"], seen["dark"],
+                    seen["none"], seen["multi"], seen["closer"], seen["farther"], seen["edge"], seen["stranger"],
+                    "n/a" if centre is None else "%.2f" % far, now - started, why or "-"))
+            sys.stderr.flush()
+        except (OSError, ValueError):
+            pass
+    if ok:
+        say({"result": {"ok": True, "encoding": best["encoding"], "support": min(agree, 99)}})
+    else:
+        say({"result": {"ok": False, "code": why}})
+    return 0
+
+
+def dot_main(argv):
+    parsed = dot_parse(argv)
+    if parsed is None:
+        sys.stderr.write("dot: not started by omarchy-face-admin\n")
+        return 2
+    pose, ceiling, need, refd, debug = parsed
+    reference, _ = read_reference(refd)
+    if reference is None:
+        sys.stderr.write("dot: no reference\n")
+        return 2
+    return run_dot(pose, ceiling, need, reference, debug)
+
+
 def main(argv):
+    if argv[:1] == ["dot"]:
+        return dot_main(argv[1:])
     parsed = parse_args(argv)
     if parsed is None:
         sys.stderr.write("sweep: not started by omarchy-face-admin\n")

@@ -155,6 +155,16 @@ def strobe(frames):
 
 CLOCK = (0, 6, 3, 9, 1, 7, 4, 10, 2, 8, 5, 11)
 SIMPLE = (9, 3, 0, 6)
+# The dot scan (3.2.0): ONE press is one launch of the camera, so each scenario below is one press. The pose is
+# not measured by the engine; what differs between the poses is how far they move the descriptor from the centre's
+# (each along its own axis, as in the 3.1.x scenarios) and, for a turned head, a smaller face.
+DOT_AT = {"left": (9, 2), "top": (0, 3), "right": (3, 4), "bottom": (6, 5)}
+
+
+def dot_press(pose, **kw):
+    where, axis = DOT_AT[pose]
+    return build([dict(at=where, n=40, travel=kw.pop("travel", 4), drift=kw.pop("drift", 0.30), axis=axis,
+                       scale=kw.pop("scale", 1.0), **kw)])
 
 
 def visit(bins, n=30, **kw):
@@ -162,6 +172,37 @@ def visit(bins, n=30, **kw):
 
 
 SCENARIOS = {
+    # the dot scan: the centre, and each of the other four, held for a press (3 lit frames close the ring)
+    "dot-centre": lambda: build([dict(n=40)]),
+    "dot-left": lambda: dot_press("left"),
+    "dot-top": lambda: dot_press("top"),
+    "dot-right": lambda: dot_press("right"),
+    "dot-bottom": lambda: dot_press("bottom"),
+    # a turned head is a smaller face (eyes under EYE_MIN): the centre's size gate does not apply to it
+    "dot-left-small": lambda: dot_press("left", scale=0.55),
+    # the same behind a strobing emitter: every other frame unlit
+    "dot-strobe-centre": lambda: strobe(build([dict(n=40)])),
+    "dot-strobe-left": lambda: strobe(dot_press("left")),
+    "dot-strobe-dim": lambda: strobe(build([dict(n=200, kind="dim")])),
+    # no face, a dark room, a covered camera, two faces, a face too small or too big (the centre's gates)
+    "dot-none": lambda: build([dict(n=120, faces=0)]),
+    "dot-dim": lambda: build([dict(n=120, kind="dim")]),
+    "dot-two-faces": lambda: build([dict(n=120, faces=2)]),
+    "dot-centre-far": lambda: build([dict(n=120, scale=0.5)]),
+    "dot-centre-close": lambda: build([dict(n=120, scale=2.6)]),
+    # two good frames and then nobody: not enough, so the ring must not close
+    "dot-two-good": lambda: build([dict(n=2, travel=0), dict(n=118, faces=0, travel=0)]),
+    # nobody for a second, then the face: the press still succeeds inside its seconds
+    "dot-late": lambda: build([dict(n=15, faces=0, travel=0), dict(n=40, travel=0)]),
+    # somebody else at the left press (a descriptor 1.0 away), and the owner whose left turn moved the descriptor 0.46
+    # (over CHAIN, under HARD: the cost of the chain, as in 3.1.x)
+    "dot-stranger-left": lambda: dot_press("left", who=1.0),
+    "dot-stranger-near-left": lambda: dot_press("left", who=0.46),
+    "dot-owner-far-left": lambda: dot_press("left", drift=0.46, travel=0),
+    # a stranger just inside CHAIN of the centre: the documented limit, nothing in the guard refuses it
+    "dot-stranger-limit-left": lambda: dot_press("left", who=0.30, drift=0.0),
+    # the camera waits for a line on stdin before its first frame (the cancel test)
+    "dot-hold-first": lambda: build([dict(n=1, hold=True, travel=0), dict(n=900)]),
     # a whole lap of either mode, every target held in turn
     "simple": lambda: build([dict(n=40)] + visit(SIMPLE)),
     "advanced": lambda: build([dict(n=40)] + visit(CLOCK)),

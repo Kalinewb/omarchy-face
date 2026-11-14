@@ -318,6 +318,10 @@ ADV2='{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":2,"target
 CREATE='{"cmd":"create","label":"Emil"}'
 FINISH='{"cmd":"finish"}'
 DONE='{"cmd":"done"}'
+no_child() { ! pgrep -f 'python3 -I -c' >/dev/null; }
+CAMLOCK=/run/omarchy-face/camera.lock
+dotcmd() { echo '{"cmd":"dot","appearance":"No glasses","pose":"'$1'"}'; }
+DOTC=$(dotcmd centre); DOTL=$(dotcmd left); DOTT=$(dotcmd top); DOTR=$(dotcmd right); DOTB=$(dotcmd bottom)
 
 stored_all_owner() { # stored_all_owner [min]: every descriptor in the store is the owner's (axis 0 is the fake stranger's gap)
   python3 -c "
@@ -341,9 +345,152 @@ step "ready names the verbs and the limits"
 reset_store
 scenario simple
 out=$(session emil "await ready 30" "eof")
-same "ready lists the verbs that exist (trial arrives with its phase)" '["capture","sweep","abort","finish"]' "$(q "$out" 'first("ready")["verbs"]')"
+same "ready lists the verbs that exist (trial arrives with its phase)" '["capture","sweep","dot","abort","finish"]' "$(q "$out" 'first("ready")["verbs"]')"
 same "ready carries the default limits" '{"lock":12,"sudo":4}' "$(q "$out" 'first("ready")["limits"]')"
 same "ready says which stored templates Sudo may use (the policy, a plain word)" '"centre"' "$(q "$out" 'first("ready")["sudoPolicy"]')"
+
+step "the dot scan (3.2.0): centre, left, top, right, bottom, one press each"
+reset_store
+scenario dot-centre dot-left dot-top dot-right dot-bottom
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "awaitwhere {\"event\":\"dotted\",\"pose\":\"centre\"} 60" "send $DOTL" "awaitwhere {\"event\":\"dotted\",\"pose\":\"left\"} 60" "send $DOTT" "awaitwhere {\"event\":\"dotted\",\"pose\":\"top\"} 60" "send $DOTR" "awaitwhere {\"event\":\"dotted\",\"pose\":\"right\"} 60" "send $DOTB" "awaitwhere {\"event\":\"dotted\",\"pose\":\"bottom\"} 60" "send $DONE" "await saved 30")
+echo "${DIM}$(grep -v '"event":"dot"' <<<"$out" | head -6 | cut -c1-200)${RESET}"
+same "each press is announced (dotting, with the frames it needs), then closes with dotted: the poses come in the order they were pressed" '["centre","left","top","right","bottom"]' "$(q "$out" '[e["pose"] for e in evs if e.get("event") == "dotted"]')"
+same "dotting carries the pose and the need (3), and nothing else" '[["event","need","pose"],[3]]' "$(q "$out" '[sorted({tuple(sorted(e)) for e in evs if e.get("event") == "dotting"})[0], sorted({e["need"] for e in evs if e.get("event") == "dotting"})]')"
+same "the last dotted lists all five poses and five templates kept" '[["centre","left","top","right","bottom"],5]' "$(q "$out" '[evs[[i for i, e in enumerate(evs) if e.get("event") == "dotted"][-1]]["poses"], [e for e in evs if e.get("event") == "dotted"][-1]["kept"]]')"
+same "the ring closes only when the frames are there: in every press the count the child reports rises to the need (3) and the closing dotted comes after it, never before" 'true' "$(q "$out" '(lambda groups: len(groups) == 5 and all(g and g[-1] == 3 and g == sorted(g) and max(g) <= 3 for g in groups))([[e["good"] for e in evs[a:b] if e.get("event") == "dot"] for a, b in zip([i for i, e in enumerate(evs) if e.get("event") == "dotting"], [i for i, e in enumerate(evs) if e.get("event") == "dotted"])])')"
+same "the stored appearance is the centre plus a270 a000 a090 a180 (left, top, right, bottom), all near" '["a270","a000","a090","a180"]' "$(python3 -c '
+import json,sys
+print(json.dumps([e["pose"] for e in json.load(open(sys.argv[1]))["appearances"][0]["extra"]], separators=(",", ":")))' "$STORE/people/emil.json")"
+same "...each with r 1.6 (nominal: no pose is measured, and past the Sudo band), support 3 or more, 128 numbers" 'true' "$(python3 -c '
+import json,sys
+a = json.load(open(sys.argv[1]))["appearances"][0]
+print(json.dumps(all(e["band"] == "near" and e["r"] == 1.6 and e["support"] >= 3 and len(e["encoding"]) == 128 for e in a["extra"])))' "$STORE/people/emil.json")"
+same "people.json counts five templates; Sudo uses one (the centre, SUDO_POLICY stays centre), Lock all five" '[5,1,5,"centre"]' "$(python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+p = d["people"][0]
+print(json.dumps([p["appearances"][0]["templates"], p["sudoTemplates"], p["lockTemplates"], d["sudoPolicy"]], separators=(",", ":")))' "$PEOPLE")"
+check "people.json carries no encoding" bash -c "! grep -q encoding $PEOPLE"
+same "...every stored descriptor is the owner's" 'true' "$(stored_all_owner 5)"
+check "no engine child is left behind" no_child
+
+step "dot scan: a press that fails says why, the ball stays, and the same press can be made again"
+retry() { # retry <description> <the failing scenario> <the code it must fail with> [the pose, default centre]
+  local pose=${4:-centre} first=""
+  reset_store
+  if [[ $pose == centre ]]; then
+    scenario "$2" dot-centre
+    out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "awaitwhere {\"event\":\"capture_failed\"} 60" "send $DOTC" "await dotted 60" "eof")
+  else
+    scenario dot-centre "$2" dot-left
+    out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"capture_failed\"} 60" "send $DOTL" "awaitwhere {\"event\":\"dotted\",\"pose\":\"left\"} 60" "eof")
+  fi
+  same "$1: the press fails with $3, nothing else fails, and the next press succeeds" "[[\"$3\"],true]" "$(q "$out" '[[e["code"] for e in evs if e.get("event") == "capture_failed"], any(e.get("event") == "dotted" and e["pose"] == "'$pose'" for e in evs)]')"
+  same "...and a failed press closed no ring: no dotted came before the retry" '1' "$(q "$out" 'len([e for e in evs if e.get("event") == "dotted" and e["pose"] == "'$pose'"])')"
+  check "...nothing was written (the session ended with the cancel)" bash -c "[[ ! -e $STORE/people/emil.json ]]"
+}
+retry "nobody in view" dot-none no_face
+retry "a room too dark (every frame lit, but dim)" dot-dim too_dark
+retry "a covered camera (nothing lit for over two seconds)" unlit-room black_frames
+retry "two faces" dot-two-faces multiple_faces
+retry "the centre with the face too small" dot-centre-far too_far
+retry "the centre with the face too big" dot-centre-close too_close
+retry "nobody in view at the left press" dot-none no_face left
+retry "two faces at the left press" dot-two-faces multiple_faces left
+retry "a dark room at the left press" dot-dim too_dark left
+reset_store
+scenario dot-two-good dot-late
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "awaitwhere {\"event\":\"capture_failed\"} 60" "send $DOTC" "await dotted 60" "eof")
+same "two good frames and then nobody do not close the ring: no_face, and the count never passed 2" '["no_face",2]' "$(q "$out" '[[e["code"] for e in evs if e.get("event") == "capture_failed"][0], max(e["good"] for e in evs[:[i for i, e in enumerate(evs) if e.get("event") == "capture_failed"][0]] if e.get("event") == "dot")]')"
+same "...while a face that arrives after a second of nobody is still taken (dot-late): the count reached 3 and then dotted" '[3,"dotted"]' "$(q "$out" '[max(e["good"] for e in evs if e.get("event") == "dot"), [e for e in evs if e.get("event") in ("dotted", "capture_failed")][-1]["event"]]')"
+reset_store
+scenario dot-centre dot-left-small
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"dotted\",\"pose\":\"left\"} 60" "eof")
+same "a turned head is a smaller face (eyes 35 px, under the centre's 40): the size gate is the centre's alone, so left is taken" '2' "$(q "$out" 'len([e for e in evs if e.get("event") == "dotted"])')"
+
+step "dot scan: the strobing emitter. Unlit frames are 99.8% dark and are not evidence about anything"
+reset_store
+scenario dot-strobe-centre dot-strobe-left
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"dotted\",\"pose\":\"left\"} 60" "eof")
+same "centre and left on a strobing camera (half the frames unlit): both taken, and nothing failed, not even once with a dark word" '[2,0]' "$(q "$out" '[len([e for e in evs if e.get("event") == "dotted"]), len([e for e in evs if e.get("event") == "capture_failed"])]')"
+reset_store
+scenario dot-strobe-dim dot-centre
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
+same "a strobe whose lit frames are too dark is too_dark (the lit ones decide), not black_frames" '"too_dark"' "$(q "$out" 'last("capture_failed")["code"]')"
+
+step "dot scan: a wrong press must not add somebody else"
+reset_store
+scenario dot-centre dot-stranger-left dot-left dot-right
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"capture_failed\"} 60" "send $DOTL" "awaitwhere {\"event\":\"dotted\",\"pose\":\"left\"} 60" "send $DOTR" "awaitwhere {\"event\":\"dotted\",\"pose\":\"right\"} 60" "send $DONE" "await saved 30")
+same "somebody else at the left press (a descriptor 1.0 from the centre): not_you, the ball stays; the owner's next left press is kept" '["not_you",["centre","left","right"]]' "$(q "$out" '[[e["code"] for e in evs if e.get("event") == "capture_failed"][0], [e for e in evs if e.get("event") == "dotted"][-1]["poses"]]')"
+same "...and every stored descriptor is the owner's (the stranger's frames never reached a template)" 'true' "$(stored_all_owner 3)"
+for sc in dot-stranger-near-left dot-owner-far-left; do
+  reset_store
+  scenario dot-centre $sc dot-left
+  out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
+  same "$sc: a descriptor 0.46 from the centre (over CHAIN, under HARD) is not_you: the cost of the chain, as in 3.1.x, and the owner who turns that far is asked again" '"not_you"' "$(q "$out" 'last("capture_failed")["code"]')"
+done
+reset_store
+scenario dot-centre dot-stranger-limit-left
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"dotted\",\"pose\":\"left\"} 60" "eof")
+same "the documented limit: somebody 0.30 from the owner (inside CHAIN of the centre) is taken at the left press, as 3.1.x took him in a lap" '"left"' "$(q "$out" 'last("dotted")["pose"]')"
+
+step "dot scan: what can be saved, and the refusals"
+reset_store
+scenario dot-centre dot-left dot-right
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DONE" "send $DOTL" "awaitwhere {\"event\":\"dotted\",\"pose\":\"left\"} 60" "send $DONE" "send $DOTR" "awaitwhere {\"event\":\"dotted\",\"pose\":\"right\"} 60" "send $DONE" "await saved 30")
+same "done is refused with only the centre and with the centre and left (bad_sweep both times, the session lives)" '2' "$(q "$out" 'len([e for e in evs if e.get("event") == "capture_failed" and e.get("code") == "bad_sweep"])')"
+same "...and saved once left and right are in: the centre and two poses, three templates" '3' "$(python3 -c '
+import json, sys
+a = json.load(open(sys.argv[1]))["appearances"][0]
+print(1 + len(a.get("extra") or []))' "$STORE/people/emil.json")"
+reset_store
+scenario dot-centre
+bad=(
+  '{"cmd":"dot","appearance":"No glasses","pose":"left"}'
+  '{"cmd":"dot","appearance":"No glasses","pose":"up"}'
+  '{"cmd":"dot","appearance":"No glasses","pose":""}'
+  '{"cmd":"dot","appearance":"No glasses","pose":7}'
+  '{"cmd":"dot","appearance":"No glasses","pose":["centre"]}'
+  '{"cmd":"dot","appearance":"No glasses","pose":null}'
+  '{"cmd":"dot","appearance":"No glasses"}'
+  '{"cmd":"dot","pose":"centre"}'
+  '{"cmd":"dot","appearance":"","pose":"centre"}'
+  '{"cmd":"dot","appearance":7,"pose":"centre"}'
+  '{"cmd":"dot","appearance":"No\u0001glasses","pose":"centre"}'
+)
+script=("await ready 30" "send $CREATE")
+for line in "${bad[@]}"; do script+=("send $line"); done
+script+=("send $DOTC" "await dotted 60" "send {\"cmd\":\"capture\",\"appearance\":\"No glasses\"}" "eof")
+out=$(session emil "${script[@]}")
+same "${#bad[@]} malformed presses (a pose before the centre, a pose that does not exist, junk types, no appearance) and a capture after a dot: all bad_sweep" "$(( ${#bad[@]} + 1 ))" "$(q "$out" 'len([e for e in evs if e.get("event") == "capture_failed" and e.get("code") == "bad_sweep"])')"
+same "...none of them started a child: exactly one dotting, and the valid centre after them all runs" '[1,1]' "$(q "$out" '[len([e for e in evs if e.get("event") == "dotting"]), len([e for e in evs if e.get("event") == "dotted"])]')"
+check "...and nothing is left running" no_child
+
+step "dot scan: cancel, and a press while one runs"
+reset_store
+scenario dot-hold-first
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotting 30" "send $DOTC" "send $DOTL" "send $DONE" "sleep 1" "eof")
+same "while a press runs, a second press, a left press and a done are all refused, and the cancel ends it: discarded" '[3,"discarded"]' "$(q "$out" '[len([e for e in evs if e.get("event") == "capture_failed" and e.get("code") == "bad_sweep"]), evs[-1]["event"]]')"
+sleep 2
+check "...no engine child outlives the cancel" no_child
+check "...and the camera lock is free again" flock -n "$CAMLOCK" true
+check "...nothing is stored" bash -c "[[ ! -e $STORE/people/emil.json ]]"
+reset_store
+scenario dot-centre dot-left
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"dotted\",\"pose\":\"left\"} 60" "eof")
+same "cancel with the centre and left held: discarded, not saved" '["discarded",false]' "$(q "$out" '[evs[-1]["event"], any(e.get("event") == "saved" for e in evs)]')"
+check "...and no record was written" bash -c "[[ ! -e $STORE/people/emil.json ]]"
+reset_store
+scenario dot-centre dot-left dot-top dot-centre
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"dotted\",\"pose\":\"left\"} 60" "send $DOTT" "awaitwhere {\"event\":\"dotted\",\"pose\":\"top\"} 60" "send $DOTC" "sleep 2" "eof")
+same "a new centre (Scan again) replaces everything pending: the poses list restarts at the centre" '[["centre"]]' "$(q "$out" '[[e["poses"] for e in evs if e.get("event") == "dotted"][-1]]')"
+
+if [[ ${E1_ONLY:-} == dot ]]; then
+  echo
+  if ((failures == 0)); then echo "${GREEN}e1 (dot only): $checks checks, all passed${RESET}"; else echo "${RED}e1 (dot only): $checks checks, $failures failed${RESET}"; fi
+  exit $((failures > 0))
+fi
 
 step "a full Simple run: centre, then 9, 3, 0, 6 in that order"
 reset_store
@@ -375,7 +522,6 @@ count_templates() { python3 -c '
 import json, sys
 a = json.load(open(sys.argv[1]))["appearances"][int(sys.argv[2])]
 print(1 + len(a.get("extra") or []))' "$@"; }
-no_child() { ! pgrep -f 'python3 -I -c' >/dev/null; }
 
 step "a full Advanced lap: all twelve, in clock order, ends by itself"
 reset_store
@@ -694,6 +840,17 @@ seen = [r for r in rows if r['hm_yaw'] != 'n/a']
 ok = len(seen) >= 3 and all(int(r['yaw_lo']) <= int(r['hm_yaw']) <= int(r['yaw_hi']) and int(r['pitch_lo']) <= int(r['hm_pitch']) <= int(r['pitch_hi']) for r in seen)
 print(str(ok and all(r['hm_yaw'] == 'n/a' for r in rows if r['yaw_lo'] == 'n/a')).lower())
 ")"
+reset_store
+scenario dot-strobe-centre dot-strobe-left dot-stranger-left
+: >/run/omarchy-face-stub/logger.out
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"dotted\",\"pose\":\"left\"} 60" "send $DOTL" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
+same "dot scan with debug=true: one trace line per press (three presses, three lines), and the journal line is the child's own" '3' "$(grep -c '^debug dot ' /run/omarchy-face-stub/logger.out)"
+check "...each line is the pose, the result, the counts and the reason, in words and numbers only" bash -c "grep '^debug dot ' /run/omarchy-face-stub/logger.out | grep -qvE '^debug dot pose=(centre|left|top|right|bottom) ok=[01] agree=[0-9]+ frames=[0-9]+ strobe_off=[0-9]+ black=[0-9]+ dark=[0-9]+ none=[0-9]+ multi=[0-9]+ closer=[0-9]+ farther=[0-9]+ edge=[0-9]+ stranger=[0-9]+ centre_max=[0-9.a-z/]+ t=[0-9.]+ why=[a-z_-]+\$' && exit 1 || exit 0"
+same "...the strobe's off frames were counted and skipped (about as many as the lit ones), and the stranger's press names its reason" 'true' "$(python3 -c "
+import re
+rows = [dict(re.findall(r'(\w+)=(\S+)', l)) for l in open('/run/omarchy-face-stub/logger.out') if l.startswith('debug dot ')]
+print(str(len(rows) == 3 and int(rows[0]['strobe_off']) > 0 and rows[0]['ok'] == '1' and rows[2]['ok'] == '0' and rows[2]['why'] == 'not_you' and int(rows[2]['stranger']) >= 3 and rows[0]['centre_max'] == 'n/a').lower())
+")"
 printf 'debug=false\n' >>/etc/omarchy-face/config
 : >/run/omarchy-face-stub/logger.out
 reset_store
@@ -810,6 +967,13 @@ reset_store
 scenario simple-stranger
 out=$(OMARCHY_FACE_SWEEP_SECONDS=30 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 90" "eof")
 same "control: the same stranger with the real guard is changed, as before" '"changed"' "$(q "$out" 'last("capture_failed")["code"]')"
+reset_store
+scenario dot-centre dot-stranger-left
+ADMIN=$LAB/admin-noguard
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"capture_failed\"} 60" "send $DONE" "eof")
+same "dot scan, a child whose guard passes everything: the stranger at the left press is dropped by the parent (not_you), and the saved-nothing done is refused" '["not_you","bad_sweep"]' "$(q "$out" '[c["code"] for c in evs if c.get("event") == "capture_failed"]')"
+same "...and the child's debug-free transcript has no dotted for left" '["centre"]' "$(q "$out" '[e["pose"] for e in evs if e.get("event") == "dotted"]')"
+ADMIN=$REAL_ADMIN
 
 step "frames that must yield no template"
 reset_store
@@ -948,6 +1112,23 @@ check("sweeping passes", t({"event": "sweeping", "mode": "simple", "lap": 1, "ta
 check("swept passes", t({"event": "swept", "mode": "advanced", "lap": 2, "filled": [0, 1], "skipped": [], "centreHeld": True, "kept": 3}) is not None)
 check("capture_failed with each of the twelve codes passes",
       all(t({"event": "capture_failed", "code": c}) for c in ns["pure"]()["CODES"]))
+check("dotting, dot and dotted pass", all(t(d) is not None for d in (
+    {"event": "dotting", "pose": "left", "need": 3}, {"event": "dot", "pose": "centre", "good": 2, "need": 3},
+    {"event": "dotted", "pose": "bottom", "poses": ["centre", "left", "bottom"], "kept": 3})))
+for name, doc in [
+    ("a pose that is not on the card", {"event": "dotting", "pose": "up", "need": 3}),
+    ("a pose that is a number", {"event": "dotting", "pose": 3, "need": 3}),
+    ("a need of 0", {"event": "dotting", "pose": "left", "need": 0}),
+    ("a need of 10", {"event": "dotting", "pose": "left", "need": 10}),
+    ("a count that is a bool", {"event": "dot", "pose": "left", "good": True, "need": 3}),
+    ("a count of 10", {"event": "dot", "pose": "left", "good": 10, "need": 3}),
+    ("a float count", {"event": "dot", "pose": "left", "good": 1.0, "need": 3}),
+    ("poses with a repeat", {"event": "dotted", "pose": "left", "poses": ["left", "left"], "kept": 2}),
+    ("poses with a word that is not a pose", {"event": "dotted", "pose": "left", "poses": ["centre", "ceiling"], "kept": 2}),
+    ("six poses", {"event": "dotted", "pose": "left", "poses": ["centre", "left", "top", "right", "bottom", "left"], "kept": 5}),
+    ("a dotted carrying an encoding", {"event": "dotted", "pose": "left", "poses": ["centre"], "kept": 1, "encoding": [0.0] * 128}),
+]:
+    check(name + " is dropped", t(doc) is None)
 for name, doc in [
     ("a planted key", dict(good_track, encoding=[0.0] * 128)),
     ("a path", dict(good_track, path="/dev/video2")),
@@ -974,7 +1155,7 @@ check("dumping NaN is refused outright (allow_nan=False)", not any(
     "NaN" in json.dumps(g, allow_nan=False) for g in [good_track]))
 # the override: only lowers, ignores junk, and is never read by root of the machine
 base = ns["sweep_bounds"]()
-check("no override: the plan's bounds", base == {"simple": 60.0, "advanced": 90.0, "patience": 10.0, "lead": 3.0, "stall": 20.0})
+check("no override: the plan's bounds", base == {"simple": 60.0, "advanced": 90.0, "patience": 10.0, "lead": 3.0, "stall": 20.0, "dot": 4.0})
 for asked in ("1e9", "NaN", "inf", "-1", "-inf", "0", "abc", ""):
     os.environ["OMARCHY_FACE_SWEEP_SECONDS"] = asked
     check("OMARCHY_FACE_SWEEP_SECONDS=%r lengthens nothing" % asked, ns["sweep_bounds"]() == base)
@@ -992,6 +1173,30 @@ pure["SUDO_POLICY"] = "full"
 check("under the full policy a deliberate cap of 8 with eight in effect warns", ns["warning_for"]([person(9, 8)]) is not None)
 pure["SUDO_POLICY"] = "centre"
 check("five people with Sudo and one template each: no warning", ns["warning_for"]([person(0, 4)] * 5) is None)
+# judge_dot(): the parent's own reading of one press, whatever the child says
+jd = ns["judge_dot"]
+ZERO0 = [0.0] * 128
+def at(d):
+    return [d] + [0.0] * 127
+def ok_press(encoding=None, support=3):
+    return {"ok": True, "encoding": encoding if encoding is not None else at(0.2), "support": support}
+check("judge_dot keeps a centre with no reference", jd("centre", ok_press(at(5.0)), [])["code"] is None)
+check("judge_dot keeps a pose 0.3 from the centre", jd("left", ok_press(at(0.3)), [ZERO0])["code"] is None)
+check("judge_dot keeps a pose exactly CHAIN (0.40) from the centre", jd("left", ok_press(at(0.40)), [ZERO0])["code"] is None)
+check("judge_dot refuses a pose just past CHAIN of the only template (0.4001)", jd("left", ok_press(at(0.4001)), [ZERO0])["code"] == "not_you")
+check("judge_dot refuses somebody else (1.0)", jd("left", ok_press(at(1.0)), [ZERO0])["code"] == "not_you")
+check("judge_dot refuses a pose 0.6 from the centre (over HARD) although a held pose is 0.3 from it: HARD is the centre's",
+      jd("top", ok_press([0.0, 0.0, 0.6] + [0.0] * 125), [ZERO0, [0.0, 0.0, 0.3] + [0.0] * 125])["code"] == "not_you")
+check("judge_dot keeps a pose 0.5 from the centre when a held pose is 0.3 from it (chain, inside HARD)",
+      jd("top", ok_press([0.0, 0.0, 0.5] + [0.0] * 125), [ZERO0, [0.0, 0.0, 0.3] + [0.0] * 125])["code"] is None)
+check("judge_dot refuses a NaN encoding", jd("centre", ok_press([float("nan")] + [0.0] * 127), [])["code"] == "timeout")
+check("judge_dot refuses 127 numbers", jd("centre", ok_press([0.0] * 127), [])["code"] == "timeout")
+check("judge_dot refuses a support of 2 (under DOT_NEED) and of 100", jd("centre", ok_press(support=2), [])["code"] == "timeout" and jd("centre", ok_press(support=100), [])["code"] == "timeout")
+check("judge_dot refuses a bool support", jd("centre", ok_press(support=True), [])["code"] == "timeout")
+check("judge_dot passes a known failure code through and turns an unknown one into timeout",
+      jd("centre", {"ok": False, "code": "no_face"}, [])["code"] == "no_face" and jd("centre", {"ok": False, "code": "changed"}, [])["code"] == "timeout"
+      and jd("centre", {"ok": False, "code": 7}, [])["code"] == "timeout" and jd("centre", {"ok": False}, [])["code"] == "timeout")
+check("judge_dot refuses a result that is not a dict, and an ok that is only truthy", jd("centre", None, [])["code"] == "timeout" and jd("centre", {"ok": 1, "encoding": at(0.1), "support": 3}, [])["code"] == "timeout")
 # rule F: judge() re-checks the pose ring and HARD against the centre, whatever the child says
 judge = ns["judge"]
 ZERO = [0.0] * 128
@@ -1118,7 +1323,7 @@ grep -B3 -A8 'Traceback' "$LAB/all.log" | head -24 | cut -c1-200
 check "no /dev path appears in any transcript" bash -c "! grep -q '/dev/' '$LAB/all.log'"
 check "every event line of every transcript is one of the plan's event names" python3 - "$LAB/all.log" <<'PY'
 import json, sys
-allowed = {"ready", "capturing", "captured", "capture_failed", "sweeping", "track", "swept", "aborted", "saved", "discarded", "error"}
+allowed = {"ready", "capturing", "captured", "capture_failed", "sweeping", "track", "swept", "aborted", "dotting", "dot", "dotted", "saved", "discarded", "error"}
 for line in open(sys.argv[1]):
     if line.startswith("EV "):
         assert json.loads(line[3:]).get("event") in allowed, line
