@@ -2033,15 +2033,13 @@ def real_root():
 
 
 def sweep_bounds():
-    """The lap ceilings, patience, prompt lead and stall time, with a test override
+    """The lap ceiling, the stall time and the dot press's ceiling, with a test override
     (OMARCHY_FACE_SWEEP_SECONDS) that can only make them SHORTER, is ignored unless it
     is a finite number above 0, and is never read at all by root of the machine. pkexec
     drops the caller's environment, so the GUI cannot set it either. The child reads no
     environment: it is handed these numbers as arguments."""
     sw = pure()
-    bounds = {"simple": sw["SIMPLE_LAP_SECONDS"], "advanced": sw["ADVANCED_LAP_SECONDS"],
-              "patience": sw["TARGET_PATIENCE"], "lead": sw["PROMPT_LEAD"], "stall": sw["STALL_SECONDS"],
-              "dot": sw["DOT_SECONDS"]}
+    bounds = {"advanced": sw["ADVANCED_LAP_SECONDS"], "stall": sw["STALL_SECONDS"], "dot": sw["DOT_SECONDS"]}
     if real_root():
         return bounds
     try:
@@ -2138,14 +2136,14 @@ def _allowed():
     return {
         "event": lambda v: isinstance(v, str) and v in SWEEP_EVENTS,
         "state": lambda v: isinstance(v, str) and v in sw["GATE_WORDS"],
-        "mode": lambda v: isinstance(v, str) and v in ("simple", "advanced", "usual"),
+        "mode": lambda v: isinstance(v, str) and v in ("advanced", "usual"),
         "lap": lambda v: type(v) is int and v in (1, 2),
         "u": _in_range(-4, 4), "v": _in_range(-4, 4), "centre": _in_range(0, 1),
         "bins": lambda v: isinstance(v, list) and len(v) == 12 and all(_in_range(0, 1)(x) for x in v),
         "canFinish": lambda v: isinstance(v, bool), "centreHeld": lambda v: isinstance(v, bool),
         "passed": lambda v: isinstance(v, bool),
         "target": lambda v: v is None or v == "centre" or (type(v) is int and 0 <= v < 12),
-        "targets": _bin_list, "filled": _bin_list, "skipped": _bin_list,
+        "targets": _bin_list, "filled": _bin_list,
         "quota": lambda v: type(v) is int and 1 <= v <= 9,
         "kept": lambda v: type(v) is int and 0 <= v <= 99,
         "code": lambda v: isinstance(v, str) and v in sw["CODES"],
@@ -2190,7 +2188,7 @@ def _encoding_ok(encoding):
     return isinstance(encoding, list) and len(encoding) == 128 and all(finite_number(x) for x in encoding)
 
 
-def judge(mode, lap, targets, result, held_centre=None):
+def judge(lap, targets, result, held_centre=None):
     """Rule F: the parent decides Done from what it actually received, with the same pure
     functions the child ran. -> {"code": C} to drop the lap, or the templates to keep.
 
@@ -2234,7 +2232,7 @@ def judge(mode, lap, targets, result, held_centre=None):
             if sw["distance"](t["encoding"], centre_encoding) > sw["HARD"]:
                 return {"code": "timeout"}
     centre_held = centre_encoding is not None
-    outcome = sw["lap_result"](mode, centre_held, bins)
+    outcome = sw["lap_result"](centre_held, bins)
     if outcome != "swept":
         refine = result.get("refine")
         if outcome == "lap_timeout" and refine in ("black_frames", "too_dark", "multiple_faces", "no_face"):
@@ -2242,7 +2240,6 @@ def judge(mode, lap, targets, result, held_centre=None):
         return {"code": outcome}
     eye = result.get("eye")
     return {"code": None, "templates": kept, "centre": centre_encoding if lap == 1 else None,
-            "skipped": sorted(set(targets) - bins) if mode == "simple" else [],
             "eye": float(eye) if finite_number(eye) and eye > 0 else None}
 
 
@@ -2297,11 +2294,10 @@ def sweep_stderr():
 
 def run_sweep(reader, mode, lap, targets, bounds, reference, eye, ends_at):
     """One lap in a child (see run_child)."""
-    ceiling = bounds["simple"] if mode == "simple" else bounds["advanced"]
+    ceiling = bounds["advanced"]
     return run_child(
         reader, reference, eye, ceiling, ends_at,
         lambda rfd: [mode, str(lap), ",".join(str(k) for k in targets), repr(float(ceiling)),
-                     repr(float(bounds["patience"])), repr(float(bounds["lead"])),
                      repr(float(bounds["stall"])), str(rfd), "1" if config_get("debug") == "true" else "0"])
 
 
@@ -2610,7 +2606,7 @@ def cmd_enroll_session(name):
                 drop = outcome[1]
                 emit_checked({"event": "capture_failed", "code": drop})
             else:
-                judged = judge(mode, lap, targets, outcome[1],
+                judged = judge(lap, targets, outcome[1],
                                captured[label]["encoding"] if lap == 2 and label in captured else None)
                 if judged["code"] is not None:
                     drop = judged["code"]
@@ -2641,7 +2637,7 @@ def cmd_enroll_session(name):
                             entry["eye"] = judged["eye"]
                         emit_checked({"event": "swept", "mode": mode, "lap": lap,
                                       "filled": sorted(t["bin"] for t in judged["templates"]),
-                                      "skipped": judged["skipped"], "centreHeld": True,
+                                      "centreHeld": True,
                                       "kept": 1 + len(candidate["extra"])})
                         state = "swept"
             if drop is not None:
@@ -2937,20 +2933,14 @@ DONE_BINS = 4                # bins held, besides the centre, before Done
 
 # --- targets, dwell, laps (plan-face-enroll.md section 2, rules L, P, D, O, J) ----
 WEDGE_HALF = 15              # (chosen) degrees either side of a bin's centre, Advanced
-SIMPLE_WEDGE_HALF = 30       # (chosen) Simple's slack; rule D is the fix, this is only slack
 HOLD_SLACK = 5               # (chosen) widens the wedge once a target is being held
 TARGET_DWELL = 0.8           # (chosen) seconds of accepted steady frames in the wedge
 TARGET_GRACE = 0.5           # (chosen) seconds out of the wedge that reset the dwell
 DWELL_GAP_MAX = 0.3          # (chosen) most one frame can credit, so a stalled camera cannot
-TARGET_PATIENCE = 10.0       # (chosen) rule P
-PROMPT_LEAD = 3.0            # (chosen) rule P: time to read the new line and start moving
-SIMPLE_TARGETS = (9, 3, 0, 6)
-SIMPLE_MIN_HELD = 2          # (chosen) filled targets that let a Simple lap be saved
-SIMPLE_LAP_SECONDS = 60.0
 ADVANCED_LAP_SECONDS = 90.0
 STALL_SECONDS = 20.0         # Advanced: no new supported frame for this long
 MAX_TARGETS = 12
-SIMPLE_MAX_STORED = 5        # rule R: Simple may not replace a larger stored set
+SIMPLE_MAX_STORED = 5        # rule R: the dot scan (Simple) may not replace a larger stored set
 COUPLING_C = 0.75            # rule D (3.1.5: measured; was the 0.0 placeholder): the nose reads this much lower
                              # per unit of yaw on a turned head -- see pose_decouple
 SMOOTH_FRAMES = 5            # rule J: steadiness is judged on the mean of this many lit frames (3.1.3: was 3)
@@ -3304,9 +3294,9 @@ def guard_verdict(encoding, accepted, centre, chain=CHAIN, hard=HARD):
     return "ok"
 
 
-def settle_verdict(verdict, mode, centre_held, filled):
-    """What the loop does with a verdict (3.1.5 "vgrace", 3.1.6): below the floor (`can_finish`: two
-    filled in Simple, four bins in Advanced, THIS lap's fills, not the templates held: lap 2 starts
+def settle_verdict(verdict, centre_held, filled):
+    """What the loop does with a verdict (3.1.5 "vgrace", 3.1.6): below the floor (`can_finish`: four
+    bins, THIS lap's fills, not the templates held: lap 2 starts
     with the centre and all of lap 1's) every frame over CHAIN is a stranger frame, `beyond`,
     3.1.3's rule. Past the floor a frame over CHAIN is neutral whichever bound it is over: `band`
     (within HARD) or `far` (over HARD). Neutral means not accepted, not stored, no dwell, and it
@@ -3314,7 +3304,7 @@ def settle_verdict(verdict, mode, centre_held, filled):
     keeping what is filled (3.1.6: a far frame no longer discards a lap whose floor is met)."""
     if verdict == "ok":
         return verdict
-    if not can_finish(mode, centre_held, filled):
+    if not can_finish(centre_held, filled):
         return "beyond"
     return "far" if verdict == "beyond" else "band"
 
@@ -3575,58 +3565,36 @@ def target_progress(fraction, supported_count):
     return max(0.0, min(1.0, fraction, supported_count / float(QUOTA)))
 
 
-def progress_mark(mark, progress, t):
-    """Rule P's high-water mark: (highest progress so far, the time it last rose)."""
-    return (progress, t) if progress > mark[0] else mark
-
-
-def patience_since(mark, became_current, lead=PROMPT_LEAD):
-    return max(mark[1], became_current + lead)
-
-
-def patience_expired(mode, since, now, patience=TARGET_PATIENCE):
-    return mode == "simple" and now - since >= patience
-
-
-def current_target(mode, targets, held, skipped, centre_held, head_bin):
-    """"centre", a bin, or None. Simple: the first target not yet resolved. Advanced:
-    the unfilled target the head is inside."""
+def current_target(targets, held, centre_held, head_bin):
+    """"centre", a bin, or None: the unfilled target the head is inside (Advanced)."""
     if not centre_held:
         return "centre"
-    if mode == "simple":
-        for k in targets:
-            if k not in held and k not in skipped:
-                return k
-        return None
     if head_bin is not None and head_bin in targets and head_bin not in held:
         return head_bin
     return None
 
 
-def can_finish(mode, centre_held, held):
+def can_finish(centre_held, held):
     """Rule L, the one definition of Done. `held` is the filled bins (or their count);
-    skipped and unresolved targets never count."""
+    unresolved targets never count."""
     count = held if isinstance(held, int) else len(held)
-    return bool(centre_held) and count >= (SIMPLE_MIN_HELD if mode == "simple" else DONE_BINS)
+    return bool(centre_held) and count >= DONE_BINS
 
 
-def lap_ended(mode, targets, held, skipped, started, now, ceilings=None):
-    """Rule L's ends 1 and 3: None, "resolved" or "ceiling". `ceilings` lets the test
-    override lower them."""
-    ceilings = ceilings or {}
-    ceiling = ceilings.get(mode, SIMPLE_LAP_SECONDS if mode == "simple" else ADVANCED_LAP_SECONDS)
-    resolved = set(held) | (set(skipped) if mode == "simple" else set())
-    if all(k in resolved for k in targets):
+def lap_ended(targets, held, started, now, ceiling=ADVANCED_LAP_SECONDS):
+    """Rule L's ends 1 and 3: None, "resolved" or "ceiling". `ceiling` lets the test
+    override lower it."""
+    if all(k in set(held) for k in targets):
         return "resolved"
     if now - started >= ceiling:
         return "ceiling"
     return None
 
 
-def lap_result(mode, centre_held, held):
+def lap_result(centre_held, held):
     """"swept", "too_few" (the centre held, too little else) or "lap_timeout" (the
     centre was never found)."""
-    if can_finish(mode, centre_held, held):
+    if can_finish(centre_held, held):
         return "swept"
     return "too_few" if centre_held else "lap_timeout"
 
@@ -3657,7 +3625,7 @@ def valid_sweep(mode, lap, targets, prior):
     state = prior.get("state")
     if state not in ("ready", "swept"):
         return None, "a scan is running or the session is closed"
-    if mode not in ("simple", "advanced", "usual"):
+    if mode not in ("advanced", "usual"):
         return None, "mode"
     if type(lap) is not int or lap not in (1, 2):
         return None, "lap"
@@ -3669,12 +3637,6 @@ def valid_sweep(mode, lap, targets, prior):
         return [], None
     if not _bins_ok(targets):
         return None, "targets"
-    if mode == "simple":
-        if lap != 1 or targets != list(SIMPLE_TARGETS):
-            return None, "simple is lap 1 and exactly 9, 3, 0, 6"
-        if type(prior.get("stored")) is int and prior["stored"] > SIMPLE_MAX_STORED:
-            return None, "simple may not replace a larger stored set"
-        return list(SIMPLE_TARGETS), None
     if sorted(targets) != list(range(BINS)):
         return None, "advanced is all twelve bins"
     if lap == 2 and not (state == "swept" and prior.get("kept_mode") == "advanced"
@@ -3796,12 +3758,12 @@ def say(obj):
 
 
 def parse_args(argv):
-    """(mode, lap, targets, [ceiling, patience, lead, stall], reference fd, debug) or None."""
+    """(mode, lap, targets, [ceiling, stall], reference fd, debug) or None."""
     try:
-        mode, lap, targets, ceiling, patience, lead, stall, refd, debug = argv
+        mode, lap, targets, ceiling, stall, refd, debug = argv
         lap = int(lap)
         targets = [int(k) for k in targets.split(",")] if targets else []
-        bounds = [float(x) for x in (ceiling, patience, lead, stall)]
+        bounds = [float(x) for x in (ceiling, stall)]
         refd = int(refd)
     except (ValueError, TypeError):
         return None
@@ -3851,7 +3813,7 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
     sys.path.append(HOWDY_DIR)
     from recorders.video_capture import VideoCapture
 
-    ceiling, patience, lead, stall = bounds
+    ceiling, stall = bounds
     config = configparser.ConfigParser()
     config.read(HOWDY_DIR + "/config.ini")
     dark_threshold = config.getfloat("video", "dark_threshold", fallback=DARK_MAX)
@@ -3863,7 +3825,6 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
     camera = VideoCapture(config)
 
     want = lap2_want(ref_eye) if (lap == 2 and ref_eye) else None
-    ceilings = {mode: ceiling}
     poses, neutral_poses, neutral = [], [], None
     centre_enc = reference[0] if reference else None
     accepted = [list(e) for e in reference]
@@ -3873,9 +3834,8 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
     cands = {k: [] for k in targets}
     dw = {k: new_dwell() for k in targets}
     prog = {k: 0.0 for k in targets}
-    templates, filled, skipped = {}, set(), set()
+    templates, filled = {}, set()
     holding, head_bin = None, None
-    mark, became = (0.0, 0.0), None
     run_failed, changed = 0, False
     band_run = 0                           # consecutive band frames (past the floor), see settle_verdict
     sharp_seen, eyes = [], []
@@ -3916,7 +3876,7 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
         # shows its own word (`other`, `over`), as the client was told; `band` (3.1.5) is a frame between
         # CHAIN and HARD, which the client was told as `over`
         shown = "skip" if strobe else ("band" if banded else word if word in ("other", "over") else ("ok" if passed else (word or ACCEPTED_WORD)))
-        aim = current_target(mode, targets, filled, skipped, centre_held, head_bin if uv else None)
+        aim = current_target(targets, filled, centre_held, head_bin if uv else None)
         # the pose behind the distances (3.1.6): that of the frame that gave hard_max, and the raw yaw and
         # pitch range of the frames that reached the guard in this second (degrees, as the camera sees them)
         hm = guard_seen["pose"] or ("n/a", "n/a", "n/a")
@@ -3977,13 +3937,6 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
             last_lit = now
         blank = is_strobe(total, darkness, float(np.mean(gray_in)))
         strobe = strobe_phase(blank, now, last_lit)
-
-        # rule P's clock starts at the first frame after a target becomes current
-        cur_top = None
-        if not strobe and mode == "simple" and centre_held:
-            cur_top = current_target(mode, targets, filled, skipped, True, None)
-            if cur_top is not None and became is None:
-                became, mark = now, (0.0, now)
 
         if blank:
             if strobe:
@@ -4080,7 +4033,7 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
                             else:
                                 encoding = [float(x) for x in encoder.compute_face_descriptor(small, shape, 1)]
                                 verdict = settle_verdict(guard_verdict(encoding, accepted, centre_enc),
-                                                         mode, centre_held, filled)
+                                                         centre_held, filled)
                                 if debug and centre_enc is not None:
                                     gd, gc = guard_distances(encoding, accepted, centre_enc)
                                     if gd >= guard_seen["hard"] and cur_pose is not None:
@@ -4135,17 +4088,12 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
                                             centre_held, centre_prog = True, 1.0
                                             sup_at = now
                                     else:
-                                        half = SIMPLE_WEDGE_HALF if mode == "simple" else WEDGE_HALF
-                                        if mode == "simple":
-                                            cur = current_target(mode, targets, filled, skipped, True, None)
-                                            hits = [cur] if (cur is not None and in_target(u, v, cur, holding == cur, half)) else []
-                                        else:
-                                            hits = [k for k in targets if k not in filled and in_target(u, v, k, holding == k, half)]
-                                            hits.sort(key=lambda k: (k != holding, k))
+                                        hits = [k for k in targets if k not in filled and in_target(u, v, k, holding == k, WEDGE_HALF)]
+                                        hits.sort(key=lambda k: (k != holding, k))
                                         head_bin = hits[0] if hits else None
                                         holding = head_bin
                                         for k in targets:
-                                            if k in filled or (mode == "simple" and k != cur):
+                                            if k in filled:
                                                 continue
                                             on = k == head_bin
                                             if on:
@@ -4163,32 +4111,22 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
             break
 
         if not strobe:
-            if mode == "simple" and centre_held:
-                cur = current_target(mode, targets, filled, skipped, True, None)
-                if cur != cur_top:
-                    became, mark = None, (0.0, 0.0)     # the next target starts on the next frame
-                elif cur is not None and became is not None:
-                    mark = progress_mark(mark, prog[cur], now)
-                    if patience_expired(mode, patience_since(mark, became, lead), now, patience):
-                        skipped.add(cur)
-                        became, mark = None, (0.0, 0.0)
-
             total_sup = (1 if centre_held else 0) + sum(len(supported(c)) for c in cands.values())
             if total_sup > sup_total or sup_at is None and centre_held:
                 sup_total, sup_at, stalled = total_sup, now, False
-            if mode == "advanced" and centre_held and not stalled and sup_at is not None and now - sup_at >= stall:
+            if centre_held and not stalled and sup_at is not None and now - sup_at >= stall:
                 stalled = True
                 say({"event": "capture_failed", "code": "sweep_stalled"})
 
-            target = current_target(mode, targets, filled, skipped, centre_held, head_bin if uv else None)
-            key = (target, tuple(sorted(filled)), tuple(sorted(skipped)), centre_held)
+            target = current_target(targets, filled, centre_held, head_bin if uv else None)
+            key = (target, tuple(sorted(filled)), centre_held)
             if last_emit is None or now - last_emit >= TRACK_EVERY or key != last_key:
                 u_out, v_out = (uv if uv else (0.0, 0.0))
                 clamp = lambda x: round(max(-4.0, min(4.0, x)), 3)
                 say({"event": "track", "state": word or ACCEPTED_WORD, "u": clamp(u_out), "v": clamp(v_out),
                      "target": target, "centre": round(centre_prog, 2),
                      "bins": track_bins(targets, {**prog, **{k: 1.0 for k in filled}}),
-                     "skipped": sorted(skipped), "canFinish": can_finish(mode, centre_held, filled)})
+                     "canFinish": can_finish(centre_held, filled)})
                 last_emit, last_key = now, key
 
         # The debug trace, at most one line a second (and see trace_line).
@@ -4204,21 +4142,19 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
             while b"\n" in pending:
                 line, pending = pending.split(b"\n", 1)
                 if line == b"finish":
-                    if can_finish(mode, centre_held, filled):
+                    if can_finish(centre_held, filled):
                         reason = "finish"
                     else:
                         say({"event": "capture_failed", "code": "not_enough"})
         if reason == "finish":
             break
-        end = lap_ended(mode, targets, filled, skipped, started, now, ceilings)
+        end = lap_ended(targets, filled, started, now, ceiling)
         if end:
             reason = end
             break
 
     trace_line(reason or "none")           # the lap's last line, written before it is left
     camera.release()
-    if mode == "simple":
-        skipped |= set(targets) - filled
     refine = None
     if not centre_held and not changed:
         refine = refine_for(seen)
@@ -4228,7 +4164,7 @@ def run(mode, lap, targets, bounds, reference, ref_eye, debug=False):
         "centre": {"encoding": centre_enc} if (centre_held and lap == 1) else None,
         "templates": [{"bin": k, "r": round(t["r"], 3), "support": t["support"],
                        "encoding": t["encoding"]} for k, t in sorted(templates.items())],
-        "filled": sorted(filled), "skipped": sorted(skipped),
+        "filled": sorted(filled),
         "eye": median(eyes) if eyes else None}})
     return 0
 

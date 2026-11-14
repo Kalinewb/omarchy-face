@@ -311,7 +311,7 @@ for key in sys.argv[2].split("."):
     doc = doc[int(key)] if key.isdigit() else doc[key]
 print(json.dumps(doc))' "$@"; }
 
-SIMPLE='{"cmd":"sweep","appearance":"No glasses","mode":"simple","lap":1,"targets":[9,3,0,6]}'
+SIMPLE_SWEEP='{"cmd":"sweep","appearance":"No glasses","mode":"simple","lap":1,"targets":[9,3,0,6]}'
 ALL12='[0,1,2,3,4,5,6,7,8,9,10,11]'
 ADV1='{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":1,"targets":'$ALL12'}'
 ADV2='{"cmd":"sweep","appearance":"No glasses","mode":"advanced","lap":2,"targets":'$ALL12'}'
@@ -343,7 +343,7 @@ if [[ -n ${E1_SHELL:-} ]]; then eval "$E1_SHELL"; exit; fi
 
 step "ready names the verbs and the limits"
 reset_store
-scenario simple
+scenario four-bins
 out=$(session emil "await ready 30" "eof")
 same "ready lists the verbs that exist (trial arrives with its phase)" '["capture","sweep","dot","abort","finish"]' "$(q "$out" 'first("ready")["verbs"]')"
 same "ready carries the default limits" '{"lock":12,"sudo":4}' "$(q "$out" 'first("ready")["limits"]')"
@@ -492,32 +492,6 @@ if [[ ${E1_ONLY:-} == dot ]]; then
   exit $((failures > 0))
 fi
 
-step "a full Simple run: centre, then 9, 3, 0, 6 in that order"
-reset_store
-scenario simple
-out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 90" "send $DONE" "await saved 30")
-echo "${DIM}$(grep -v '"event":"track"' <<<"$out" | head -8 | cut -c1-200)${RESET}"
-same "the events: ready, sweeping, track…, swept, saved" '["ready","sweeping","track","swept","saved"]' "$(q "$out" 'names')"
-same "sweeping echoes the targets and the quota, and carries no bins" '{"event":"sweeping","mode":"simple","lap":1,"targets":[9,3,0,6],"quota":2}' "$(q "$out" 'first("sweeping")')"
-same "the current target goes centre, 9, 3, 0, 6" '["centre",9,3,0,6]' "$(q "$out" '[k for k, _ in itertools.groupby(t["target"] for t in tracks) if k is not None]')"
-same "bins are non-zero only at 9, 3, 0, 6" '[0,3,6,9]' "$(q "$out" 'sorted({i for t in tracks for i, x in enumerate(t["bins"]) if x})')"
-same "swept: filled all four, none skipped, centre held, five kept" '{"event":"swept","mode":"simple","lap":1,"filled":[0,3,6,9],"skipped":[],"centreHeld":true,"kept":5}' "$(q "$out" 'first("swept")')"
-same "canFinish is in every track and turns true once the floor is met" 'true' "$(q "$out" 'any(t["canFinish"] for t in tracks) and not tracks[0]["canFinish"]')"
-same "the stored appearance is the centre plus four near templates a000 a090 a180 a270" '["a000","a090","a180","a270"]' "$(python3 -c '
-import json,sys
-print(json.dumps([e["pose"] for e in json.load(open(sys.argv[1]))["appearances"][0]["extra"]], separators=(",", ":")))' "$STORE/people/emil.json")"
-same "...all band near, support 2 or more, r in 0..4, 128 numbers" 'true' "$(python3 -c '
-import json,sys
-a = json.load(open(sys.argv[1]))["appearances"][0]
-print(json.dumps(all(e["band"] == "near" and e["support"] >= 2 and 0 <= e["r"] <= 4 and len(e["encoding"]) == 128 for e in a["extra"])))' "$STORE/people/emil.json")"
-same "people.json counts the templates: 5 in the appearance" '5' "$(json_field "$PEOPLE" people.0.appearances.0.templates)"
-check "people.json carries no encoding" bash -c "! grep -q encoding $PEOPLE"
-same "people.json names the Sudo policy" '"centre"' "$(json_field "$PEOPLE" sudoPolicy)"
-same "...and Sudo uses one template of the five (the centre), Lock all five" '[1,5]' "$(python3 -c '
-import json, sys
-p = json.load(open(sys.argv[1]))["people"][0]
-print(json.dumps([p["sudoTemplates"], p["lockTemplates"]], separators=(",", ":")))' "$PEOPLE")"
-
 count_templates() { python3 -c '
 import json, sys
 a = json.load(open(sys.argv[1]))["appearances"][int(sys.argv[2])]
@@ -528,7 +502,7 @@ reset_store
 scenario advanced
 out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 120" "send $DONE" "await saved 30")
 same "sweeping echoes all twelve targets ascending" '[0,1,2,3,4,5,6,7,8,9,10,11]' "$(q "$out" 'first("sweeping")["targets"]')"
-same "swept has twelve filled bins, no skipped list, thirteen templates kept" '{"event":"swept","mode":"advanced","lap":1,"filled":[0,1,2,3,4,5,6,7,8,9,10,11],"skipped":[],"centreHeld":true,"kept":13}' "$(q "$out" 'first("swept")')"
+same "swept has twelve filled bins, thirteen templates kept" '{"event":"swept","mode":"advanced","lap":1,"filled":[0,1,2,3,4,5,6,7,8,9,10,11],"centreHeld":true,"kept":13}' "$(q "$out" 'first("swept")')"
 same "the first track asks for the centre and canFinish is false" '["centre",false]' "$(q "$out" '[tracks[0]["target"], tracks[0]["canFinish"]]')"
 same "the record holds the centre and twelve near templates" '13' "$(count_templates "$STORE/people/emil.json" 0)"
 same "the lock set is capped at 12, labelled emil/No glasses for every template" '[12,["emil/No glasses"]]' "$(python3 -c '
@@ -545,7 +519,7 @@ step "lap 2 at another distance, and a lap 2 by somebody else"
 reset_store
 scenario advanced lap2
 out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 120" "send $ADV2" "awaitwhere {\"event\":\"swept\",\"lap\":2} 120" "send $DONE" "await saved 30")
-same "lap 2 is swept with twelve bins and 25 templates kept, centre held" '{"event":"swept","mode":"advanced","lap":2,"filled":[0,1,2,3,4,5,6,7,8,9,10,11],"skipped":[],"centreHeld":true,"kept":25}' "$(q "$out" 'last("swept")')"
+same "lap 2 is swept with twelve bins and 25 templates kept, centre held" '{"event":"swept","mode":"advanced","lap":2,"filled":[0,1,2,3,4,5,6,7,8,9,10,11],"centreHeld":true,"kept":25}' "$(q "$out" 'last("swept")')"
 same "lap 2 starts with the centre reported held" '[true,1.0]' "$(q "$out" '[t["centre"] == 1.0 for t in tracks[-1:]] + [tracks[-1]["centre"]]' | sed 's/\[true,/[true,/')"
 same "the record holds both bands: 12 near and 12 far" '[12,12]' "$(python3 -c '
 import json, sys
@@ -575,47 +549,14 @@ scenario advanced hold-first
 out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 120" "send $ADV2" "awaitwhere {\"event\":\"sweeping\",\"lap\":2} 30" "send {\"cmd\":\"abort\"}" "await aborted 30" "send $DONE" "await saved 30")
 same "an aborted lap 2 keeps lap 1 (table V): the session is in swept and done saves its thirteen" '13' "$(count_templates "$STORE/people/emil.json" 0)"
 
-step "Simple's order is the engine's"
-reset_store
-scenario simple-wrong
-out=$(OMARCHY_FACE_SWEEP_SECONDS=20 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
-same "a steady head in the wrong wedge (6) fills nothing while 9 is current" 'true' "$(q "$out" 'all(t["bins"][6] == 0 for t in tracks if t["target"] == 9)')"
-same "the target stays 9 until the engine skips it, and the skip is announced in track.skipped" 'true' "$(q "$out" 'any(9 in t["skipped"] for t in tracks) and tracks[-1]["target"] in (9, 3)')"
-same "nothing held at the ceiling is too_few" '"too_few"' "$(q "$out" 'last("capture_failed")["code"]')"
-reset_store
-scenario simple-sweep-through
-out=$(OMARCHY_FACE_SWEEP_SECONDS=20 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
-same "a head sweeping through the wedges without a hold fills nothing" '[true,"too_few"]' "$(q "$out" '[all(max(t["bins"]) < 1.0 for t in tracks), last("capture_failed")["code"]]')"
-scenario simple-grace
-out=$(OMARCHY_FACE_SWEEP_SECONDS=20 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
-same "0.5 s out of the wedge resets the dwell: progress rises, falls to 0, rises again" 'true' "$(q "$out" '(lambda v: (lambda d: len(d) >= 1 and any(v[i] > v[i - 1] for i in range(d[0] + 1, len(v))))([i for i in range(1, len(v)) if v[i] == 0 and v[i - 1] > 0]))([t["bins"][9] for t in tracks if t["target"] == 9])')"
-
-step "patience, resolved targets, and the ceiling (rules P and L)"
-reset_store
-scenario simple-two
-out=$(OMARCHY_FACE_SWEEP_SECONDS=60 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
-same "two skipped plus two filled ends swept, the skipped listed, three templates kept" '{"event":"swept","mode":"simple","lap":1,"filled":[3,9],"skipped":[0,6],"centreHeld":true,"kept":3}' "$(q "$out" 'first("swept")')"
-same "...and the saved appearance has three templates" '3' "$(count_templates "$STORE/people/emil.json" 0)"
-reset_store
-scenario simple-one
-out=$(OMARCHY_FACE_SWEEP_SECONDS=60 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\",\"code\":\"too_few\"} 120" "send $DONE" "eof")
-same "three skipped plus one filled ends too_few" '["too_few","bad_sweep"]' "$(q "$out" '[c["code"] for c in evs if c.get("event") == "capture_failed"][:2]')"
-check "...and nothing is stored, and done after a dropped lap is refused" bash -c "[[ ! -e $STORE/people/emil.json ]]"
-reset_store
-scenario simple-three
-out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
-same "at the ceiling with three filled and one unresolved the lap saves, listing the unresolved as skipped" '{"event":"swept","mode":"simple","lap":1,"filled":[0,3,9],"skipped":[6],"centreHeld":true,"kept":4}' "$(q "$out" 'first("swept")')"
-reset_store
-scenario simple-one
-out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
-same "at the ceiling with one filled it is too_few" '"too_few"' "$(q "$out" 'last("capture_failed")["code"]')"
+step "a centre that is never held, and a camera that sees only black"
 reset_store
 scenario no-centre
-out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
+out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
 same "a centre that is never held is lap_timeout" '"lap_timeout"' "$(q "$out" 'last("capture_failed")["code"]')"
 reset_store
 scenario black
-out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
+out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
 same "...and all-black frames are named black_frames" '"black_frames"' "$(q "$out" 'last("capture_failed")["code"]')"
 same "...and a covered or dead camera still says dark, after 2 s with nothing lit (the strobe rule does not silence it)" 'true' "$(q "$out" 'any(t["state"] == "dark" for t in tracks)')"
 
@@ -651,54 +592,48 @@ PY
 
 step "a strobing emitter (3.1.2): every other frame is unlit, and that is not the room being dark"
 reset_store
-scenario simple-strobe
-out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
-same "a Simple lap on a strobing camera (half the frames black) finishes: all four targets" '[0,3,6,9]' "$(q "$out" 'first("swept")["filled"]')"
-same "...and never says dark: the off phases are not a state, no word is emitted for them" 'false' "$(q "$out" 'any(t["state"] == "dark" for t in tracks)')"
-same "...nor is anything stored short of the five templates the same lap gives without the strobe" '5' "$(q "$out" 'first("swept")["kept"]')"
-reset_store
 scenario advanced-strobe
 out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 180" "send $DONE" "await saved 30")
 same "an Advanced lap on a strobing camera fills all twelve bins, with no dark word" '[12,false]' "$(q "$out" '[len(first("swept")["filled"]), any(t["state"] == "dark" for t in tracks)]')"
 reset_store
 scenario strobe-black
-out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
+out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
 same "a strobe whose lit frames are all black too is black_frames" '"black_frames"' "$(q "$out" 'last("capture_failed")["code"]')"
 reset_store
 scenario dim
-out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
+out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
 same "an all-dim stream (every frame lit but too dark) is too_dark" '"too_dark"' "$(q "$out" 'last("capture_failed")["code"]')"
 reset_store
 scenario strobe-dim
-out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
+out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
 same "...and behind a strobe it is too_dark still, not black_frames (the off phases are not evidence)" '"too_dark"' "$(q "$out" 'last("capture_failed")["code"]')"
 same "...the strobe frames still count towards the ceiling (it ended at 18 s of frame time, not 18 s of lit frames)" 'true' "$(q "$out" 'len([e for e in evs if e.get("event") == "capture_failed"]) >= 1')"
 reset_store
 scenario unlit-room
-out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
+out=$(OMARCHY_FACE_SWEEP_SECONDS=18 session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
 same "a room too dark for the emitter (every frame unlit, no strobe) still ends: black_frames, and says dark after the 2 s of silence" '["black_frames",true]' "$(q "$out" '[last("capture_failed")["code"], any(t["state"] == "dark" for t in tracks)]')"
 
 step "the same-person guard (3.1.5): ok / band / beyond. Strangers WITH per-frame spread, and the owner's far turn, pinned"
-# Below the floor (fewer than two targets filled in Simple, four in Advanced, counted for THIS LAP) a frame over CHAIN
+# Below the floor (fewer than four bins filled, counted for THIS LAP) a frame over CHAIN
 # counts towards `changed` exactly as in 3.1.3/3.1.4: a stranger in the band, straddling CHAIN, past HARD, or taking
 # over after the first fill (midswap) is ended after five in a row, and nothing is stored.
-for sc in simple-gap-046 simple-gap-050 simple-gap-054 simple-midswap simple-foothold simple-straddle simple-gap-058 simple-gap-062 simple-band-beyond-mix simple-stranger; do
+for sc in stranger-gap-046 stranger-gap-050 stranger-gap-054 stranger-midswap stranger-foothold stranger-straddle stranger-gap-058 stranger-gap-062 stranger-band-beyond-mix stranger-lap; do
   reset_store
   scenario $sc
-  out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
+  out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
   same "$sc: a stranger after the centre -- in the band (0.40-0.55 from the owner's, with wobble), straddling CHAIN (0.46 +-0.08), one foothold frame then frames near it, past HARD, band and beyond alternating, or a mid-hold swap after the first fill -- below the floor ends changed, as in 3.1.3, and nothing is stored" '["changed",false]' "$(q "$out" '[last("capture_failed")["code"], first("swept") is not None]')"
   check "...$sc: and nothing was written" bash -c "[[ ! -e $STORE/people/emil.json ]]"
 done
-for sc in simple-two-of-three simple-strict-alternation; do
+for sc in stranger-two-of-three stranger-alternation; do
   reset_store
   scenario $sc
-  out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
+  out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 120" "send $DONE" "await saved 30")
   same "$sc: the stranger's frames come two of three (or every other one) in the band: the owner's frames fill every target and reset the run, no changed" '[[0,3,6,9],false]' "$(q "$out" '[first("swept")["filled"], any(c.get("code") == "changed" for c in evs)]')"
   same "...$sc: and not one stranger frame is in anything that was stored (every stored descriptor is the owner's)" 'true' "$(stored_all_owner)"
 done
 reset_store
-scenario simple-limit-038
-out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
+scenario stranger-limit-038
+out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 120" "send $DONE" "await saved 30")
 same "THE KNOWN LIMIT, unchanged: a stranger wholly inside CHAIN of the centre (0.38) is accepted: the lap completes" '[[0,3,6,9],false]' "$(q "$out" '[first("swept")["filled"], any(c.get("code") == "changed" for c in evs)]')"
 same "...and it stores the stranger: the stored descriptors are 0.30-0.40 from the owner's centre (no stranger data; this pins the limit so a change is deliberate)" 'true' "$(python3 -c "
 import json, glob
@@ -708,27 +643,9 @@ for path in glob.glob('$STORE/people/emil.json'):
         d += [abs(e[0]) for e in [appearance['encoding']] + [x['encoding'] for x in appearance.get('extra', [])]]
 print(str(len(d) >= 5 and 0.30 < max(d) <= 0.40 + 1e-9).lower())
 ")"
-# Past the floor (two filled in Simple) the band is neutral: not accepted, not counted; five band frames in a row end the
-# lap gracefully with what is filled (`finish`).
 reset_store
-scenario simple-owner-band-updown
-out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 150" "send $DONE" "await saved 30")
-same "THE LIVE-TRACE LAP (regression): the centre, left and right fill, up is banded (0.46): five band frames end the lap gracefully, swept with the two filled and saved" '[[3,9],[0,6],true]' "$(q "$out" '[first("swept")["filled"], first("swept")["skipped"], any(e.get("event") == "saved" for e in evs)]')"
-same "...with only the owner's descriptors stored" 'true' "$(stored_all_owner 3)"
-same "...and the scan said so while it was happening: some track events said over (the band), and no changed" 'true' "$(q "$out" 'any(t["state"] == "over" for t in tracks) and not any(c.get("code") == "changed" for c in evs)')"
-reset_store
-scenario simple-owner-up-beyond
-out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 150" "send $DONE" "await saved 30")
-same "THE 3.1.5 LIVE LAP (regression): left and right filled, then the up target is 0.60 from the centre (OVER HARD): five such frames end the lap with finish, swept [3,9] and saved, not changed (3.1.5 discarded it)" '[[3,9],true,false]' "$(q "$out" '[first("swept")["filled"], any(e.get("event") == "saved" for e in evs), any(c.get("code") == "changed" for c in evs)]')"
-same "...with only the owner's descriptors stored, and the scan said over while it happened" 'true' "$(stored_all_owner 3)"
-reset_store
-scenario simple-late-beyond-2
-out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 150" "send $DONE" "await saved 30")
-same "a stranger 0.60 from the owner (over HARD) who takes over AFTER left and right filled: the lap ends finish with the owner's two (3.1.4 discarded it as changed); none of his frames is ok, so nothing of his is stored" '[[3,9],true]' "$(q "$out" '[first("swept")["filled"], any(e.get("event") == "saved" for e in evs)]')"
-same "...only the owner's descriptors" 'true' "$(stored_all_owner 3)"
-reset_store
-scenario simple-late-beyond-1
-out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
+scenario stranger-late-beyond-1
+out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
 same "the same stranger taking over after only LEFT (below the floor of two) is still changed, nothing stored (3.1.3's rule)" '"changed"' "$(q "$out" 'last("capture_failed")["code"]')"
 check "...and nothing was written" bash -c "[[ ! -e $STORE/people/emil.json ]]"
 reset_store
@@ -737,38 +654,21 @@ out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE
 same "THE SCALE BAND (3.1.7): the owner leans back on the first bin (eyes 0.67 of the centre's, the descriptor 0.60 from the centre: over HARD, five frames of which ended the lap changed in 3.1.6), is asked to come closer, leans forward again and fills four bins: no changed, swept [0,3,6,9], saved" '[[0,3,6,9],true,false,true]' "$(q "$out" '[first("swept")["filled"], any(e.get("event") == "saved" for e in evs), any(c.get("code") == "changed" for c in evs), any(t["state"] == "closer" for t in tracks)]')"
 same "...and only the owner's descriptors are stored" 'true' "$(stored_all_owner 5)"
 reset_store
-scenario simple-stranger-small
-out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
+scenario stranger-small
+out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"capture_failed\",\"code\":\"too_few\"} 150" "eof")
 same "somebody else 0.60 from the owner who sits at another size (0.67 of the centre's eye distance) after the centre gains nothing: none of his frames is encoded, so nothing is stored and nothing is counted: too_few at the ceiling, not changed, nothing written" '["too_few",true]' "$(q "$out" '[last("capture_failed")["code"], any(t["state"] == "closer" for t in tracks)]')"
 check "...nothing was written" bash -c "[[ ! -e $STORE/people/emil.json ]]"
 reset_store
-scenario simple-late-stranger-2
-out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 150" "send $DONE" "await saved 30")
-same "a stranger straddling CHAIN who takes over AFTER left and right filled: the band is neutral and five band frames end the lap with the owner's two: swept [3,9], saved, only the owner's descriptors (in this run; a stranger frame within 0.40 of a template can still fill a target, see the next check)" '[[3,9],true]' "$(q "$out" '[first("swept")["filled"], any(e.get("event") == "saved" for e in evs)]')"
-same "...stored only the owner's" 'true' "$(stored_all_owner 3)"
-reset_store
-scenario simple-late-limit-038
-out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 150" "send $DONE" "await saved 30")
-same "THE REMAINING COST, pinned: a stranger wholly inside CHAIN of the centre (0.38) who takes over after two fills is accepted like the one in simple-limit-038 (the known limit of 3.1.3): the up target fills with his descriptors" 'true' "$(q "$out" '0 in first("swept")["filled"]')"
-same "...and he is stored (0.30-0.40 from the owner's centre)" 'true' "$(python3 -c "
-import json, glob
-d = []
-for path in glob.glob('$STORE/people/emil.json'):
-    for appearance in json.load(open(path)).get('appearances', []):
-        d += [abs(e[0]) for e in [appearance['encoding']] + [x['encoding'] for x in appearance.get('extra', [])]]
-print(str(len(d) >= 4 and 0.30 < max(d) <= 0.40 + 1e-9).lower())
-")"
-reset_store
-scenario simple-late-stranger
-out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
+scenario stranger-late-after-fill
+out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
 same "a stranger straddling CHAIN who takes over after only the FIRST fill is still below the floor: ended changed (SR1 S1: with the band neutral after one fill this stored a stranger in twice as many laps)" '"changed"' "$(q "$out" 'last("capture_failed")["code"]')"
 reset_store
-scenario simple-owner-band-after-fill
-out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
+scenario owner-band-after-fill
+out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
 same "THE COST of keying on the floor, pinned: an owner whose SECOND target (right) is 0.46 from the centre after left filled is ended changed, as in 3.1.4 (the live trace's right target now fills, thanks to rule D)" '"changed"' "$(q "$out" 'last("capture_failed")["code"]')"
 reset_store
-scenario simple-owner-turn
-out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
+scenario owner-turn
+out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
 same "THE COST OF (a), pinned: an owner whose FIRST target is 0.46 from the centre (nothing filled) is ended changed, as in 3.1.3 -- a first target that far off is the one case the band does not cover" '"changed"' "$(q "$out" 'last("capture_failed")["code"]')"
 
 step "the debug trace (3.1.2): off by default; with debug=true in root's config, one line a second, no frame data"
@@ -782,17 +682,17 @@ chmod +x "$LAB/logger-stub"
 mount --bind "$LAB/logger-stub" /usr/bin/logger || exit 1
 : >/run/omarchy-face-stub/logger.out
 reset_store
-scenario simple-strobe
-out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
+scenario advanced-strobe
+out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 180" "send $DONE" "await saved 30")
 check "off by default: the child logs no debug line" bash -c "! grep -q '^debug ' /run/omarchy-face-stub/logger.out"
 printf 'debug=true\n' >>/etc/omarchy-face/config
 reset_store
-scenario simple-strobe
-out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
+scenario advanced-strobe
+out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 180" "send $DONE" "await saved 30")
 lines=$(grep -c '^debug ' /run/omarchy-face-stub/logger.out)
 check "with debug=true it logs, at most 120 lines for the lap, about one per second of frame time" bash -c "[[ $lines -ge 5 && $lines -le 120 ]]"
 check "...each line has the counts, the per-gate failures, the target and what is held, the last word, the mean darkness of the lit frames and the refine candidate" bash -c "grep '^debug ' /run/omarchy-face-stub/logger.out | tail -1 | grep -qE '^debug t=[0-9.]+ frames=[0-9]+ strobe_off=[0-9]+ black=0 lit=[0-9]+ dark=0 none=[0-9]+ multi=[0-9]+ accepted=[0-9]+ acc_s=[0-9]+ closer=[0-9]+ farther=[0-9]+ edge=[0-9]+ exposure=[0-9]+ blurry=[0-9]+ roll=[0-9]+ unsteady=[0-9]+ other=[0-9]+ over=[0-9]+ band=[0-9]+ far=[0-9]+ yaw=-?[0-9a-z/]+ pitch=-?[0-9a-z/]+ pitch_dec=-?[0-9a-z/]+ roll=-?[0-9a-z/]+ centre_gate=(in|out|-) centre_held=[01] filled=[0-9]+ target=[a-z0-9]+ hard_max=[0-9.]+ chain_max=[0-9.]+ hm_yaw=-?[0-9a-z/]+ hm_pitch=-?[0-9a-z/]+ hm_pitch_dec=-?[0-9a-z/]+ yaw_lo=-?[0-9a-z/]+ yaw_hi=-?[0-9a-z/]+ pitch_lo=-?[0-9a-z/]+ pitch_hi=-?[0-9a-z/]+ hard_min=[0-9.a-z/]+ eye=[0-9a-z/]+ centre_eye=[0-9a-z/]+ hm_eye=[0-9a-z/]+ eye_lo=[0-9a-z/]+ eye_hi=[0-9a-z/]+ step_hi=[0-9.]+ scale=[0-9]+ guard_run=[0-9]+ lap_end=[a-z_]+ last_word=(skip|ok|hold|dark|blurry|closer|farther|edge|multiple|other|searching|over|band) lit_darkness_mean=[0-9.]+ refine=(None|[a-z_]+)\$'"
-same "...the lap's accepted frames are counted (the engine filled four targets from them), and the last word of a strobe-off frame is skip or of an accepted one ok (words that are never on the wire)" 'true' "$(python3 -c "
+same "...the lap's accepted frames are counted (the engine filled the twelve bins from them), and the last word of a strobe-off frame is skip or of an accepted one ok (words that are never on the wire)" 'true' "$(python3 -c "
 import re
 rows = [dict(re.findall(r'(\w+)=(\S+)', l)) for l in open('/run/omarchy-face-stub/logger.out') if l.startswith('debug ')]
 words = {r['last_word'] for r in rows}
@@ -806,16 +706,16 @@ off, lit = int(f['strobe_off']), int(f['lit'])
 print(str(off > 0 and 0.7 <= off / max(1, lit) <= 1.3).lower())
 ")"
 check "...and no frame data: every line is words and numbers, under 800 characters" bash -c "! grep '^debug ' /run/omarchy-face-stub/logger.out | grep -qvE '^debug [A-Za-z_=0-9./ -]+\$' && ! grep '^debug ' /run/omarchy-face-stub/logger.out | awk 'length(\$0) > 800 { bad = 1 } END { exit !bad }'"
-same "...the pose is printed twice: pitch as the camera sees it and pitch_dec with rule D taken out; at the right target the fake head reads about 18 and 0" 'true' "$(python3 -c "
+same "...the pose is printed twice: pitch as the camera sees it and pitch_dec with rule D taken out; at the side targets the fake head reads about 18 and 0" 'true' "$(python3 -c "
 import re
 rows = [dict(re.findall(r'(\w+)=(\S+)', l)) for l in open('/run/omarchy-face-stub/logger.out') if l.startswith('debug ')]
-on = [r for r in rows if r['target'] == '3' and r['pitch'] not in ('n/a',) and r['pitch_dec'] != 'n/a' and abs(int(r['yaw'])) > 15]
-print(str(len(on) >= 2 and all(12 <= int(r['pitch']) <= 24 and abs(int(r['pitch_dec'])) <= 5 for r in on)).lower())
+on = [r for r in rows if r['target'] in ('3', '9') and r['pitch'] not in ('n/a',) and r['pitch_dec'] != 'n/a' and abs(int(r['yaw'])) > 15]
+print(str(len(on) >= 1 and all(12 <= int(r['pitch']) <= 24 and abs(int(r['pitch_dec'])) <= 5 for r in on)).lower())
 ")"
 reset_store
-scenario simple-gap-058
+scenario stranger-gap-058
 : >/run/omarchy-face-stub/logger.out
-out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
+out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"capture_failed\"} 150" "eof")
 same "the trace explains a stranger, to the last line: hard_max over 0.55 (the stranger bound), guard_run reaches 5, the lap ends changed (SR1 S3: the final line is written before the lap is left)" 'true' "$(python3 -c "
 import re
 rows = [dict(re.findall(r'(\w+)=(\S+)', l)) for l in open('/run/omarchy-face-stub/logger.out') if l.startswith('debug ')]
@@ -823,10 +723,10 @@ last = rows[-1]
 print(str(last['guard_run'] == '5' and last['lap_end'] == 'changed' and float(last['hard_max']) > 0.55 and max(int(r['guard_run']) for r in rows) == 5).lower())
 ")"
 reset_store
-scenario simple-owner-band-updown
+scenario adv-owner-band
 : >/run/omarchy-face-stub/logger.out
-out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 150" "send $DONE" "await saved 30")
-same "...and the owner far off-centre after two fills: chain_max over 0.40 with hard_max under 0.55 (the band), band counted, guard_run never above 0, last word band, the lap ends gracefully (finish)" 'true' "$(python3 -c "
+out=$(OMARCHY_FACE_SWEEP_SECONDS=100 session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 150" "send $DONE" "await saved 30")
+same "...and the owner far off-centre on the fifth bin, after four fills: chain_max over 0.40 with hard_max under 0.55 (the band), band counted, guard_run never above 0, last word band, the lap ends gracefully (finish)" 'true' "$(python3 -c "
 import re
 rows = [dict(re.findall(r'(\w+)=(\S+)', l)) for l in open('/run/omarchy-face-stub/logger.out') if l.startswith('debug ')]
 last = rows[-1]
@@ -854,8 +754,8 @@ print(str(len(rows) == 3 and int(rows[0]['strobe_off']) > 0 and rows[0]['ok'] ==
 printf 'debug=false\n' >>/etc/omarchy-face/config
 : >/run/omarchy-face-stub/logger.out
 reset_store
-scenario simple-strobe
-out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30")
+scenario advanced-strobe
+out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 180" "send $DONE" "await saved 30")
 check "the last debug line in the config wins, as in the shell side (debug=true then debug=false: no trace)" bash -c "! grep -q '^debug ' /run/omarchy-face-stub/logger.out"
 sed -i '/^debug=/d' /etc/omarchy-face/config
 umount /usr/bin/logger
@@ -874,7 +774,7 @@ same "a finish in ready, in swept, and after a failed sweep validation is ignore
 
 step "bad_sweep: every refusal comes through the real parent and the session carries on"
 reset_store
-scenario simple
+scenario four-bins
 bad=(
   '{"cmd":"sweep","appearance":"No glasses","mode":"simple","lap":1,"targets":[3,9,0,6]}'
   '{"cmd":"sweep","appearance":"No glasses","mode":"simple","lap":1,"targets":[9,3,0]}'
@@ -907,7 +807,7 @@ bad=(
 )
 script=("await ready 30" "send $CREATE" "send $(python3 -c 'print("[" * 60000)')")
 for line in "${bad[@]}"; do script+=("send $line"); done
-script+=("send $SIMPLE" "send $SIMPLE" "await swept 120" "send {\"cmd\":\"capture\",\"appearance\":\"No glasses\"}" "send {\"cmd\":\"sweep\",\"appearance\":\"No glasses\",\"mode\":\"simple\",\"lap\":2,\"targets\":[9,3,0,6]}" "send {\"cmd\":\"trial\",\"appearance\":\"No glasses\"}" "send $FINISH" "send {\"cmd\":\"abort\"}" "send $DONE" "await saved 30")
+script+=("send $ADV1" "send $ADV1" "await swept 120" "send {\"cmd\":\"capture\",\"appearance\":\"No glasses\"}" "send {\"cmd\":\"sweep\",\"appearance\":\"No glasses\",\"mode\":\"simple\",\"lap\":2,\"targets\":[9,3,0,6]}" "send {\"cmd\":\"trial\",\"appearance\":\"No glasses\"}" "send $FINISH" "send {\"cmd\":\"abort\"}" "send $DONE" "await saved 30")
 out=$(session emil "${script[@]}")
 same "${#bad[@]} refused sweeps, the capture after a sweep, a sweep while one runs, a lap 2 and a trial after a Simple set: all bad_sweep" "$(( ${#bad[@]} + 4 ))" "$(q "$out" 'len([e for e in evs if e.get("event") == "capture_failed" and e.get("code") == "bad_sweep"])')"
 same "...and the sweep that follows them all runs: exactly one sweeping, one swept, saved" '[1,1,1]' "$(q "$out" '[len([e for e in evs if e.get("event") == n]) for n in ("sweeping", "swept", "saved")]')"
@@ -916,12 +816,12 @@ same "...four bad labels count as bad_sweep above, and a 60,000-bracket line is 
 
 step "a second identity: changed, and nothing from that lap is stored"
 reset_store
-scenario simple-changed
-out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\",\"code\":\"changed\"} 120" "send $DONE" "eof")
+scenario lap-changed
+out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"capture_failed\",\"code\":\"changed\"} 120" "send $DONE" "eof")
 same "five consecutive other-person frames give changed (and the done that follows is refused)" '["changed","bad_sweep"]' "$(q "$out" '[c["code"] for c in evs if c.get("event") == "capture_failed"]')"
 check "...nothing is stored" bash -c "[[ ! -e $STORE/people/emil.json ]]"
-scenario simple-stray
-out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 60" "eof")
+scenario lap-stray
+out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 60" "eof")
 same "one stray frame of somebody else does not end the lap" '[0,3,6,9]' "$(q "$out" 'first("swept")["filled"]')"
 
 step "rule F: root re-checks the guard and the pose ring itself, whatever the child says"
@@ -944,9 +844,9 @@ patch_admin "$LAB/admin-noguard" '    if distance(encoding, centre) > hard:
 patch_admin "$LAB/admin-wide" '"templates": [{"bin": k, "r": round(t["r"], 3),' '"templates": [{"bin": k, "r": 3.9,'
 REAL_ADMIN=$ADMIN
 reset_store
-scenario simple-stranger
+scenario stranger-lap
 ADMIN=$LAB/admin-noguard
-out=$(OMARCHY_FACE_SWEEP_SECONDS=30 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 90" "send $DONE" "eof")
+out=$(OMARCHY_FACE_SWEEP_SECONDS=30 session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"capture_failed\"} 90" "send $DONE" "eof")
 same "a child whose guard passes everything: four stranger templates, and the parent drops the lap (lap 1)" '[["timeout","bad_sweep"],false]' "$(q "$out" '[[c["code"] for c in evs if c.get("event") == "capture_failed"], first("swept") is not None]')"
 check "...and nothing is stored" bash -c "[[ ! -e $STORE/people/emil.json ]]"
 reset_store
@@ -957,15 +857,15 @@ import json, sys
 evs = [json.loads(l[3:]) for l in sys.stdin.read().splitlines() if l.startswith("EV ")]
 print(json.dumps([[e["code"] for e in evs if e.get("event") == "capture_failed"][0], len([e for e in evs if e.get("event") == "swept"]), 13 if any(e.get("event") == "saved" for e in evs) else 0], separators=(",", ":")))' <<<"$out")"
 reset_store
-scenario simple
+scenario four-bins
 ADMIN=$LAB/admin-wide
-out=$(OMARCHY_FACE_SWEEP_SECONDS=30 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 90" "send $DONE" "eof")
+out=$(OMARCHY_FACE_SWEEP_SECONDS=30 session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"capture_failed\"} 90" "send $DONE" "eof")
 same "a child that reports r 3.9 (inside 0..4, outside R_MIN..R_MAX): dropped by the parent" '["timeout","bad_sweep"]' "$(q "$out" '[c["code"] for c in evs if c.get("event") == "capture_failed"]')"
 check "...and nothing is stored" bash -c "[[ ! -e $STORE/people/emil.json ]]"
 ADMIN=$REAL_ADMIN
 reset_store
-scenario simple-stranger
-out=$(OMARCHY_FACE_SWEEP_SECONDS=30 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"capture_failed\"} 90" "eof")
+scenario stranger-lap
+out=$(OMARCHY_FACE_SWEEP_SECONDS=30 session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"capture_failed\"} 90" "eof")
 same "control: the same stranger with the real guard is changed, as before" '"changed"' "$(q "$out" 'last("capture_failed")["code"]')"
 reset_store
 scenario dot-centre dot-stranger-left
@@ -991,8 +891,8 @@ same "after aborted the session is usable: a second sweep ran (two sweeping even
 same "...and the transcript ends discarded (nothing was written)" '"discarded"' "$(q "$out" 'evs[-1]["event"]')"
 sleep 2
 check "no engine child outlives an abort or an EOF" no_child
-scenario simple-wrong-long
-out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "awaitwhere {\"event\":\"track\",\"target\":9} 60" "eof")
+scenario wrong-long
+out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "awaitwhere {\"event\":\"track\",\"target\":6} 60" "eof")
 sleep 2
 check "EOF in the middle of a lap kills the child within 2 s" no_child
 same "...and writes nothing" '"discarded"' "$(q "$out" 'evs[-1]["event"]')"
@@ -1000,25 +900,26 @@ check "...no person is stored" bash -c "[[ ! -e $STORE/people/emil.json ]]"
 
 step "Start over replaces the pending set; a legacy capture works until the first sweep"
 reset_store
-scenario simple advanced
-out=$(session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $ADV1" "awaitwhere {\"event\":\"swept\",\"kept\":13} 120" "send $DONE" "await saved 30")
-same "a Simple lap 1 followed by an Advanced lap 1 leaves one set of 13 (replaced, not 18)" '13' "$(count_templates "$STORE/people/emil.json" 0)"
+scenario four-bins advanced
+out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 120" "send $ADV1" "awaitwhere {\"event\":\"swept\",\"kept\":13} 120" "send $DONE" "await saved 30")
+same "a lap 1 that ended with four bins followed by a lap 1 of twelve leaves one set of 13 (replaced, not 18)" '13' "$(count_templates "$STORE/people/emil.json" 0)"
 reset_store
 out=$(session emil "await ready 30" "send $CREATE" 'send {"cmd":"capture","appearance":"No glasses"}' "await captured 60" "send $DONE" "await saved 30")
 same "capture is still the old single frame: ready capturing captured saved" '["ready","capturing","captured","saved"]' "$(q "$out" 'names')"
 same "...and the stored appearance has no extra" '1' "$(count_templates "$STORE/people/emil.json" 0)"
 
-step "Rule R: Simple may not replace a larger stored set"
+step "Rule R: the dot scan may not replace a larger stored set"
 reset_store
-scenario simple
-session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 120" "send $DONE" "await saved 30" >/dev/null
-out=$(session emil "await ready 30" "send $SIMPLE" "await swept 60" "eof")
-same "five stored templates: a Simple re-scan is accepted" 'true' "$(q "$out" 'first("swept") is not None')"
+scenario dot-centre dot-left dot-top dot-right dot-bottom
+session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"dotted\",\"pose\":\"left\"} 60" "send $DOTT" "awaitwhere {\"event\":\"dotted\",\"pose\":\"top\"} 60" "send $DOTR" "awaitwhere {\"event\":\"dotted\",\"pose\":\"right\"} 60" "send $DOTB" "awaitwhere {\"event\":\"dotted\",\"pose\":\"bottom\"} 60" "send $DONE" "await saved 30" >/dev/null
+scenario dot-centre
+out=$(session emil "await ready 30" "send $DOTC" "await dotted 60" "eof")
+same "five stored templates: a dot re-scan is accepted" 'true' "$(q "$out" 'first("dotted") is not None')"
 scenario advanced
 session emil "await ready 30" "send $ADV1" "await swept 120" "send $DONE" "await saved 30" >/dev/null
-scenario simple
-out=$(session emil "await ready 30" "send $SIMPLE" "await capture_failed 30" "eof")
-same "thirteen stored templates: Simple is bad_sweep" '"bad_sweep"' "$(q "$out" 'first("capture_failed")["code"]')"
+scenario dot-centre
+out=$(session emil "await ready 30" "send $DOTC" "await capture_failed 30" "eof")
+same "thirteen stored templates: the dot scan's centre is bad_sweep, and no child ran" '["bad_sweep",0]' "$(q "$out" '[first("capture_failed")["code"], len([e for e in evs if e.get("event") == "dotting"])]')"
 same "...and the person's record is untouched (13)" '13' "$(count_templates "$STORE/people/emil.json" 0)"
 
 step "limits: set-limits changes what is used, without re-enrolment"
@@ -1042,12 +943,12 @@ same "regenerate is byte-identical (the derived sets and people.json)" "$fp1" "$
 step "the session bound: a sweep does not lengthen the session (scaled by OMARCHY_FACE_SESSION_SECONDS)"
 reset_store
 scenario hold-first
-out=$(OMARCHY_FACE_SESSION_SECONDS=4 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "sleep 5.5" 'send {"cmd":"abort"}' "await discarded 30")
+out=$(OMARCHY_FACE_SESSION_SECONDS=4 session emil "await ready 30" "send $CREATE" "send $ADV1" "sleep 5.5" 'send {"cmd":"abort"}' "await discarded 30")
 same "a session of 4 s is over at 4 s with a sweep running: the abort at 5.5 s finds it discarded" 'false' "$(q "$out" 'first("aborted") is not None')"
-out=$(OMARCHY_FACE_SESSION_SECONDS=4 session emil "await ready 30" "sleep 3" "send $CREATE" "send $SIMPLE" "sleep 2.5" 'send {"cmd":"abort"}' "await discarded 30")
+out=$(OMARCHY_FACE_SESSION_SECONDS=4 session emil "await ready 30" "sleep 3" "send $CREATE" "send $ADV1" "sleep 2.5" 'send {"cmd":"abort"}' "await discarded 30")
 same "...also when the sweep is sent late (at 3 s): it buys no extra time" 'false' "$(q "$out" 'first("aborted") is not None')"
 same "...and the transcript ends discarded" '"discarded"' "$(q "$out" 'evs[-1]["event"]')"
-out=$(OMARCHY_FACE_SESSION_SECONDS=4 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "sleep 2" 'send {"cmd":"abort"}' "await aborted 30" "eof")
+out=$(OMARCHY_FACE_SESSION_SECONDS=4 session emil "await ready 30" "send $CREATE" "send $ADV1" "sleep 2" 'send {"cmd":"abort"}' "await aborted 30" "eof")
 same "...but an abort inside the 4 s still works" 'true' "$(q "$out" 'first("aborted") is not None')"
 sleep 1
 check "...with the child gone" no_child
@@ -1060,16 +961,16 @@ patch_admin "$LAB/admin-noisy" 'def say(obj):
     sys.stderr.write("LEAK /dev/video9 Traceback (most recent call last)\n")
 '
 reset_store
-scenario simple
+scenario four-bins
 ADMIN=$LAB/admin-noisy
-out=$(OMARCHY_FACE_SWEEP_SECONDS=30 session emil "await ready 30" "send $CREATE" "send $SIMPLE" "await swept 90" "eof")
+out=$(OMARCHY_FACE_SWEEP_SECONDS=30 session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 90" "eof")
 ADMIN=$REAL_ADMIN
 same "a child that writes a path and a traceback to stderr: the sweep still completes" 'true' "$(q "$out" 'first("swept") is not None')"
 same "...and none of it reaches the client (no ERR line mentions it)" 'false' "$(grep -qE 'LEAK|/dev/video9|Traceback' <<<"$out" && echo true || echo false)"
 reset_store
 scenario hold-first
 CAMLOCK=/run/omarchy-face/camera.lock
-( session emil "await ready 30" "send $CREATE" "send $SIMPLE" "sleep 3" "send $(python3 -c 'print("[" * 60000)')" "sleep 1" 'send {"cmd":"abort"}' "await aborted 30" "eof" >"$LAB/hold.out" 2>&1 ) &
+( session emil "await ready 30" "send $CREATE" "send $ADV1" "sleep 3" "send $(python3 -c 'print("[" * 60000)')" "sleep 1" 'send {"cmd":"abort"}' "await aborted 30" "eof" >"$LAB/hold.out" 2>&1 ) &
 holder=$!
 sleep 2
 held=0
@@ -1106,10 +1007,13 @@ def check(name, ok):
         bad.append(name)
 t = ns["typed_event"]
 good_track = {"event": "track", "state": "hold", "u": 0.1, "v": -1.2, "target": 9, "centre": 1.0,
-              "bins": [0.0] * 12, "skipped": [], "canFinish": False}
+              "bins": [0.0] * 12, "canFinish": False}
 check("a good track passes", t(good_track) == good_track)
-check("sweeping passes", t({"event": "sweeping", "mode": "simple", "lap": 1, "targets": [9, 3, 0, 6], "quota": 2}) is not None)
-check("swept passes", t({"event": "swept", "mode": "advanced", "lap": 2, "filled": [0, 1], "skipped": [], "centreHeld": True, "kept": 3}) is not None)
+check("sweeping passes", t({"event": "sweeping", "mode": "advanced", "lap": 1, "targets": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], "quota": 2}) is not None)
+check("a sweeping in mode simple is dropped (there is no Simple sweep)", t({"event": "sweeping", "mode": "simple", "lap": 1, "targets": [9, 3, 0, 6], "quota": 2}) is None)
+check("swept passes", t({"event": "swept", "mode": "advanced", "lap": 2, "filled": [0, 1], "centreHeld": True, "kept": 3}) is not None)
+check("a track or swept that carries `skipped` (Simple's, gone) is dropped", t(dict(good_track, skipped=[])) is None
+      and t({"event": "swept", "mode": "advanced", "lap": 1, "filled": [0], "skipped": [], "centreHeld": True, "kept": 3}) is None)
 check("capture_failed with each of the twelve codes passes",
       all(t({"event": "capture_failed", "code": c}) for c in ns["pure"]()["CODES"]))
 check("dotting, dot and dotted pass", all(t(d) is not None for d in (
@@ -1144,8 +1048,8 @@ for name, doc in [
     ("target 12", dict(good_track, target=12)),
     ("target True", dict(good_track, target=True)),
     ("an unknown state", dict(good_track, state="ok")),
-    ("a repeat in filled", {"event": "swept", "mode": "simple", "lap": 1, "filled": [1, 1], "skipped": [], "centreHeld": True, "kept": 3}),
-    ("lap True", {"event": "sweeping", "mode": "simple", "lap": True, "targets": [9], "quota": 2}),
+    ("a repeat in filled", {"event": "swept", "mode": "advanced", "lap": 1, "filled": [1, 1], "centreHeld": True, "kept": 3}),
+    ("lap True", {"event": "sweeping", "mode": "advanced", "lap": True, "targets": [9], "quota": 2}),
     ("a code that is not one of the twelve", {"event": "capture_failed", "code": "ok"}),
     ("an event name that is not a sweep event", {"event": "saved"}),
     ("no event", {"state": "hold"}),
@@ -1155,12 +1059,12 @@ check("dumping NaN is refused outright (allow_nan=False)", not any(
     "NaN" in json.dumps(g, allow_nan=False) for g in [good_track]))
 # the override: only lowers, ignores junk, and is never read by root of the machine
 base = ns["sweep_bounds"]()
-check("no override: the plan's bounds", base == {"simple": 60.0, "advanced": 90.0, "patience": 10.0, "lead": 3.0, "stall": 20.0, "dot": 4.0})
+check("no override: the plan's bounds", base == {"advanced": 90.0, "stall": 20.0, "dot": 4.0})
 for asked in ("1e9", "NaN", "inf", "-1", "-inf", "0", "abc", ""):
     os.environ["OMARCHY_FACE_SWEEP_SECONDS"] = asked
     check("OMARCHY_FACE_SWEEP_SECONDS=%r lengthens nothing" % asked, ns["sweep_bounds"]() == base)
 os.environ["OMARCHY_FACE_SWEEP_SECONDS"] = "5"
-check("5 lowers every bound to at most 5", all(v <= 5 for v in ns["sweep_bounds"]().values()) and ns["sweep_bounds"]()["lead"] == 3.0)
+check("5 lowers every bound to at most 5", all(v <= 5 for v in ns["sweep_bounds"]().values()))
 ns["real_root"] = lambda: True
 check("root of the machine never reads it", ns["sweep_bounds"]() == base)
 # warning_for is per person
@@ -1208,27 +1112,27 @@ def res(templates, centre=ZERO):
     return {"changed": False, "ended": "finish", "refine": None, "centreHeld": True,
             "centre": {"encoding": centre} if centre is not None else None, "templates": templates,
             "filled": [], "skipped": [], "eye": 80.0}
-SIMPLE4 = [9, 3, 0, 6]
+FOUR = [9, 3, 0, 6]
 ALL12 = list(range(12))
-good4 = [tpl(k) for k in SIMPLE4]
-check("judge keeps a good Simple lap", judge("simple", 1, SIMPLE4, res(good4))["code"] is None)
-check("judge keeps a template exactly at HARD (0.55)", judge("simple", 1, SIMPLE4, res([tpl(9, 0.55)] + good4[1:]))["code"] is None)
-check("judge refuses a template just past HARD (0.5501)", judge("simple", 1, SIMPLE4, res([tpl(9, 0.5501)] + good4[1:]))["code"] == "timeout")
-check("judge refuses a template of somebody else (distance 1.0)", judge("simple", 1, SIMPLE4, res([tpl(9, 1.0)] + good4[1:]))["code"] == "timeout")
+good4 = [tpl(k) for k in FOUR]
+check("judge keeps a good lap (four bins and the centre)", judge(1, ALL12, res(good4))["code"] is None)
+check("judge keeps a template exactly at HARD (0.55)", judge(1, ALL12, res([tpl(9, 0.55)] + good4[1:]))["code"] is None)
+check("judge refuses a template just past HARD (0.5501)", judge(1, ALL12, res([tpl(9, 0.5501)] + good4[1:]))["code"] == "timeout")
+check("judge refuses a template of somebody else (distance 1.0)", judge(1, ALL12, res([tpl(9, 1.0)] + good4[1:]))["code"] == "timeout")
 for r, expect in ((1.0, True), (2.2, True), (0.99, False), (2.21, False), (3.9, False), (4, False), (0, False), (-1, False)):
     check("judge r=%s %s" % (r, "kept" if expect else "refused"),
-          (judge("simple", 1, SIMPLE4, res([tpl(9, r=r)] + good4[1:]))["code"] is None) == expect)
+          (judge(1, ALL12, res([tpl(9, r=r)] + good4[1:]))["code"] is None) == expect)
 nan_enc = [float("nan")] + [0.0] * 127
-check("judge refuses a NaN encoding", judge("simple", 1, SIMPLE4, res([tpl(9, encoding=nan_enc)] + good4[1:]))["code"] == "timeout")
-check("judge ignores a far lap-1 centre claim that does not exist (no centre: not swept)", judge("simple", 1, SIMPLE4, res(good4, centre=None))["code"] in ("lap_timeout", "too_few"))
+check("judge refuses a NaN encoding", judge(1, ALL12, res([tpl(9, encoding=nan_enc)] + good4[1:]))["code"] == "timeout")
+check("judge ignores a far lap-1 centre claim that does not exist (no centre: not swept)", judge(1, ALL12, res(good4, centre=None))["code"] in ("lap_timeout", "too_few"))
 adv = [tpl(k) for k in ALL12]
-check("judge keeps a good lap 2 against the held centre", judge("advanced", 2, ALL12, res(adv), ZERO)["code"] is None)
-check("judge returns no centre for lap 2", judge("advanced", 2, ALL12, res(adv), ZERO)["centre"] is None)
-check("judge refuses lap 2 without the held centre", judge("advanced", 2, ALL12, res(adv), None)["code"] == "timeout")
+check("judge keeps a good lap 2 against the held centre", judge(2, ALL12, res(adv), ZERO)["code"] is None)
+check("judge returns no centre for lap 2", judge(2, ALL12, res(adv), ZERO)["centre"] is None)
+check("judge refuses lap 2 without the held centre", judge(2, ALL12, res(adv), None)["code"] == "timeout")
 check("judge refuses lap 2 templates far from the HELD centre, whatever centre the child names",
-      judge("advanced", 2, ALL12, res(adv, centre=ZERO), away(0.9))["code"] == "timeout" and
-      judge("advanced", 2, ALL12, res(adv, centre=away(0.9)), ZERO)["code"] is None)
-check("judge refuses a 127-number held centre", judge("advanced", 2, ALL12, res(adv), [0.0] * 127)["code"] == "timeout")
+      judge(2, ALL12, res(adv, centre=ZERO), away(0.9))["code"] == "timeout" and
+      judge(2, ALL12, res(adv, centre=away(0.9)), ZERO)["code"] is None)
+check("judge refuses a 127-number held centre", judge(2, ALL12, res(adv), [0.0] * 127)["code"] == "timeout")
 # m8: the security constants STORE_PY and SWEEP_PY each hold are the same numbers
 sweep_ns = ns["pure"]()
 for name in ("LOCK_TEMPLATES", "SUDO_TEMPLATES", "LOCK_MAXIMUM", "SUDO_MAXIMUM"):

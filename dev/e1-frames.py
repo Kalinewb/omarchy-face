@@ -204,27 +204,20 @@ SCENARIOS = {
     # the camera waits for a line on stdin before its first frame (the cancel test)
     "dot-hold-first": lambda: build([dict(n=1, hold=True, travel=0), dict(n=900)]),
     # a whole lap of either mode, every target held in turn
-    "simple": lambda: build([dict(n=40)] + visit(SIMPLE)),
+    "four-bins": lambda: build([dict(n=40)] + visit(SIMPLE)),
     "advanced": lambda: build([dict(n=40)] + visit(CLOCK)),
     # Advanced with the centre and four bins, then the camera waits for a `finish`
     "advanced4-hold": lambda: build([dict(n=40)] + visit(CLOCK[:3], n=30) + visit(CLOCK[3:4], n=30, hold=True) + visit(CLOCK[4:5], n=400)),
     # four bins in hand, a fifth being held when the `finish` arrives, filled one frame later
     "advanced3-then-4": lambda: build([dict(n=40)] + visit(CLOCK[:3], n=30) + visit(CLOCK[3:4], n=18, hold=True) + visit(CLOCK[3:4], n=60)),
     # the head sits in the wrong wedge (6) while 9 is current, for ever
-    "simple-wrong": lambda: build([dict(n=40), dict(at=6, n=900)]),
     # sweeping through each wedge without holding: 4 frames in each
-    "simple-sweep-through": lambda: build([dict(n=40)] + visit(SIMPLE, n=3, travel=3) + [dict(at="centre", n=900)]),
     # a hold, a 0.5 s absence (the dwell resets), then the hold again, long enough to fill
-    "simple-grace": lambda: build([dict(n=40), dict(at=9, n=8), dict(at="centre", n=8), dict(at=9, n=8), dict(at=3, n=900)]),
     # 9 and 3 held, then nothing is ever reached: 0 and 6 are skipped
-    "simple-two": lambda: build([dict(n=40)] + visit((9, 3)) + [dict(at="centre", n=900)]),
-    "simple-one": lambda: build([dict(n=40)] + visit((9,)) + [dict(at="centre", n=900)]),
-    "simple-three": lambda: build([dict(n=40)] + visit((9, 3, 0)) + [dict(at="centre", n=900)]),
     # never at the centre: the head never settles, so there is no neutral and no centre
     "no-centre": lambda: build([dict(n=900, swing=12.0)]),
     "black": lambda: build([dict(n=900, kind="black")]),
     # a strobing emitter (3.1.1): black frames between the lit ones are not "dark"
-    "simple-strobe": lambda: strobe(build([dict(n=40)] + visit(SIMPLE))),
     "advanced-strobe": lambda: strobe(build([dict(n=40)] + visit(CLOCK))),
     # every frame lit but too dark (80% in the darkest bin: kind "dark" is 100%, which is black); and the same behind a strobe
     "dim": lambda: build([dict(n=900, kind="dim")]),
@@ -239,21 +232,19 @@ SCENARIOS = {
     # steps: the FIRST target is already that far, so nothing is filled and the run of refusals ends the lap `changed`,
     # as in 3.1.3 (the cost of the strictness below the floor; the live trace's failure was after two fills).
     # (each turn moves the descriptor along its own axis, as turning to different sides does: the left turn is not near the up one)
-    "simple-owner-turn": lambda: build([dict(n=40)] + [dict(at=k, n=240, drift=0.46, travel=14, axis=2 + i) for i, k in enumerate(SIMPLE)]),
+    "owner-turn": lambda: build([dict(n=40)] + [dict(at=k, n=240, drift=0.46, travel=14, axis=2 + i) for i, k in enumerate(SIMPLE)]),
     # left fills (0.30), then right, up and down are 0.46 from the centre: ONE fill is below the floor of two, so the
     # right target's frames are stranger frames (`changed`) -- the cost of keying the band on the floor
-    "simple-owner-band-after-fill": lambda: build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2)]
+    "owner-band-after-fill": lambda: build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2)]
                                                   + [dict(at=k, n=240, drift=0.46, travel=14, axis=3 + i) for i, k in enumerate((3, 0, 6))]),
     # a stranger straddling CHAIN who takes over after the owner's left target has filled (one fill: below the floor of two,
     # so the band is still strict) and after left AND right have (the floor is met: the band is neutral and five band
     # frames in a row end the lap with what is filled)
-    "simple-late-stranger": lambda: _identity(build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2)] + visit((3, 0, 6))), 100, 0.46, 0.08),
-    "simple-late-stranger-2": lambda: _identity(build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2), dict(at=3, n=40, drift=0.30, travel=14, axis=3)]
+    "stranger-late-after-fill": lambda: _identity(build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2)] + visit((3, 0, 6))), 100, 0.46, 0.08),
+    "stranger-late-after-fill-2": lambda: _identity(build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2), dict(at=3, n=40, drift=0.30, travel=14, axis=3)]
                                                       + visit((0, 6), n=240)), 135, 0.46, 0.08),
     # lap 2 (Advanced), the owner at the centre, then somebody else: `accepted` holds lap 1's templates from the first frame,
     # so only THIS LAP's fills count towards the floor
-    "simple-late-limit-038": lambda: _identity(build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2), dict(at=3, n=40, drift=0.30, travel=14, axis=3)]
-                                                     + visit((0, 6), n=240)), 135, 0.38, 0.02),
     # ADVANCED, the floor met (four bins of this lap): the owner far off-centre on the fifth bin (0.46 on its own axis), and
     # somebody else who takes over after the owner's fourth bin (gaps 0.46 and 0.50 in the band, 0.44 +-0.08 straddling).
     # Five band frames in a row end the lap with `finish`, keeping the owner's four bins.
@@ -264,10 +255,7 @@ SCENARIOS = {
     # 3.1.6: past the floor a frame OVER HARD is neutral too (five in a row end the lap with `finish`, what is filled is kept):
     # the owner whose up is 0.60 from the centre, a stranger 0.60 away after left and right, and after the owner's four Advanced
     # bins; below the floor (after only left) it still ends `changed`
-    "simple-owner-up-beyond": lambda: build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2), dict(at=3, n=40, drift=0.30, travel=14, axis=3),
-                                             dict(at=0, n=240, drift=0.60, travel=14, axis=4)]),
-    "simple-late-beyond-2": lambda: _identity(_late2_base(), 135, 0.60, 0.02),
-    "simple-late-beyond-1": lambda: _identity(build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2)] + visit((3, 0, 6))), 100, 0.60, 0.02),
+    "stranger-late-beyond-1": lambda: _identity(build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2)] + visit((3, 0, 6))), 100, 0.60, 0.02),
     "adv-late-stranger-060": lambda: _identity(_adv_base(), 190, 0.60, 0.02),
     # 3.1.7: the scale band. The owner leans back on the first bin (smaller face, 0.67 of the centre's eye distance) and the
     # descriptor goes 0.60 from the centre (over HARD): without the band that is five stranger frames and the lap is `changed`;
@@ -275,46 +263,44 @@ SCENARIOS = {
     "adv-scale-drift": lambda: build([dict(n=40), dict(at=0, n=60, scale=0.8, drift=0.60, travel=6, axis=6)] + visit(CLOCK[:4], travel=10)),
     # ...and somebody else who takes over at ANOTHER size (0.6 from the centre, 0.67 of its eye distance) and stays there gains
     # nothing: none of his frames is encoded, so none can be stored, and nothing ends the lap but the ceiling
-    "simple-stranger-small": lambda: _identity(build([dict(n=40, scale=1.2)] + visit(SIMPLE, scale=0.8)), 45, 0.60, 0.02),
+    "stranger-small": lambda: _identity(build([dict(n=40, scale=1.2)] + visit(SIMPLE, scale=0.8)), 45, 0.60, 0.02),
     "lap2-stranger-044": lambda: _identity(build([dict(n=40, scale=0.9)] + visit(CLOCK, scale=0.9)), 45, 0.44, 0.04),
     "lap2-straddle": lambda: _identity(build([dict(n=40, scale=0.9)] + visit(CLOCK, scale=0.9)), 45, 0.44, 0.08),
-    "simple-owner-band-updown": lambda: build([dict(n=40), dict(at=9, n=40, drift=0.30, travel=14, axis=2), dict(at=3, n=40, drift=0.30, travel=14, axis=3),
-                                               dict(at=0, n=240, drift=0.46, travel=14, axis=4), dict(at=6, n=240, drift=0.46, travel=14, axis=5)]),
     # STRANGERS WITH PER-FRAME SPREAD (identity gap from the owner + wobble, after the centre). With only the centre
     # filled, every frame over CHAIN counts towards `changed` (3.1.3's rule): the band (0.40-0.55), straddling CHAIN and
     # past HARD all end the lap `changed` and store nothing.
-    "simple-gap-046": lambda: _identity(_lap(), 45, 0.46, 0.04),
-    "simple-gap-050": lambda: _identity(_lap(), 45, 0.50, 0.04),
-    "simple-gap-054": lambda: _identity(_lap(), 45, 0.54, 0.01),
-    "simple-midswap": lambda: _identity(_lap(), 70, 0.50, 0.04),
-    "simple-gap-058": lambda: _identity(_lap(), 45, 0.58, 0.02),
-    "simple-gap-062": lambda: _identity(_lap(), 45, 0.62, 0.03),
+    "stranger-gap-046": lambda: _identity(_lap(), 45, 0.46, 0.04),
+    "stranger-gap-050": lambda: _identity(_lap(), 45, 0.50, 0.04),
+    "stranger-gap-054": lambda: _identity(_lap(), 45, 0.54, 0.01),
+    "stranger-midswap": lambda: _identity(_lap(), 70, 0.50, 0.04),
+    "stranger-gap-058": lambda: _identity(_lap(), 45, 0.58, 0.02),
+    "stranger-gap-062": lambda: _identity(_lap(), 45, 0.62, 0.03),
     # band and beyond frames alternating
-    "simple-band-beyond-mix": lambda: _identity_mixed(_lap(), 45, (0.48, 0.60)),
-    "simple-two-of-three": lambda: _identity(_lap(), 45, 0.46, 0.04, pattern=lambda i: i % 3 != 0),
-    "simple-strict-alternation": lambda: _identity(_lap(), 45, 0.46, 0.04, pattern=lambda i: i % 2 == 0),
+    "stranger-band-beyond-mix": lambda: _identity_mixed(_lap(), 45, (0.48, 0.60)),
+    "stranger-two-of-three": lambda: _identity(_lap(), 45, 0.46, 0.04, pattern=lambda i: i % 3 != 0),
+    "stranger-alternation": lambda: _identity(_lap(), 45, 0.46, 0.04, pattern=lambda i: i % 2 == 0),
     # ONE stranger frame inside CHAIN of the centre (a foothold), then frames 0.46 from the centre but near that
     # one: no template is near them (a chain of templates), and a chain of accepted frames would have admitted them
-    "simple-foothold": lambda: _foothold(),
+    "stranger-foothold": lambda: _foothold(),
     # a stranger wholly inside CHAIN of the centre (0.38): the documented limit, nothing in the guard refuses it
-    "simple-limit-038": lambda: _identity(_lap(), 45, 0.38, 0.02),
+    "stranger-limit-038": lambda: _identity(_lap(), 45, 0.38, 0.02),
     # a stranger who STRADDLES CHAIN (0.46 +-0.08, so about one frame in eight is 0.40 or less from the owner's)
-    "simple-straddle": lambda: _identity(_lap(), 45, 0.46, 0.08),
+    "stranger-straddle": lambda: _identity(_lap(), 45, 0.46, 0.08),
     "advanced-idle": lambda: build([dict(n=40), dict(n=900)]),
-    "simple-wrong-long": lambda: build([dict(n=40), dict(at=6, n=900)]),
+    "wrong-long": lambda: build([dict(n=40), dict(at=6, n=900)]),
     # the camera waits on its first frame for a line on stdin (for the session-bound test)
     "hold-first": lambda: build([dict(n=1, hold=True, travel=0), dict(n=900)]),
     # the 4th Advanced bin with a `finish` landing before its fill (12th frame) and after it (14th)
     "fin-before": lambda: build([dict(n=40)] + visit(CLOCK[:3]) + visit(CLOCK[3:4], n=12, hold=True) + visit(CLOCK[3:4], n=60, travel=0)),
     "fin-after": lambda: build([dict(n=40)] + visit(CLOCK[:3]) + visit(CLOCK[3:4], n=24, hold=True) + visit(CLOCK[3:4], n=60, travel=0)),
     # a second person walks in after the centre; and one stray frame of them
-    "simple-changed": lambda: build([dict(n=40), dict(at=9, n=20), dict(at=9, n=40, who=1.0)]),
-    "simple-stray": lambda: build([dict(n=40), dict(at=9, n=12), dict(at=9, n=1, who=1.0, travel=0), dict(at=9, n=18, travel=0)]
+    "lap-changed": lambda: build([dict(n=40), dict(at=9, n=20), dict(at=9, n=40, who=1.0)]),
+    "lap-stray": lambda: build([dict(n=40), dict(at=9, n=12), dict(at=9, n=1, who=1.0, travel=0), dict(at=9, n=18, travel=0)]
                                   + visit((3, 0, 6))),
     # the centre is the owner's, then a stranger holds all four Simple targets: with the
     # child's guard working this is `changed`; with it disabled (SR1 S1's test) the parent
     # has to refuse the lap itself
-    "simple-stranger": lambda: build([dict(n=40)] + visit(SIMPLE, who=1.0)),
+    "stranger-lap": lambda: build([dict(n=40)] + visit(SIMPLE, who=1.0)),
     # Advanced: each bin held under a different fault, the rest held cleanly
     "advanced-faults": lambda: build(
         [dict(n=40)]

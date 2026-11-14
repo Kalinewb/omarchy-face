@@ -183,18 +183,18 @@ def test_pure():
                               cwd=scratch, stdin=subprocess.DEVNULL)
         check("run as a program with no arguments it declines (exit 2, no traceback)",
               done.returncode == 2 and "Traceback" not in done.stderr, done.stderr.strip()[-200:])
-        # SR1 m6: the ninth argument (the debug flag) is 0 or 1 and nothing else, like every other argument
-        good = ["simple", "1", "9,3,0,6", "60.0", "13.0", "3.0", "20.0", "5"]
+        # SR1 m6: the last argument (the debug flag) is 0 or 1 and nothing else, like every other argument
+        good = ["advanced", "1", "0,1,2,3,4,5,6,7,8,9,10,11", "90.0", "20.0", "5"]
 
         def run_child(arguments):
             return subprocess.run([sys.executable, "-I", "-c", SOURCE] + arguments, capture_output=True, text=True,
                                   cwd=scratch, stdin=subprocess.DEVNULL, pass_fds=())
 
         refused = [run_child(good + [value]) for value in ("2", "yes", "", "01", "true", "-1")]
-        check("a ninth argument that is not 0 or 1 is refused before anything starts (exit 2, 'not started by omarchy-face-admin')",
+        check("a last argument that is not 0 or 1 is refused before anything starts (exit 2, 'not started by omarchy-face-admin')",
               all(d.returncode == 2 and "not started by omarchy-face-admin" in d.stderr for d in refused),
               str([d.stderr.strip()[-60:] for d in refused]))
-        check("so is a missing one (the old eight-argument form)",
+        check("so is a missing one (the old six-argument form)",
               run_child(good).returncode == 2 and "not started by omarchy-face-admin" in run_child(good).stderr)
         accepted = [run_child(good + [value]) for value in ("0", "1")]
         check("0 and 1 are accepted (they get past argument parsing, to the reference descriptor the test does not provide)",
@@ -580,20 +580,18 @@ def test_guard():
           verdict(enc(0.70), [None], centre) == "beyond")
     settle = sw.settle_verdict
     two, one = {3, 9}, {9}
-    check("settle_verdict, Simple: below the floor (0 or 1 filled) band and beyond are both `beyond`; at two filled band stays `band` and beyond becomes `far`; ok is never changed",
-          (settle("band", "simple", True, set()), settle("band", "simple", True, one), settle("band", "simple", True, two),
-           settle("beyond", "simple", True, one), settle("beyond", "simple", True, two))
-          == ("beyond", "beyond", "band", "beyond", "far")
-          and all(settle("ok", "simple", True, f) == "ok" for f in (set(), one, two)))
-    check("...Advanced: the floor is four bins OF THIS LAP (the lap-1 templates in `accepted` do not count)",
-          (settle("band", "advanced", True, {0, 3, 6}), settle("beyond", "advanced", True, {0, 3, 6}),
-           settle("band", "advanced", True, {0, 3, 6, 9}), settle("beyond", "advanced", True, {0, 3, 6, 9}))
+    check("settle_verdict: below the floor (fewer than four filled) band and beyond are both `beyond`; ok is never changed",
+          (settle("band", True, set()), settle("band", True, one), settle("beyond", True, two)) == ("beyond", "beyond", "beyond")
+          and all(settle("ok", True, f) == "ok" for f in (set(), one, two)))
+    check("...the floor is four bins OF THIS LAP (the lap-1 templates in `accepted` do not count): at four band stays `band` and beyond becomes `far`",
+          (settle("band", True, {0, 3, 6}), settle("beyond", True, {0, 3, 6}),
+           settle("band", True, {0, 3, 6, 9}), settle("beyond", True, {0, 3, 6, 9}))
           == ("beyond", "beyond", "band", "far"))
     check("...and before the centre is held nothing is past the floor (can_finish needs the centre)",
-          settle("band", "simple", False, two) == "beyond" and settle("beyond", "simple", False, two) == "beyond")
-    check("the loop settles every verdict, graceful-ends a lap (either mode) after five band frames in a row, and an ok frame resets that count",
+          settle("band", False, {0, 3, 6, 9}) == "beyond" and settle("beyond", False, {0, 3, 6, 9}) == "beyond")
+    check("the loop settles every verdict, graceful-ends a lap after five band frames in a row, and an ok frame resets that count",
           "settle_verdict(guard_verdict(encoding, accepted, centre_enc)," in SOURCE
-          and 'if verdict in ("band", "far"):' in SOURCE and 'if band_run >= CHANGED_FRAMES:' in SOURCE and 'mode == "simple" and band_run' not in SOURCE and "band_run = 0" in SOURCE)
+          and 'if verdict in ("band", "far"):' in SOURCE and 'if band_run >= CHANGED_FRAMES:' in SOURCE and "band_run = 0" in SOURCE)
     check("the loop gives a banded frame no part in the `changed` run (it never calls changed_step for one)",
           'if verdict in ("band", "far"):' in SOURCE and 'changed_step(run_failed, verdict == "beyond")' in SOURCE
           and "changed_step(run_failed, bad)" not in SOURCE)
@@ -839,8 +837,9 @@ def test_plain_turns():
           "%.3f vs %.3f" % (spread([v - k_line * abs(u) for u, v in pts]), spread([v - c_quad * u * u for u, v in pts])))
     held_right = [(y / 15.0, p / 15.0) for y, p in live["right_hold"]]
     held_left = [(y / 15.0, p / 15.0) for y, p in live["left_hold"]]
-    inside = lambda samples, k, c: sum(sw.in_target(*sw.pose_decouple(u, v, c), k, False, sw.SIMPLE_WEDGE_HALF) for u, v in samples)
-    check("the user's right turn: 0 of 12 seconds inside Simple's right wedge before, all 12 after",
+    # 3.1.x's Simple wedge (30 degrees either side) is what the live trace was measured against; rule D is shared
+    inside = lambda samples, k, c: sum(sw.in_target(*sw.pose_decouple(u, v, c), k, False, 30) for u, v in samples)
+    check("the user's right turn: 0 of 12 seconds inside a 30 degree right wedge before, all 12 after",
           inside(held_right, 3, 0.0) == 0 and inside(held_right, 3, sw.COUPLING_C) == 12,
           str((inside(held_right, 3, 0.0), inside(held_right, 3, sw.COUPLING_C))))
     check("their left turn (the seconds inside R_MAX): 0 of 4 before, all 4 after",
@@ -882,7 +881,7 @@ def test_plain_turns():
                         "the module's placeholder is %s" % (sigma, found[0] if found else None, found[1] if found else 0, sw.STEADY_STEP))
 
 
-# --- 7. the sequencer: validation, wedge, dwell, order, patience, Done, verbs -----------
+# --- 7. the sequencer: validation, wedge, dwell, Done, verbs ------------------------
 ALL12 = list(range(12))
 
 
@@ -895,13 +894,11 @@ def prior(**changes):
 def test_sequencer():
     print("sequencer")
     vs = sw.valid_sweep
-    check("simple / lap 1 / [9,3,0,6] is accepted and echoed", vs("simple", 1, [9, 3, 0, 6], prior()) == ([9, 3, 0, 6], None))
+    check("a sweep in mode simple is refused (Simple is the dot scan)", vs("simple", 1, [9, 3, 0, 6], prior()) == (None, "mode"))
     check("advanced with all 12 in any order is accepted, returned ascending",
           vs("advanced", 1, list(reversed(ALL12)), prior()) == (ALL12, None))
     bad = {
-        "simple [3,9,0,6]": ("simple", 1, [3, 9, 0, 6], prior()), "simple [9,3,0]": ("simple", 1, [9, 3, 0], prior()),
-        "simple five entries": ("simple", 1, [9, 3, 0, 6, 1], prior()), "simple lap 2": ("simple", 2, [9, 3, 0, 6], prior(state="swept")),
-        "simple over 6 stored": ("simple", 1, [9, 3, 0, 6], prior(stored=6)),
+        "simple [9,3,0,6]": ("simple", 1, [9, 3, 0, 6], prior()), "simple lap 2": ("simple", 2, [9, 3, 0, 6], prior(state="swept")),
         "advanced one bin": ("advanced", 1, [3], prior()), "advanced []": ("advanced", 1, [], prior()),
         "advanced 11": ("advanced", 1, ALL12[:11], prior()), "advanced 13": ("advanced", 1, ALL12 + [0], prior()),
         "advanced repeat": ("advanced", 1, [0] * 12, prior()), "advanced -1": ("advanced", 1, ALL12[:11] + [-1], prior()),
@@ -917,12 +914,10 @@ def test_sequencer():
         "advanced lap 2 after a simple lap": ("advanced", 2, ALL12, prior(state="swept", kept_mode="simple", kept_laps=[1])),
         "usual no centre": ("usual", 1, [], prior(state="swept", kept_mode="advanced", centre=False)),
         "usual after simple": ("usual", 1, [], prior(state="swept", kept_mode="simple", centre=True)),
-        "a sweep while one runs": ("simple", 1, [9, 3, 0, 6], prior(state="running")),
+        "a sweep while one runs": ("advanced", 1, ALL12, prior(state="running")),
     }
     refused = {name: vs(*args)[1] is not None and vs(*args)[0] is None for name, args in bad.items()}
     check("validation refuses all %d bad sweeps" % len(bad), all(refused.values()), str([n for n, v in refused.items() if not v]))
-    check("5 stored templates are accepted for Simple (rule R), 6 are not",
-          vs("simple", 1, [9, 3, 0, 6], prior(stored=5))[1] is None and vs("simple", 1, [9, 3, 0, 6], prior(stored=6))[1] is not None)
     check("advanced lap 2 after a kept Advanced lap 1, and usual after one with a centre, are accepted",
           vs("advanced", 2, ALL12, prior(state="swept", kept_mode="advanced", kept_laps=[1]))[1] is None
           and vs("usual", 1, None, prior(state="swept", kept_mode="advanced", centre=True)) == ([], None))
@@ -933,7 +928,6 @@ def test_sequencer():
     check("bin 3 holds at 90 degrees and at 105.0 but not 105.1 (Advanced)",
           inn(*uv(90, 1.5), 3, False, 15) and inn(*uv(105.0, 1.5), 3, False, 15) and not inn(*uv(105.1, 1.5), 3, False, 15))
     check("while holding it widens to 110.0 and not 110.1", inn(*uv(110.0, 1.5), 3, True, 15) and not inn(*uv(110.1, 1.5), 3, True, 15))
-    check("Simple's 30 degree half-width holds at 120", inn(*uv(120, 1.5), 3, False, 30))
     check("r 0.99 out, 1.0 and 2.2 in, 2.21 out",
           (inn(*uv(90, 0.99), 3, False, 15), inn(*uv(90, 1.0), 3, False, 15), inn(*uv(90, 2.2), 3, False, 15),
            inn(*uv(90, 2.21), 3, False, 15)) == (False, True, True, False))
@@ -961,61 +955,21 @@ def test_sequencer():
           sw.target_progress(1.0, 1) == 0.5 and sw.target_progress(1.0, 2) == 1.0 and sw.target_progress(0.4, 5) == 0.4)
 
     ct = sw.current_target
-    s4 = [9, 3, 0, 6]
-    check("Simple: the centre first, then 9, 3, 0, 6",
-          [ct("simple", s4, set(), set(), False, None), ct("simple", s4, set(), set(), True, None),
-           ct("simple", s4, {9}, set(), True, None), ct("simple", s4, {9, 3}, set(), True, None),
-           ct("simple", s4, {9, 3, 0}, set(), True, None)] == ["centre", 9, 3, 0, 6])
-    check("a head in 3's wedge while 9 is current changes nothing", ct("simple", s4, set(), set(), True, 3) == 9)
-    check("a skipped target moves on; none when all are resolved",
-          ct("simple", s4, set(), {9}, True, None) == 3 and ct("simple", s4, {9, 3}, {0, 6}, True, None) is None)
     check("Advanced: the centre, then the head's unfilled bin, else none",
-          ct("advanced", ALL12, set(), set(), False, 4) == "centre" and ct("advanced", ALL12, set(), set(), True, 4) == 4
-          and ct("advanced", ALL12, {4}, set(), True, 4) is None and ct("advanced", ALL12, set(), set(), True, None) is None)
-
-    mark = (0.0, 0.0)
-    became = 100.0
-    since = sw.patience_since(mark, became)
-    check("PROMPT_LEAD pushes `since` to became + 3", since == 103.0)
-    check("patience: 9.99 s no, 10.0 s yes", (sw.patience_expired("simple", 103.0, 112.99), sw.patience_expired("simple", 103.0, 113.0)) == (False, True))
-    mark = sw.progress_mark(mark, 0.25, 106.0)
-    check("a rise of the mark restarts the clock", sw.patience_since(mark, became) == 106.0)
-    mark2 = sw.progress_mark(mark, 0.1, 108.0)
-    check("the mark is a high-water mark: a dwell that resets and rises again does not restart it",
-          mark2 == mark and sw.progress_mark(mark2, 0.2, 109.0) == mark and sw.progress_mark(mark2, 0.26, 109.0) == (0.26, 109.0))
-    check("never in Advanced", not sw.patience_expired("advanced", 0.0, 1e9))
-    # a steady head whose pictures are 0.4 apart: supported stuck at 1 keeps dwell full but the mark stops at 0.5
-    mark, t = (0.0, 0.0), 0.0
-    for i in range(1, 400):
-        t = i * 0.1
-        dwell_part = min(1.0, t / sw.TARGET_DWELL)
-        mark = sw.progress_mark(mark, sw.target_progress(dwell_part, 1), t)
-    check("a steady head whose pictures disagree (supported stuck at 1) is skipped at PROMPT_LEAD + TARGET_PATIENCE",
-          mark[0] == 0.5 and sw.patience_expired("simple", sw.patience_since(mark, 0.0), 13.0)
-          and not sw.patience_expired("simple", sw.patience_since(mark, 0.0), 12.9), str(mark))
+          ct(ALL12, set(), False, 4) == "centre" and ct(ALL12, set(), True, 4) == 4
+          and ct(ALL12, {4}, True, 4) is None and ct(ALL12, set(), True, None) is None)
 
     cf = sw.can_finish
-    check("Done, Simple: centre + 4 yes; centre + 2 filled (2 skipped or unresolved) yes; centre + 1 no; no centre no",
-          cf("simple", True, {9, 3, 0, 6}) and cf("simple", True, {9, 3}) and cf("simple", True, {0, 6})
-          and not cf("simple", True, {9}) and not cf("simple", False, {9, 3, 0, 6}))
-    check("Done, Advanced equals done_ready: centre + 4 yes, 3 no",
-          cf("advanced", True, {0, 1, 2, 3}) is sw.done_ready(True, 4) and not cf("advanced", True, {0, 1, 2}) and not cf("advanced", False, set(ALL12)))
+    check("Done equals done_ready: centre + 4 yes, 3 no, no centre no",
+          cf(True, {0, 1, 2, 3}) is sw.done_ready(True, 4) and not cf(True, {0, 1, 2}) and not cf(False, set(ALL12)))
     le = sw.lap_ended
-    check("lap end, Simple: all four resolved yes, three no, not at the second fill",
-          le("simple", s4, {9, 3}, {0, 6}, 0.0, 5.0) == "resolved" and le("simple", s4, {9, 3}, {0}, 0.0, 5.0) is None
-          and le("simple", s4, {9, 3}, set(), 0.0, 5.0) is None)
-    check("the Simple ceiling: 59.9 s no, 60.0 s yes", (le("simple", s4, set(), set(), 0.0, 59.9), le("simple", s4, set(), set(), 0.0, 60.0)) == (None, "ceiling"))
-    check("Advanced ends at 90 s and when all 12 are filled",
-          le("advanced", ALL12, set(), set(), 0.0, 90.0) == "ceiling" and le("advanced", ALL12, set(ALL12), set(), 0.0, 5.0) == "resolved"
-          and le("advanced", ALL12, set(ALL12[:11]), set(), 0.0, 5.0) is None)
-    check("a lowered ceiling (the test override) ends a lap sooner", le("simple", s4, set(), set(), 0.0, 5.0, {"simple": 5.0}) == "ceiling")
+    check("lap end: at 90 s and when all 12 are filled",
+          le(ALL12, set(), 0.0, 90.0) == "ceiling" and le(ALL12, set(ALL12), 0.0, 5.0) == "resolved"
+          and le(ALL12, set(ALL12[:11]), 0.0, 5.0) is None and le(ALL12, set(), 0.0, 89.9) is None)
+    check("a lowered ceiling (the test override) ends a lap sooner", le(ALL12, set(), 0.0, 5.0, 5.0) == "ceiling")
     lr = sw.lap_result
-    check("lap result: 3 filled and 1 unresolved at the ceiling is swept; 1 filled is too_few; no centre is lap_timeout",
-          (lr("simple", True, {9, 3, 0}), lr("simple", True, {9}), lr("simple", False, set())) == ("swept", "too_few", "lap_timeout"))
-    check("lap result: all resolved with 2 filled swept, with 1 filled too_few",
-          (lr("simple", True, {9, 3}), lr("simple", True, {6})) == ("swept", "too_few"))
-    check("lap result, Advanced at 90 s: centre + 3 too_few, centre + 4 swept, no centre lap_timeout",
-          (lr("advanced", True, {0, 1, 2}), lr("advanced", True, {0, 1, 2, 3}), lr("advanced", False, {0, 1, 2, 3})) == ("too_few", "swept", "lap_timeout"))
+    check("lap result at 90 s: centre + 3 too_few, centre + 4 swept, no centre lap_timeout",
+          (lr(True, {0, 1, 2}), lr(True, {0, 1, 2, 3}), lr(False, {0, 1, 2, 3})) == ("too_few", "swept", "lap_timeout"))
 
     va = sw.verb_allowed
     cells = [
@@ -1027,10 +981,11 @@ def test_sequencer():
         ("running", "finish", None, None, True, "allow"), ("running", "abort", None, None, True, "allow"),
         ("running", "sweep", 1, None, True, "refuse"), ("running", "trial", None, None, True, "refuse"),
         ("running", "done", None, None, True, "refuse"), ("running", "capture", None, None, True, "refuse"),
-        ("swept", "done", None, "simple", True, "allow"), ("swept", "sweep", 1, "simple", True, "allow"),
-        ("swept", "sweep", 2, "advanced", True, "allow"), ("swept", "sweep", 2, "simple", True, "refuse"),
-        ("swept", "trial", None, "advanced", True, "allow"), ("swept", "trial", None, "simple", True, "refuse"),
-        ("swept", "usual", 1, "advanced", True, "allow"), ("swept", "usual", 1, "simple", True, "refuse"),
+        ("swept", "done", None, "advanced", True, "allow"), ("swept", "sweep", 1, "advanced", True, "allow"),
+        ("swept", "sweep", 2, "advanced", True, "allow"), ("swept", "sweep", 2, None, True, "refuse"),
+        ("swept", "trial", None, "advanced", True, "allow"), ("swept", "trial", None, None, True, "refuse"),
+        ("swept", "usual", 1, "advanced", True, "allow"), ("swept", "usual", 1, None, True, "refuse"),
+        ("swept", "dot", None, None, True, "allow"), ("running", "dot", None, None, True, "refuse"),
         ("swept", "finish", None, "advanced", True, "ignore"), ("swept", "abort", None, "advanced", True, "ignore"),
         ("swept", "capture", None, "advanced", True, "refuse"),
         ("trialing", "abort", None, "advanced", True, "allow"), ("trialing", "sweep", 1, "advanced", True, "refuse"),
@@ -1041,7 +996,7 @@ def test_sequencer():
 
     tb = sw.track_bins
     bins = tb([9, 3, 0, 6], {9: 1.0, 3: 0.456, 5: 0.9})
-    check("track_bins: 12 numbers, non-targets exactly 0.0, rounded to 2 decimals, Simple non-zero only at 9, 3, 0, 6",
+    check("track_bins: 12 numbers, non-targets exactly 0.0, rounded to 2 decimals, non-zero only at the targets",
           len(bins) == 12 and [k for k, x in enumerate(bins) if x] == [3, 9] and bins[3] == 0.46 and bins[5] == 0.0)
     person = {"appearances": [{"label": "A", "time": 1, "encoding": enc(0.0), "extra": [
         make_extra(sw.pose_name(k), "near", 1.3, 2, 0.1, 10 + k) for k in (9, 3, 0, 6)]}]}
@@ -1049,7 +1004,7 @@ def test_sequencer():
     sudo = [key_of(person, r)[1] for r in sw.pick(person, "sudo", 4)]
     lock = [key_of(person, r)[1] for r in sw.pick(person, "lock", 12)]
     flipped = {"appearances": [dict(person["appearances"][0], extra=list(reversed(person["appearances"][0]["extra"])))]}
-    check("pick: centre + Simple's four: Sudo cap 4 gives the centre and bins 0, 3, 6; Lock all five; either input order",
+    check("pick: centre + the dot scan's four: Sudo cap 4 gives the centre and bins 0, 3, 6; Lock all five; either input order",
           sudo == ["centre", "a000", "a090", "a180"] and lock == ["centre", "a000", "a090", "a180", "a270"]
           and [key_of(flipped, r)[1] for r in sw.pick(flipped, "sudo", 4)] == sudo
           and [key_of(flipped, r)[1] for r in sw.pick(flipped, "lock", 12)] == lock, str((sudo, lock)))
@@ -1069,9 +1024,9 @@ def test_dot():
     print("the dot scan")
     check("the card's poses are the centre, then left, top, right, bottom",
           sw.DOT_POSES == ("centre", "left", "top", "right", "bottom"))
-    check("each pose but the centre is a ring bin that SIMPLE_TARGETS already held (left 9, top 0, right 3, bottom 6), a legal stored pose",
+    check("each pose but the centre is the ring bin 3.1.x's Simple lap held (left 9, top 0, right 3, bottom 6), a legal stored pose",
           sw.DOT_BINS == {"left": 9, "top": 0, "right": 3, "bottom": 6}
-          and sorted(sw.DOT_BINS.values()) == sorted(sw.SIMPLE_TARGETS)
+          and sorted(sw.DOT_BINS.values()) == [0, 3, 6, 9]
           and [sw.pose_name(k) for k in sw.DOT_BINS.values()] == ["a270", "a000", "a090", "a180"])
     check("the nominal r is inside what the store accepts (0..4) and R_MIN..R_MAX, and past SUDO_R_MAX (no policy could give these to Sudo by r)",
           sw.R_MIN <= sw.DOT_R <= sw.R_MAX and sw.DOT_R <= 4 and sw.DOT_R > sw.SUDO_R_MAX)
