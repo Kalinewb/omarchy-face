@@ -378,6 +378,7 @@ ShellRoot {
     else if (c === "dot-esc") buildDotEsc()
     else if (c === "dot-fail") buildDotFail()
     else if (c === "dot-ring") buildDotRing()
+    else if (c === "dot-cap") buildDotCap()
     else if (c === "dot-reduced") buildDotReduced()
     else if (c === "dot-demo") buildDotDemo()
     else if (c === "dot-skew") buildDotSkew()
@@ -670,7 +671,7 @@ ShellRoot {
 
   // ---- why a press did not work: the helper's codes, in plain words ---------------------------------------
   function buildDotFail() {
-    var codes = ["no_face", "too_dark", "multiple_faces", "not_you", "black_frames", "too_far", "too_close", "face_cut_off", "timeout", "camera_busy", "bad_sweep"]
+    var codes = ["no_face", "too_dark", "multiple_faces", "not_you", "black_frames", "too_far", "too_close", "face_cut_off", "face_tilted", "timeout", "camera_busy", "bad_sweep"]
     at(function () { session.start() }, 150)
     at(function () { ready(true) })
     codes.forEach(function (code) {
@@ -703,6 +704,35 @@ ShellRoot {
       log("fail-not-a-press", before + "|" + session.dotWhy + " state " + session.dotState + " line " + line())
       log("fail-violations", violations)
     }, 100)
+  }
+
+  // ---- the helper closes a session after DOT_NOT_YOU_CAP presses that did not look like you ------------------------
+  function buildDotCap() {
+    at(function () { session.start() }, 150)
+    at(function () { ready(true) })
+    for (var i = 1; i <= 4; i++) {
+      at(function () { pressSpace() }, 80)
+      at(function () { feed({event: "capture_failed", code: "not_you"}) }, 80)
+    }
+    at(function () {
+      log("cap-4", "notyou " + session.dotNotYou + " capped " + session.dotCapped + " phase " + session.phase + " message '" + session.message + "' line " + line())
+      pressSpace()
+    }, 80)
+    at(function () { feed({event: "capture_failed", code: "not_you"}) }, 80)
+    at(function () {
+      log("cap-5", "notyou " + session.dotNotYou + " capped " + session.dotCapped + " phase " + session.phase + " message '" + session.message + "'")
+      // the helper closes the session: `discarded`, then the process ends
+      emit({event: "discarded"})
+      var p = fakeProc; fakeProc = null
+      if (p && p.exitCb) p.exitCb({outcome: "ok", code: 0})
+    }, 150)
+    at(function () {
+      log("cap-after", "phase " + session.phase + " finished " + finishedCount + " | note '" + named("note").text + "' | " + dotLinks() + " | cameras " + cameras)
+      // and the scan can start over: a new session counts from zero
+      session.start()
+    }, 150)
+    at(function () { ready(true) }, 100)
+    at(function () { log("cap-restart", "notyou " + session.dotNotYou + " capped " + session.dotCapped + " phase " + session.phase + " " + session.dotState + " message '" + session.message + "'") }, 100)
   }
 
   // ---- the ring completes only with enough good frames -------------------------------------------------------

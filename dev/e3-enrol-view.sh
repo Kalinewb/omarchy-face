@@ -210,7 +210,7 @@ check "the 'Nothing was saved' line stays until the session finishes, and nothin
 
 step "Simple: a press that did not work says why, in plain words, and the ball stays"
 out=$(run dot-fail)
-for pair in no_face:"No face found" too_dark:"Too dark" multiple_faces:"More than one face" not_you:"That did not look like you" black_frames:"Too dark" too_far:"Come a little closer" too_close:"Move back a little" face_cut_off:"Keep your whole face in view" timeout:"That took too long" camera_busy:"The camera is in use" bad_sweep:"Something went wrong"; do
+for pair in no_face:"No face found" too_dark:"Too dark" multiple_faces:"More than one face" not_you:"That did not look like you" black_frames:"Too dark" too_far:"Come a little closer" too_close:"Move back a little" face_cut_off:"Keep your whole face in view" face_tilted:"Keep your head level" timeout:"That took too long" camera_busy:"The camera is in use" bad_sweep:"Something went wrong"; do
   code=${pair%%:*}; text=${pair#*:}
   check "$code: '$text', the ball waits on the centre, nothing is held, the key offers a retry" \
     "waiting | $text | held 0 pose centre | shown opacity 1 enabled true text to try again" "$(field fail-$code "$out" | sed 's/opacity 0\.9[0-9]*/opacity 1/')"
@@ -219,6 +219,14 @@ check "a code from a later release still says something plain" "That did not wor
 check "a failed press leaves what is held as it was; the next press is for the same pose" "left,left held centre" "$(field fail-same-pose "$out")"
 check "a refusal that is not about a press (a Save before the floor) is not a failed press: no reason appears" "| state waiting line Look up at the ball" "$(field fail-not-a-press "$out")"
 check "no failure made the view send a verb the table refuses" "0" "$(field fail-violations "$out")"
+
+step "Simple: the helper closes a session after five presses that did not look like you, and the scan can start over"
+out=$(run dot-cap)
+check "four such presses: counted, the card still plays, no message yet" "notyou 4 capped false phase dot message '' line That did not look like you" "$(field cap-4 "$out")"
+check "the fifth: the card says so in plain words" "notyou 5 capped true phase dot message 'That did not look like you too many times. Nothing was saved.'" "$(field cap-5 "$out")"
+check "the helper then closes the session: the card is NOT closed, it is back at the start with the reason on it and Start offered, no camera" \
+  "phase idle finished 0 | note 'That did not look like you too many times. Nothing was saved.' | cancel=1 start=1 save=0 done=0 again=0 mode=1 | cameras 0" "$(field cap-after "$out")"
+check "a new session counts from zero" "notyou 0 capped false phase dot waiting message ''" "$(field cap-restart "$out")"
 
 step "Simple: the ring completes only with enough good frames, and never early"
 out=$(run dot-ring)

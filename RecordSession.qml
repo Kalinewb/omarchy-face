@@ -138,6 +138,9 @@ Item {
   property int dotNeed: 3
   // The helper's code for why the last press did not work, "" when it did or none was made
   property string dotWhy: ""
+  // Presses of this session that did not look like the first picture; at Dot.NOT_YOU_CAP the helper closes the session
+  property int dotNotYou: 0
+  property bool dotCapped: false
   // The pose the last `dotted` took: the ball stays on it for a beat before it moves on
   property string dotLast: ""
   property real dotPressedAt: 0
@@ -299,6 +302,8 @@ Item {
     session.failCode = ""
     session.notice = ""
     session.discarding = false
+    session.dotNotYou = 0
+    session.dotCapped = false
     session.phase = "authorising"
     session.proc = session.ask.stream(
       session.ask.adminArgv(["enroll-session", session.name]),
@@ -391,7 +396,9 @@ Item {
     }
 
     if (event.event === "discarded") {
-      session.phase = "closing"
+      // a session the helper closed on its own (too many presses that did not look like you) goes back
+      // to the start, with the reason on it; the card stays so Start can be pressed again
+      if (!session.dotCapped) session.phase = "closing"
       return
     }
   }
@@ -583,6 +590,15 @@ Item {
         session.dotWhy = code
         session.dotState = "waiting"
         session.failSerial += 1
+        if (code === "not_you") {
+          session.dotNotYou += 1
+          // The helper ends the session on this press (its cap, the same number): say why, in words, and
+          // let the scan start over. The `discarded` that follows must not close the card.
+          if (session.dotNotYou >= Dot.NOT_YOU_CAP) {
+            session.dotCapped = true
+            session.message = "That did not look like you too many times. Nothing was saved."
+          }
+        }
       }
       return true
     }

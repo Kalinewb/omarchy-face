@@ -79,6 +79,10 @@ var PROMPT = {
   bottom: "Look down at the ball"
 }
 
+// How many presses of one session may end "That did not look like you" before the helper closes it
+// (the helper's DOT_NOT_YOU_CAP, which is the one that decides; this is only to say so in words).
+var NOT_YOU_CAP = 5
+
 // What a press that did not work says, in plain words, by the helper's code.
 var WHY = {
   no_face: "No face found",
@@ -89,6 +93,7 @@ var WHY = {
   too_far: "Come a little closer",
   too_close: "Move back a little",
   face_cut_off: "Keep your whole face in view",
+  face_tilted: "Keep your head level",
   timeout: "That took too long",
   camera_busy: "The camera is in use",
   bad_sweep: "Something went wrong"
