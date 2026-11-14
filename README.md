@@ -310,11 +310,17 @@ What it does not do, honestly:
   this one takes your word, because you pressed Space while looking at the ball. Pressing Space without turning
   stores a second picture of your face looking straight ahead: harmless, and no better coverage either.
 - **Who counts as you is the same rule as before.** The first picture (the middle one) has nothing to be compared
-  with. Each later picture must be within 0.40 of one already stored and within 0.55 of the first, the numbers 3.1.x
-  used. Somebody within 0.40 of your first picture can still be added at a later press (the same documented limit);
-  **enrol only yourself**. Two things in the other direction: a picture of you turned so far that it is more than 0.40
-  from everything stored is refused as *That did not look like you*, and you should turn a little less. Both numbers
-  come from the author's recordings of one person, one laptop.
+  with, and anybody in front at that press becomes it. Each later picture must be within 0.40 of one already stored and
+  within 0.55 of the first, the numbers 3.1.x used, for three frames in a row; five frames in a row that fail it end the
+  press as *That did not look like you*, and the fifth such press of one session closes the session and saves nothing.
+  Somebody within 0.40 of your first picture can still be added (the same documented limit, and a lookalike whose
+  picture hovers at about 0.42 from yours, with the usual frame-to-frame wobble, still got in about one press in five in
+  the fake-camera test); **enrol only yourself**. In the other direction, a picture of you that hovers about 0.40 from
+  everything stored is refused about one press in four: turn a little less. The numbers come from the author's recordings
+  of one person, one laptop, and the tests above use a fake camera.
+- **The first picture is not checked for sharpness or steadiness.** It must be one face, lit, the right size, in
+  view and with your eyes level (as in 3.1.x), and its three frames must agree with each other, but a blurred or moving
+  face that still agrees can form it.
 - **Sudo is unchanged.** It still uses only the straight-on picture (`SUDO_POLICY="centre"`); the four turned pictures
   are for the lock screen. They carry a fixed stand-in for "how far round" (`r` 1.6, past the limit a wider Sudo
   setting would need), because nothing here measures it.

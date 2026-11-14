@@ -524,11 +524,19 @@ support, encoding}` through `validate_appearance` (unchanged).
 - **The centre has no reference**, as before (3.1.x formed it from the first steady frames). A stranger in front at the first press is the centre of the scan; the
   authority is the owner's pkexec authorisation and the owner pressing Space. Unchanged in kind, but note that the window is now ONE press (three lit frames of
   one face, about 0.4 s) and not a dwell of 0.8 s of steady frames.
-- **No `changed` counter, no floor between "strict" and "neutral".** 3.1.x ended a lap after five consecutive refused frames and had a band that was neutral past a floor.
-  A press has neither: frames that fail the guard are simply not counted, the press fails, and nothing carries over. So the SR1 S1/S2/S3 class of finding (a stranger who
-  alternates frames so the run counter resets) does not exist for a press: each press needs three agreeing frames, all of which passed the guard. What a stranger can still do
-  is **retry**: each press is independent and there is no limit on the number of presses inside the session's own bounds (idle 120 s, whole 300 s). A stranger who holds
-  frames inside `CHAIN` is accepted on the first press, as above; one who is outside is refused on every press.
+- **The S1/S2/S3 class DOES exist for a press, and 3.2.0 as first built (d00dc1a) had it (SR1 F1, Medium).** A press closed on any three frames among about thirty that passed the guard
+  and ignored the ones that failed, so a lookalike straddling `CHAIN` (frames 0.38-0.54 from the centre, one in eight inside 0.40) was stored in most presses (17-40 of 40 at mean
+  gaps 0.42-0.50; 3.1.7's lap stored about 0-1 in 10). **Fixed after SR1**: the press now needs `DOT_NEED` frames IN A ROW that reached the guard and passed it (`run`), and
+  `CHANGED_FRAMES` (5) in a row that reached it and failed it end the press as `not_you` (`bad_run`), the sweep's own `changed_step` rule; frames that never reach the guard (no face,
+  dark, size) neither extend nor break either run, as in the sweep. Measured with the fake dlib through the real parent, 40 fresh left presses each, per-frame wobble +-0.04 (+-0.08
+  at 0.46): descriptor at mean 0.50 from the centre stores 0/40, 0.46 (wobble 0.08) 0/40, 0.44 0/40, 0.42 8/40, 0.40 30/40, 0.38 39/40, 0.34 and 0.30 (the owner's proxies) 40/40.
+  So an owner whose turned picture sits at a mean of 0.40 from everything stored is refused in about one press in four ("That did not look like you"), the same cost 3.1.x's guard had,
+  and a stranger at a mean of 0.42 is still stored in about one press in five. That second number is the standing limit of the CHAIN rule (3.1.x's `stranger-straddle` had it too, per
+  lap); it is a lookalike within a few hundredths of the owner's own descriptor spread, not a margin the press can close.
+- **A cap on presses that end `not_you`** (`DOT_NOT_YOU_CAP`, 5, a counter beside `dotted = {}` in the parent): the fifth such press emits its `capture_failed not_you`, audits, and
+  closes the session (`state = "closed"`, then the usual `discarded`; nothing is written). Retries by a stranger are therefore bounded at four free tries per authorisation, where d00dc1a
+  had none. The card counts the same events, says "That did not look like you too many times. Nothing was saved." and goes back to idle with Start; a new session starts from zero.
+  It does not bound presses that fail for any other reason (a stranger who is refused for size or light is not trying the identity rule), nor a stranger who is accepted.
 - **`SUDO_POLICY` is "centre" and unchanged.** A dot-scanned person gives Sudo the centre only. The stored `r` is the nominal `DOT_R` 1.6, which is past `SUDO_R_MAX` 1.5, so even a
   future `full` policy would not take these poses by `r` (it would take them by nothing: `pick` skips `r > SUDO_R_MAX` for Sudo). **No pose is measured: `r` is a stand-in**, and
   a Lock use of it (`r <= R_MAX`) is satisfied by construction. If anyone later widens Sudo, these poses must be re-enrolled or the policy argued afresh (`dev/README.md`, "How to widen Sudo later").
@@ -581,7 +589,7 @@ This is the root-side twin of the card's Save link: the card cannot save less th
 
 ### 8. Tests that pin the above
 
-At this commit: `e0` 243 checks, `e1` 211, `e3` 206, `lint`, `check-pins`, `check-pins-test`, all passing. (3.1.7 had e0 230, e1 184, e3 187; the drop in e0 and the changes in e1 are the Simple-only tests that went with Simple's sweep.)
+At the 3.2.0 commit d00dc1a: `e0` 243 checks, `e1` 211, `e3` 206 (after the SR1 fixes: 245, 225, 211), `lint`, `check-pins`, `check-pins-test`, all passing. (3.1.7 had e0 230, e1 184, e3 187; the drop in e0 and the changes in e1 are the Simple-only tests that went with Simple's sweep.)
 
 `e0` (`dev/e0-pose.py`, `test_dot`): the constants and their relations (the poses are the ring bins 3.1.x's Simple held; `DOT_R` inside the store's range and past `SUDO_R_MAX`; every code is in `CODES`), `dot_word`
 for the centre's gates and the turned pose's lack of them, `dot_agree`, `dot_why`, `dot_floor_ok`, `valid_dot` (14 cells), table V for `dot`, and the child's argument refusals.
@@ -591,3 +599,21 @@ being size-gated; the strobe; the stranger at the left press (1.0, 0.46), the ow
 something held; a new centre replacing the pending set; the debug line; `judge_dot` unit cases (CHAIN exactly, past it, HARD, NaN, a bool support, a code from nowhere); rule R for the dot scan; and a child whose guard
 passes everything, which the parent still stops (`admin-noguard`).
 `e3` (`dev/e3-enrol-view.sh`): the card's own behaviour (no helper involved), listed in `audit-dot-scan.md`.
+
+### Delta after SR1 (since d00dc1a): what a re-read must check
+
+1. `run_dot` (child): `run`/`bad_run`, the closing condition `agree >= need and run >= need`, the early end on `bad_run >= CHANGED_FRAMES` (reason `not_you` forced, not left to `dot_why`), and
+   the roll: `dot_word(..., roll)` passes `measured["roll"]` (degrees, `pose_indices`) to `frame_word`, so the CENTRE press now fails a tilted eye line (|roll| over `ROLL_MAX`, 25) with the new code
+   `face_tilted`; a turned pose ignores roll. New `seen["roll"]`, the `roll=` field in the debug line, `("roll", "face_tilted")` in `DOT_REASONS`, `face_tilted` in `CODES` and `DOT_FAIL_CODES` (17 codes).
+   **Disclosed limit (F2, remainder):** the centre press still has no sharpness or steadiness gate. Sharpness is relative to a session median and steadiness to a history of poses; the press has neither, and
+   an absolute threshold would be unmeasured. What stands in for them: three consecutive guard-passing frames within `SUPPORT` (0.30) of each other. A blurred or moving face that still encodes within those
+   bounds can form a centre. The cost is a weaker centre, not a wider acceptance.
+2. `judge_dot` and `dot_main`: a pose with an empty reference is refused in both (`timeout`, exit 2). Before, `guard_verdict` said `ok` with no centre, so a pose pressed with no centre stored on the
+   strength of nothing; the parent's `valid_dot` prevents it, this is the second reading.
+3. The parent, `dot` branch: (a) `not_you` counter and cap (above); (b) `centre` in `valid_dot`'s prior now means a centre that a DOT press took (`"centre" in dotted.get(label, ())`), so a pose pressed against a legacy
+   `capture` or an Advanced lap's centre is `bad_sweep` up front and no child runs (it would never have been saveable: `dot_floor_ok` wants the centre in `dotted`); (c) after a failed press the state is `swept`
+   while ANY label is pending (`committable`), not only this one, so a failed centre retake for one label no longer strands `done` for another (F4). The same stranding exists, unchanged, after a dropped
+   Advanced lap 1 (`sweep` branch, 3.1.x behaviour); I did not touch it.
+4. The card: `RecordSession.qml` counts `not_you` failures and, at the cap, keeps the card open on `discarded` with the message (it exits to idle through the existing `onExit` path). Plugin-side only.
+5. Tests: e1 `dot-straddle:GAP:WOBBLE:SEED` (seeded, through `_identity`), 40 presses each at 0.46, 0.50 (at most 2 stored allowed; measured 0) and 0.30, 0.34 (40 of 40 required); the cap (five, and four then the owner);
+   a tilted centre; an Advanced centre refused for a pose; a failed retake not stranding `done`; the empty reference (e1 unit, e0 child). e0 245, e1 225, e3 211.
