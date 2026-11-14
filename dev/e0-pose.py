@@ -1012,8 +1012,8 @@ def test_sequencer():
     check("pick under the shipped centre policy: Sudo gets the centre alone, Lock all five",
           [key_of(person, r)[1] for r in sw.pick(person, "sudo", 4)] == ["centre"]
           and [key_of(person, r)[1] for r in sw.pick(person, "lock", 12)] == lock)
-    check("the code and word enums are the plan's twelve (and the dot scan's four) and ten",
-          len(sw.CODES) == 16 and len(set(sw.CODES)) == 16 and len(sw.GATE_WORDS) == 10)
+    check("the code and word enums are the plan's twelve (and the dot scan's five) and ten",
+          len(sw.CODES) == 17 and len(set(sw.CODES)) == 17 and len(sw.GATE_WORDS) == 10)
     check("finite() rejects bools, NaN, Infinity and 1e400 and accepts ints and floats",
           not any(sw.finite(x) for x in (True, float("nan"), float("inf"), 10 ** 400, "1", None))
           and sw.finite(0) and sw.finite(-1.5))
@@ -1051,6 +1051,9 @@ def test_dot():
     check("a good centre frame passes, and so does one exactly at each limit",
           dw("centre", 1, 80, inside, size, 20, 0) is None and dw("centre", 1, sw.EYE_MIN, inside, size, sw.DARK_MAX, sw.SATURATED_MAX) is None
           and dw("centre", 1, sw.EYE_MAX, inside, size, 20, 0) is None)
+    check("the centre judges the roll of the eye line as 3.1.x did: ROLL_MAX passes, past it is 'hold'; a turned pose does not",
+          dw("centre", 1, 80, inside, size, 20, 0, sw.ROLL_MAX) is None and dw("centre", 1, 80, inside, size, 20, 0, -sw.ROLL_MAX - 1) == "hold"
+          and dw("left", 1, 80, inside, size, 20, 0, 40.0) is None)
     check("a turned head (any other pose) is judged on faces and light only: small eyes, a face at the border and a roll are all fine",
           all(dw(p, 1, 20, (0, 0, 40, 40), size, 20, 0) is None for p in ("left", "top", "right", "bottom")))
     check("...but one face and light still apply: none, two, dark and saturated",
@@ -1074,15 +1077,15 @@ def test_dot():
     # --- dot_why: what a failed press says
     def seen(**counts):
         base = {"frames": 60, "strobe": 0, "black": 0, "dark": 0, "none": 0, "multi": 0, "closer": 0, "farther": 0,
-                "edge": 0, "stranger": 0}
+                "edge": 0, "roll": 0, "stranger": 0}
         base.update(counts)
         return base
     why = sw.dot_why
     check("no lit frame at all (a strobe with nothing lit, or black ones) is black_frames", why(seen(strobe=60)) == "black_frames"
           and why(seen(strobe=30, black=30)) == "black_frames" and why(seen(frames=0)) == "black_frames")
     check("the commonest reason of the lit frames: no face, a dark room, two faces, somebody else, too far, too close, cut off",
-          [why(seen(**{k: 40})) for k in ("none", "dark", "multi", "stranger", "closer", "farther", "edge")]
-          == ["no_face", "too_dark", "multiple_faces", "not_you", "too_far", "too_close", "face_cut_off"])
+          [why(seen(**{k: 40})) for k in ("none", "dark", "multi", "stranger", "closer", "farther", "edge", "roll")]
+          == ["no_face", "too_dark", "multiple_faces", "not_you", "too_far", "too_close", "face_cut_off", "face_tilted"])
     check("a tie goes to the first reason (two faces before no face before dark before somebody else)",
           why(seen(none=10, multi=10)) == "multiple_faces" and why(seen(dark=10, none=10)) == "no_face" and why(seen(stranger=10, dark=10)) == "too_dark")
     check("the unlit half of a strobe is never a reason: lit frames that are all fine but too few are 'timeout'",
@@ -1130,6 +1133,21 @@ def test_dot():
         done = child(good)
         check("a good list gets past parsing (it dies at the reference descriptor the test does not provide, which is not open)",
               "not started by omarchy-face-admin" not in done.stderr and "read_reference" in done.stderr, done.stderr.strip()[-120:])
+        # a pose with an EMPTY reference (a centre that does not exist) is refused before the camera, with a descriptor that is open
+        def child_with(reference_json, arguments):
+            rfd, wfd = os.pipe()
+            os.write(wfd, reference_json.encode())
+            os.close(wfd)
+            try:
+                return subprocess.run([sys.executable, "-I", "-c", SOURCE, "dot"] + [a.replace("RFD", str(rfd)) for a in arguments],
+                                      capture_output=True, text=True, cwd=scratch, stdin=subprocess.DEVNULL, pass_fds=(rfd,))
+            finally:
+                os.close(rfd)
+        empty = '{"reference":[],"eye":null}'
+        runs = [child_with(empty, [pose, "4.0", "3", "RFD", "0"]) for pose in ("left", "top", "right", "bottom")]
+        check("a pose press with an empty reference exits 2 with 'no reference', before any camera",
+              all(d.returncode == 2 and "dot: no reference" in d.stderr and "Traceback" not in d.stderr for d in runs),
+              str([(d.returncode, d.stderr.strip()[-60:]) for d in runs]))
         check("it left nothing behind in its directory", os.listdir(scratch) == [])
 
 

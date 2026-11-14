@@ -186,6 +186,8 @@ SCENARIOS = {
     "dot-strobe-dim": lambda: strobe(build([dict(n=200, kind="dim")])),
     # no face, a dark room, a covered camera, two faces, a face too small or too big (the centre's gates)
     "dot-none": lambda: build([dict(n=120, faces=0)]),
+    # the centre with the eye line tilted past ROLL_MAX (25 degrees)
+    "dot-centre-roll": lambda: build([dict(n=120, roll=30.0)]),
     "dot-dim": lambda: build([dict(n=120, kind="dim")]),
     "dot-two-faces": lambda: build([dict(n=120, faces=2)]),
     "dot-centre-far": lambda: build([dict(n=120, scale=0.5)]),
@@ -320,7 +322,18 @@ def grid(name):
     return _identity(_late2_base(), 135, float(gap), float(wobble), seed=int(seed))
 
 
+def straddle(name):
+    """dot-straddle:GAP:WOBBLE:SEED -- a LEFT press by somebody whose descriptor is GAP from the centre's, plus a per-frame
+    wobble of up to +-WOBBLE (seeded), from the first frame. At GAP 0.46 and WOBBLE 0.08 about one frame in eight is within
+    CHAIN: the lookalike that 3.2.0 as first built stored in most presses. At 0.30 or 0.34 it is the owner's proxy."""
+    _, gap, wobble, seed = name.split(":")
+    return _identity(dot_press("left", drift=0.0), 0, float(gap), float(wobble), seed=int(seed))
+
+
 def main(argv):
+    if len(argv) == 1 and argv[0].startswith("dot-straddle:"):
+        json.dump(straddle(argv[0]), sys.stdout)
+        return 0
     if len(argv) == 1 and argv[0].startswith("grid-late2:"):
         json.dump(grid(argv[0][len("grid-"):]), sys.stdout)
         return 0

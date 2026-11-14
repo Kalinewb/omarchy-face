@@ -2251,7 +2251,7 @@ def judge_dot(pose, result, reference):
     template this appearance already holds (`reference`, the centre first). What it cannot re-check
     is what only a frame shows (one face, lit): that is the child's."""
     sw = pure()
-    if not isinstance(result, dict):
+    if not isinstance(result, dict) or (pose != "centre" and not reference):
         return {"code": "timeout"}
     if result.get("ok") is not True:
         code = result.get("code")
@@ -2461,6 +2461,7 @@ def cmd_enroll_session(name):
     committable = set()     # the labels whose set passed root's check (rule F)
     kept = {}               # label -> {"mode", "laps", "eye"}: the kept sweep laps
     dotted = {}             # label -> the dot scan's poses held, "centre" and DOT_POSES
+    not_you = 0             # presses of this session that ended `not_you`: DOT_NOT_YOU_CAP closes it
     state = "ready"         # table V
     swept_before = False
     committed = False
@@ -2666,7 +2667,8 @@ def cmd_enroll_session(name):
             pose = message.get("pose")
             fresh = find(read_all(), name)
             why = sw["valid_dot"](pose, {
-                "state": state, "centre": label in captured and label in committable,
+                "state": state,
+                "centre": label in captured and label in committable and "centre" in dotted.get(label, ()),
                 "stored": stored_count(fresh, label) if fresh else 0})
             if why or sw["verb_allowed"](state, "dot", swept_before=swept_before) != "allow":
                 refuse(why or "not allowed in this state")
@@ -2732,8 +2734,19 @@ def cmd_enroll_session(name):
                                       "kept": 1 + len(candidate["extra"])})
                         state = "swept"
             if drop is not None:
-                # a press that fails leaves what was held as it was; the first one leaves nothing to save
-                state = "swept" if label in committable else "ready"
+                # a press that fails leaves what was held as it was. `swept` while ANY label is pending: a failed
+                # centre retake discards that label's set, and must not strand `done` for another label's
+                state = "swept" if committable else "ready"
+                if drop == "not_you":
+                    # somebody who does not look like the first picture, again and again: this is a stranger
+                    # trying presses, or an owner who cannot be matched, and either way the session is over
+                    not_you += 1
+                    if not_you >= sw["DOT_NOT_YOU_CAP"]:
+                        prose("%d presses that did not look like the first picture; the session is closed" % not_you)
+                        audit("enroll-session for %s closed after %d presses that did not look like the first picture; "
+                              "nothing was written" % (name, not_you))
+                        state = "closed"
+                        break
 
         elif command == "trial":
             refuse("trial is not in this release")
@@ -2958,7 +2971,7 @@ STROBE_DARKNESS = 85.0       # percent in the darkest bin after CLAHE, at least
 STROBE_MEAN = 12.0           # raw mean brightness (0-255), under
 CODES = ("black_frames", "too_dark", "multiple_faces", "no_face", "timeout", "camera_busy",
          "changed", "sweep_stalled", "lap_timeout", "bad_sweep", "not_enough", "too_few",
-         "not_you", "too_far", "too_close", "face_cut_off")
+         "not_you", "too_far", "too_close", "face_cut_off", "face_tilted")
 
 # --- the dot scan (3.2.0): Simple's enrolment ---------------------------------------
 # A ball on the card visits the centre, then left, top, right and bottom; the person
@@ -2973,11 +2986,12 @@ DOT_SECONDS = 4.0            # (chosen) the most one press may take, from its fi
 DOT_R = 1.6                  # nominal r of a stored pose: none is measured. Past SUDO_R_MAX on purpose, so no
                              # policy that lets Sudo take pose templates by r could take these
 DOT_FLOOR = ("left", "right")   # what a saved scan holds besides its centre
+DOT_NOT_YOU_CAP = 5          # (chosen) presses of one session that may end `not_you`; the last one closes the session
 DOT_FAIL_CODES = ("black_frames", "too_dark", "multiple_faces", "no_face", "not_you", "too_far", "too_close",
-                  "face_cut_off", "timeout")
+                  "face_cut_off", "face_tilted", "timeout")
 # What a failed press says, from the reason most of its unusable frames had (ties: the first of these)
 DOT_REASONS = (("multi", "multiple_faces"), ("none", "no_face"), ("dark", "too_dark"), ("stranger", "not_you"),
-               ("closer", "too_far"), ("farther", "too_close"), ("edge", "face_cut_off"))
+               ("closer", "too_far"), ("farther", "too_close"), ("edge", "face_cut_off"), ("roll", "face_tilted"))
 
 # --- what each use may take (plan-face-enroll.md 2b) ----------------------------
 # STORE_PY holds its own copy of the four numbers on the next two lines (it validates
@@ -3679,7 +3693,9 @@ def verb_allowed(state, verb, lap=None, set_mode=None, swept_before=False):
 def valid_dot(pose, prior):
     """None for a press the session may take, else the reason (and the answer is `bad_sweep`).
 
-    `prior` is "state" (table V), "centre" (this appearance has a pending centre) and "stored"
+    `prior` is "state" (table V), "centre" (this appearance has a pending centre TAKEN BY A DOT PRESS: a
+    legacy capture's or an Advanced lap's is not one, and a pose pressed against it would never be
+    saveable) and "stored"
     (templates the store already holds for the label). A press is legal in `ready` and `swept`,
     never while one is running; the centre comes first; and, as for the 3.1.x Simple lap (rule R),
     a new centre may not replace a stored set larger than Simple can produce."""
@@ -3695,12 +3711,12 @@ def valid_dot(pose, prior):
     return None
 
 
-def dot_word(pose, faces, eye, box, size, dark, saturated):
+def dot_word(pose, faces, eye, box, size, dark, saturated, roll=0.0):
     """The first reason a LIT frame cannot count towards a press, as the gates' words; None when it can.
 
     The centre keeps 3.1.x's gates (one face, the size of the face, all of it in the picture, not too
     dark or too bright: `frame_word` with the two it does not use, sharpness and steadiness, passed
-    as fine). A turned head is judged on less: one face and the light. Its eyes are closer together
+    as fine; the roll of the eye line is judged, as in 3.1.x). A turned head is judged on less: one face and the light. Its eyes are closer together
     than a face looking straight at the camera and it may be partly out of the picture, and what
     decides whether it is the same person is `guard_verdict`, not the size of it."""
     if faces == 0:
@@ -3709,7 +3725,7 @@ def dot_word(pose, faces, eye, box, size, dark, saturated):
         return "multiple"
     if pose != "centre":
         return "dark" if dark > DARK_MAX or saturated > SATURATED_MAX else None
-    return frame_word(faces, eye, box, size, dark, saturated, 1.0, 0.0, True)
+    return frame_word(faces, eye, box, size, dark, saturated, 1.0, roll, True)
 
 
 def dot_agree(frames):
@@ -4215,10 +4231,11 @@ def run_dot(pose, ceiling, need, reference, debug=False):
     centre = reference[0] if reference else None
     accepted = [list(e) for e in reference]
     seen = {"frames": 0, "strobe": 0, "black": 0, "dark": 0, "none": 0, "multi": 0,
-            "closer": 0, "farther": 0, "edge": 0, "stranger": 0}
+            "closer": 0, "farther": 0, "edge": 0, "roll": 0, "stranger": 0}
     good, shown, agree, best = [], 0, 0, None
+    run, bad_run = 0, 0         # consecutive frames that reached the guard and passed it / failed it (changed_step's rule)
     last_lit, started, far = None, None, 0.0
-    ok = False
+    ok, ended_by_stranger = False, False
     while True:
         frame, gray_in = camera.read_frame()
         now = time.monotonic()
@@ -4250,7 +4267,7 @@ def run_dot(pose, ceiling, need, reference, debug=False):
                     small, small_gray = frame, gray
                 faces = detector(small_gray, 1)
                 eye, box = 0.0, (0, 0, 0, 0)
-                shape = None
+                shape, measured = None, None
                 if len(faces) == 1:
                     rect = faces[0]
                     shape = predictor(small, rect)
@@ -4259,7 +4276,8 @@ def run_dot(pose, ceiling, need, reference, debug=False):
                     eye = measured["eye"] if measured else 0.0
                     box = (rect.left() / factor, rect.top() / factor, rect.right() / factor, rect.bottom() / factor)
                 saturated = float(np.count_nonzero(gray_in >= 254)) * 100.0 / gray_in.size
-                word = dot_word(pose, len(faces), eye, box, (native_w, native_h), darkness, saturated)
+                roll = measured["roll"] if len(faces) == 1 and measured else 0.0
+                word = dot_word(pose, len(faces), eye, box, (native_w, native_h), darkness, saturated, roll)
                 if word is None and eye <= 0:
                     word = "searching"      # five points that put both eyes on one spot: no face we can use
                 if word == "searching":
@@ -4268,6 +4286,8 @@ def run_dot(pose, ceiling, need, reference, debug=False):
                     seen["multi"] += 1
                 elif word in ("closer", "farther", "edge", "dark"):
                     seen[word] += 1
+                elif word == "hold":
+                    seen["roll"] += 1       # frame_word says `hold` for roll or unsteadiness; only roll is passed here
                 elif word is None:
                     encoding = [float(x) for x in encoder.compute_face_descriptor(small, shape, 1)]
                     if centre is not None:
@@ -4275,13 +4295,23 @@ def run_dot(pose, ceiling, need, reference, debug=False):
                     if guard_verdict(encoding, accepted, centre) == "ok":
                         good = add_candidate(good, {"t": now, "r": 0.0, "encoding": encoding})
                         best, agree = dot_agree(good)
+                        run += 1
+                        bad_run = 0
                     else:
                         seen["stranger"] += 1
+                        run = 0
+                        bad_run += 1
         if agree > shown:
             shown = agree
             say({"event": "dot", "pose": pose, "good": min(shown, need), "need": need})
-        if agree >= need:
+        # The press closes on `need` frames in a ROW that passed the guard and agree: a stranger who straddles
+        # CHAIN passes it now and then (3.2.0 as first built took any three of thirty), and a run of CHANGED_FRAMES
+        # frames that failed it ends the press as `not_you`, as the sweep's `changed` rule did.
+        if agree >= need and run >= need:
             ok = True
+            break
+        if bad_run >= CHANGED_FRAMES:
+            ended_by_stranger = True
             break
         if now - started >= ceiling:
             break
@@ -4289,14 +4319,14 @@ def run_dot(pose, ceiling, need, reference, debug=False):
         if select.select([0], [], [], 0)[0] and not os.read(0, 256):
             sys.exit(3)
     camera.release()
-    why = None if ok else dot_why(seen)
+    why = None if ok else ("not_you" if ended_by_stranger else dot_why(seen))
     if debug:
         try:
             sys.stderr.write(
                 "debug dot pose=%s ok=%d agree=%d frames=%d strobe_off=%d black=%d dark=%d none=%d multi=%d "
-                "closer=%d farther=%d edge=%d stranger=%d centre_max=%s t=%.1f why=%s\n" % (
+                "closer=%d farther=%d edge=%d roll=%d stranger=%d centre_max=%s t=%.1f why=%s\n" % (
                     pose, 1 if ok else 0, agree, seen["frames"], seen["strobe"], seen["black"], seen["dark"],
-                    seen["none"], seen["multi"], seen["closer"], seen["farther"], seen["edge"], seen["stranger"],
+                    seen["none"], seen["multi"], seen["closer"], seen["farther"], seen["edge"], seen["roll"], seen["stranger"],
                     "n/a" if centre is None else "%.2f" % far, now - started, why or "-"))
             sys.stderr.flush()
         except (OSError, ValueError):
@@ -4315,7 +4345,9 @@ def dot_main(argv):
         return 2
     pose, ceiling, need, refd, debug = parsed
     reference, _ = read_reference(refd)
-    if reference is None:
+    if reference is None or (pose != "centre" and not reference):
+        # a pose with nothing to be compared with would be stored on the strength of nothing (the guard
+        # says `ok` before a centre exists): refused here as well as by the parent
         sys.stderr.write("dot: no reference\n")
         return 2
     return run_dot(pose, ceiling, need, reference, debug)

@@ -116,7 +116,7 @@ logger -t omarchy-face -p auth.notice -- \
 # exactly this; there is no other list, so a name missing here is never copied.
 # pins:begin
 declare -A PINS=(
-  [omarchy-face-admin]=1ea52b7efe35c61ee66ce0e1eb2f66584522d69534a05e04171ee95776e2cf55
+  [omarchy-face-admin]=65048e0f8fb540fda63a4d87b2e27f850c447601454c3adf987c2cbdf1b1b16e
   [omarchy-face-gate]=19ab3496c30df96296075df76e5d0f4f7a9241dfa0c520a4df6b70ad74dc392c
   [omarchy-face-verify]=dbb9978d5e88537abd4328517c007ff02865fea9e990f1c4ba1d9e308269d82b
   [omarchy-faced]=08a1b0cff7da34893357608da9ec3d93d80cbe8bcb0002e2c4c48690855c2ea6

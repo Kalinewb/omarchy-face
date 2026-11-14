@@ -395,6 +395,7 @@ retry "a covered camera (nothing lit for over two seconds)" unlit-room black_fra
 retry "two faces" dot-two-faces multiple_faces
 retry "the centre with the face too small" dot-centre-far too_far
 retry "the centre with the face too big" dot-centre-close too_close
+retry "the centre with the head tilted past ROLL_MAX (30 degrees; 3.2.0 as first built did not judge it)" dot-centre-roll face_tilted
 retry "nobody in view at the left press" dot-none no_face left
 retry "two faces at the left press" dot-two-faces multiple_faces left
 retry "a dark room at the left press" dot-dim too_dark left
@@ -434,6 +435,53 @@ reset_store
 scenario dot-centre dot-stranger-limit-left
 out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"dotted\",\"pose\":\"left\"} 60" "eof")
 same "the documented limit: somebody 0.30 from the owner (inside CHAIN of the centre) is taken at the left press, as 3.1.x took him in a lap" '"left"' "$(q "$out" 'last("dotted")["pose"]')"
+
+step "dot scan: a lookalike who straddles CHAIN (SR1 F1). A press closes on three frames IN A ROW that passed the guard, and five in a row that failed it end it as not_you"
+straddle_stored() { # straddle_stored <gap> <wobble> <presses>: how many of that many fresh left presses stored a template
+  local n=0 seed
+  for seed in $(seq 1 "$3"); do
+    reset_store
+    scenario dot-centre "dot-straddle:$1:$2:$seed"
+    out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "sleep 1.0" "eof")
+    grep -q '"event":"dotted","pose":"left"' <<<"$out" && n=$((n + 1))
+  done
+  echo "$n"
+}
+got=$(straddle_stored 0.46 0.08 40)
+check "somebody 0.46 from the centre with per-frame wobble of 0.08 (one frame in eight inside CHAIN): $got of 40 left presses stored (3.2.0 as first built: most; 3.1.7's lap: about 0 in 10); at most 2 allowed" test "$got" -le 2
+got=$(straddle_stored 0.50 0.04 40)
+check "...and at 0.50 +-0.04: $got of 40 stored; at most 2 allowed" test "$got" -le 2
+got=$(straddle_stored 0.30 0.04 40)
+same "the owner's proxy at 0.30 +-0.04 from the centre: every one of 40 presses stores" '40' "$got"
+got=$(straddle_stored 0.34 0.04 40)
+same "...and at 0.34 +-0.04: every one of 40 stores" '40' "$got"
+
+step "dot scan: the cap on presses that end not_you (a stranger trying presses, or an owner who cannot be matched)"
+reset_store
+scenario dot-centre dot-stranger-left dot-stranger-left dot-stranger-left dot-stranger-left dot-stranger-left dot-left
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"capture_failed\"} 60" "send $DOTL" "sleep 1.2" "send $DOTL" "sleep 1.2" "send $DOTL" "sleep 1.2" "send $DOTL" "sleep 1.5" "send $DOTL" "sleep 1.5" "eof")
+same "five presses that end not_you: five capture_failed not_you, then the session closes (discarded) and the sixth press is never run" '[5,"discarded",0]' "$(q "$out" '[len([e for e in evs if e.get("event") == "capture_failed" and e.get("code") == "not_you"]), evs[-1]["event"], len([e for e in evs if e.get("event") == "dotted" and e["pose"] == "left"])]')"
+check "...nothing was written" bash -c "[[ ! -e $STORE/people/emil.json ]]"
+check "...and no child is left" no_child
+reset_store
+scenario dot-centre dot-stranger-left dot-stranger-left dot-stranger-left dot-stranger-left dot-left
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "sleep 1.2" "send $DOTL" "sleep 1.2" "send $DOTL" "sleep 1.2" "send $DOTL" "sleep 1.2" "send $DOTL" "awaitwhere {\"event\":\"dotted\",\"pose\":\"left\"} 60" "eof")
+same "four that end not_you and then the owner: below the cap, the fifth press stores" '[4,true]' "$(q "$out" '[len([e for e in evs if e.get("event") == "capture_failed" and e.get("code") == "not_you"]), any(e.get("event") == "dotted" and e["pose"] == "left" for e in evs)]')"
+
+step "dot scan: a pose needs a centre that a dot press took; a failed centre retake does not strand another label's save"
+reset_store
+scenario advanced dot-left
+out=$(session emil "await ready 30" "send $CREATE" "send $ADV1" "await swept 120" "send $DOTL" "await capture_failed 30" "send $DONE" "await saved 30")
+same "a pose pressed against an Advanced lap's centre is bad_sweep with no child (it would never be saveable), and the Advanced set still saves" '["bad_sweep",0,true]' "$(q "$out" '[first("capture_failed")["code"], len([e for e in evs if e.get("event") == "dotting"]), any(e.get("event") == "saved" for e in evs)]')"
+reset_store
+scenario dot-centre dot-left dot-right dot-none
+EVERY='{"cmd":"dot","appearance":"Everyday glasses","pose":"centre"}'
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"dotted\",\"pose\":\"left\"} 60" "send $DOTR" "awaitwhere {\"event\":\"dotted\",\"pose\":\"right\"} 60" "send $EVERY" "await capture_failed 60" "send $DONE" "await saved 30")
+same "label A held the floor; a centre press for label B fails; done still saves A (it was refused in 3.2.0 as first built: the state went to ready)" '["no_face",true]' "$(q "$out" '[first("capture_failed")["code"], any(e.get("event") == "saved" for e in evs)]')"
+same "...and A's three templates are what was stored" '3' "$(python3 -c '
+import json, sys
+a = json.load(open(sys.argv[1]))["appearances"]
+print(sum(1 + len(x.get("extra") or []) for x in a))' "$STORE/people/emil.json")"
 
 step "dot scan: what can be saved, and the refusals"
 reset_store
@@ -745,7 +793,7 @@ scenario dot-strobe-centre dot-strobe-left dot-stranger-left
 : >/run/omarchy-face-stub/logger.out
 out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"dotted\",\"pose\":\"left\"} 60" "send $DOTL" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
 same "dot scan with debug=true: one trace line per press (three presses, three lines), and the journal line is the child's own" '3' "$(grep -c '^debug dot ' /run/omarchy-face-stub/logger.out)"
-check "...each line is the pose, the result, the counts and the reason, in words and numbers only" bash -c "grep '^debug dot ' /run/omarchy-face-stub/logger.out | grep -qvE '^debug dot pose=(centre|left|top|right|bottom) ok=[01] agree=[0-9]+ frames=[0-9]+ strobe_off=[0-9]+ black=[0-9]+ dark=[0-9]+ none=[0-9]+ multi=[0-9]+ closer=[0-9]+ farther=[0-9]+ edge=[0-9]+ stranger=[0-9]+ centre_max=[0-9.a-z/]+ t=[0-9.]+ why=[a-z_-]+\$' && exit 1 || exit 0"
+check "...each line is the pose, the result, the counts and the reason, in words and numbers only" bash -c "grep '^debug dot ' /run/omarchy-face-stub/logger.out | grep -qvE '^debug dot pose=(centre|left|top|right|bottom) ok=[01] agree=[0-9]+ frames=[0-9]+ strobe_off=[0-9]+ black=[0-9]+ dark=[0-9]+ none=[0-9]+ multi=[0-9]+ closer=[0-9]+ farther=[0-9]+ edge=[0-9]+ roll=[0-9]+ stranger=[0-9]+ centre_max=[0-9.a-z/]+ t=[0-9.]+ why=[a-z_-]+\$' && exit 1 || exit 0"
 same "...the strobe's off frames were counted and skipped (about as many as the lit ones), and the stranger's press names its reason" 'true' "$(python3 -c "
 import re
 rows = [dict(re.findall(r'(\w+)=(\S+)', l)) for l in open('/run/omarchy-face-stub/logger.out') if l.startswith('debug dot ')]
@@ -1093,6 +1141,8 @@ check("judge_dot refuses a pose 0.6 from the centre (over HARD) although a held 
       jd("top", ok_press([0.0, 0.0, 0.6] + [0.0] * 125), [ZERO0, [0.0, 0.0, 0.3] + [0.0] * 125])["code"] == "not_you")
 check("judge_dot keeps a pose 0.5 from the centre when a held pose is 0.3 from it (chain, inside HARD)",
       jd("top", ok_press([0.0, 0.0, 0.5] + [0.0] * 125), [ZERO0, [0.0, 0.0, 0.3] + [0.0] * 125])["code"] is None)
+check("judge_dot refuses a pose press with an empty reference (nothing to compare with), but takes the centre's", jd("left", ok_press(at(0.1)), [])["code"] == "timeout"
+      and jd("centre", ok_press(at(0.1)), [])["code"] is None)
 check("judge_dot refuses a NaN encoding", jd("centre", ok_press([float("nan")] + [0.0] * 127), [])["code"] == "timeout")
 check("judge_dot refuses 127 numbers", jd("centre", ok_press([0.0] * 127), [])["code"] == "timeout")
 check("judge_dot refuses a support of 2 (under DOT_NEED) and of 100", jd("centre", ok_press(support=2), [])["code"] == "timeout" and jd("centre", ok_press(support=100), [])["code"] == "timeout")
