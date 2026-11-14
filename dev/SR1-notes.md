@@ -456,3 +456,136 @@ Changes that are howdy's own settings, not made here, with their effect: `certai
 **Tests.** e0 (230): `scale_word` (edges, yaw compensation and its cap, no centre, the words). e1 (184): `adv-scale-drift` (the owner leans back on the first bin, descriptor 0.60 from the centre: 3.1.6 `changed`, now asked to come closer, fills four bins, saved with only owner descriptors), `simple-stranger-small` (a stranger at another size: nothing encoded or stored, `too_few`, no `changed`); the trace regex has the new fields. **Not verified:** the live Advanced lap (no eye px in the old trace); that the owner's distance changes by 15% in a slow circle; helper 3.1.7 on the laptop.
 
 **What SR1 re-reads (all in `system/omarchy-face-admin`; the other 11 system files change only the version header and the pins).** (1) `scale_word` and the loop's call (after `lap2_word`, only when `centre_eye is not None and neutral is not None`): the frame gets a word and is not encoded, so `ok` cannot be reached; `centre_eye` is set where the centre is formed from `supported(centre_cands)`; the candidates carry `eye`. (2) The centre-formation line adds `"eye": pose["eye"]` to the candidate dict. (3) `trace_line`: `hard_min`, `eye`, `centre_eye`, `hm_eye`, `eye_lo`, `eye_hi`, `step_hi`, `scale` (debug only, numbers). (4) The remaining cost: a stranger at another size ends `too_few` rather than `changed`.
+
+## Delta in 3.2.0 vs v3.1.7 (a457cd0): the dot scan replaces Simple. What a security re-read must check (root code)
+
+Everything is in `system/omarchy-face-admin`; the other nine files of `system/` change only in their version header
+(and `system/install.sh` in the version, the pins and its checksum file). `git diff a457cd0 -- system/omarchy-face-admin`
+is about 430 lines added and 115 removed; the list below is the whole of it. "Parent" is `STORE_PY` (`enroll-session`),
+"child" is the capture half of `SWEEP_PY`, "pure half" is `SWEEP_PY` above `# ==== THE CAPTURE HALF`.
+
+### 0. What the change is, in one paragraph
+
+A new verb, `dot`, inside `enroll-session`. One `dot` is ONE press of the card's Space key for one pose (`centre`, `left`,
+`top`, `right`, `bottom`): the parent starts a child that opens the camera, judges every lit frame, and answers when it
+has `DOT_NEED` (3) frames of one face or when `DOT_SECONDS` (4) have passed. The parent re-checks the answer and keeps the
+template. Simple's sweep (pose estimation, dwell, patience, skipped targets, the Simple floor) is deleted, because the
+card no longer uses it; Advanced is untouched in behaviour. **No threshold changed and no new constant is a
+threshold of identity**: the identity rule is `CHAIN` 0.40 and `HARD` 0.55, the numbers already in 3.1.7.
+
+### 1. The new surface (read these first)
+
+| New | Where | Side |
+|---|---|---|
+| verb `dot` (`{"cmd":"dot","appearance":L,"pose":P}`) | `cmd_enroll_session`, the `elif command == "dot":` branch | parent |
+| `valid_dot(pose, prior)` and `verb_allowed(..., "dot")` | pure half | parent |
+| `dot_word`, `dot_agree`, `dot_why`, `dot_floor_ok` | pure half | parent and child |
+| constants `DOT_POSES`, `DOT_BINS`, `DOT_NEED`, `DOT_SECONDS`, `DOT_R`, `DOT_FLOOR`, `DOT_FAIL_CODES`, `DOT_REASONS` | pure half | both |
+| `run_press` -> `run_child` (the plumbing of `run_sweep`, now shared) | parent | root |
+| `judge_dot` (the parent's own check of a press) | parent | root |
+| the child's second program: `dot_parse`, `run_dot`, `dot_main`, dispatched by `main` when `argv[0] == "dot"` | child | root, child |
+| events `dotting`, `dot`, `dotted`; keys `pose`, `poses`, `good`, `need`; codes `not_you`, `too_far`, `too_close`, `face_cut_off` | `SWEEP_EVENTS`, `_allowed`, `CODES` | the allow-list |
+| one debug line per press (`debug dot ...`) | `run_dot`, end | child stderr, journal |
+| a `done` floor for a dot-scanned appearance | the `done` branch | parent |
+
+### 2. What a press does, and what is judged where
+
+**Parent (`dot` branch).** The label is checked as for `sweep` (`check_label`, `appearance_limit`); `valid_dot` allows a press
+only in state `ready` or `swept` (never while one runs), only for a pose in `DOT_POSES` (an exact string: lists, numbers, `None`, `""`,
+other words are refused, all as `capture_failed` `bad_sweep`), a non-centre pose only after a centre is pending for the label, and a
+centre only if the store does not already hold more than `SIMPLE_MAX_STORED` (5) templates for it (rule R, as 3.1.x had it for Simple).
+A refused press starts no child. The state goes to `running`, `dotting` is emitted, the child runs, the state returns to `swept`
+(something is held) or `ready` (nothing is).
+`reference` for the child is `[centre] + the other held poses' encodings` (the pose being retaken is left out), empty for the centre.
+A **centre** press first throws away everything pending for the label (as a new lap 1 does): a retake of the centre never keeps poses taken against
+the old centre. A failed centre therefore leaves nothing pending. No state is kept for a failed press.
+
+**Child (`run_dot`).** Same camera class, same `clahe`, same `is_strobe`/`strobe_phase` as the sweep (the strobe's unlit frames are
+skipped and are never a reason). For a lit frame: darker than `dark_threshold` is `dark`; otherwise dlib; no face or two faces are
+`none`/`multi`; one face goes through `dot_word`: for the **centre** that is `frame_word` with steadiness, sharpness and roll passed
+as fine (so `closer`/`farther`/`edge`/`dark` are the 3.1.x centre gates, unchanged numbers); for a **turned pose** only the light (`dark`, saturation)
+is judged, because a turned face has narrower eyes and may be partly out of the picture. A frame that passes is encoded and must be `ok` for
+`guard_verdict(encoding, accepted, centre)`: within `CHAIN` of the nearest held template and within `HARD` of the centre (the centre has none).
+The press closes when `dot_agree` finds `DOT_NEED` frames within `SUPPORT` (0.30) of the medoid of the good ones; the template is that medoid, `support` the
+number that agree (3 to 12, `add_candidate` keeps the newest `MAX_CANDIDATES`). It ends `ok: false` at `DOT_SECONDS` of frame time with the commonest reason
+(`dot_why`; no lit frame at all is `black_frames`).
+
+**Parent again (`judge_dot`).** `ok` must be exactly `True`; `encoding` 128 finite numbers; `support` an int in `DOT_NEED..99`; for a non-centre pose the
+encoding must be within `HARD` of `reference[0]` and within `CHAIN` of the nearest reference, computed with `distance` directly and not through
+`guard_verdict` (so a defect in `guard_verdict` is not in both). Anything else is `timeout`. **It cannot re-check what only a frame shows: one face, lit, and the
+centre's size gates. Those are the child's alone**, as the `track` gates are in the sweep. The result is then stored as `{pose: a270|a000|a090|a180, band: near, r: DOT_R,
+support, encoding}` through `validate_appearance` (unchanged).
+
+### 3. Why the new facts do not widen who can be stored (and where they might)
+
+- **Same identity numbers, same shape of check.** A stored pose must be within 0.40 of a template and 0.55 of the centre, as in 3.1.x. The known limit (a stranger within
+  `CHAIN` of the owner's centre is accepted at a pose press) is unchanged in kind. Pinned in e1 as `dot-stranger-limit-left`, and the stranger at 1.0 and at 0.46
+  are refused (`dot-stranger-left`, `dot-stranger-near-left`). The parent re-judges with a child whose guard is disabled (`admin-noguard`, step "rule F").
+- **The centre has no reference**, as before (3.1.x formed it from the first steady frames). A stranger in front at the first press is the centre of the scan; the
+  authority is the owner's pkexec authorisation and the owner pressing Space. Unchanged in kind, but note that the window is now ONE press (three lit frames of
+  one face, about 0.4 s) and not a dwell of 0.8 s of steady frames.
+- **No `changed` counter, no floor between "strict" and "neutral".** 3.1.x ended a lap after five consecutive refused frames and had a band that was neutral past a floor.
+  A press has neither: frames that fail the guard are simply not counted, the press fails, and nothing carries over. So the SR1 S1/S2/S3 class of finding (a stranger who
+  alternates frames so the run counter resets) does not exist for a press: each press needs three agreeing frames, all of which passed the guard. What a stranger can still do
+  is **retry**: each press is independent and there is no limit on the number of presses inside the session's own bounds (idle 120 s, whole 300 s). A stranger who holds
+  frames inside `CHAIN` is accepted on the first press, as above; one who is outside is refused on every press.
+- **`SUDO_POLICY` is "centre" and unchanged.** A dot-scanned person gives Sudo the centre only. The stored `r` is the nominal `DOT_R` 1.6, which is past `SUDO_R_MAX` 1.5, so even a
+  future `full` policy would not take these poses by `r` (it would take them by nothing: `pick` skips `r > SUDO_R_MAX` for Sudo). **No pose is measured: `r` is a stand-in**, and
+  a Lock use of it (`r <= R_MAX`) is satisfied by construction. If anyone later widens Sudo, these poses must be re-enrolled or the policy argued afresh (`dev/README.md`, "How to widen Sudo later").
+- **A press does not prove a turn.** Nothing checks that the head moved. A person (or a stranger, if one gets that far) who presses Space six times looking straight ahead stores
+  frontal pictures under `a270`, `a000`, ... That is harmless for identity (each is within `CHAIN`) and weakens only the coverage the poses were for.
+
+### 4. Bounds that must still hold
+
+- **Camera time per press**: `DOT_SECONDS` 4 of frame time from the first frame; the whole child is under `timeout -k 2 (4 + 15)` in its own session and process group,
+  killed in `finally`, and exits by itself when its stdin closes (the parent is gone): the same plumbing as the sweep (`run_child`, a refactor of `run_sweep`; see section 6).
+  Camera start-up (dlib's models, the emitter's first dark frames) is inside the 19 s, not inside the 4.
+- **A press does not lengthen the session** (`ends_at` is fixed at `ready`; the sweep's "credit camera time" comment applies to nothing here) and **does** reset the idle clock as every command does.
+- **One child at a time**: `state == "running"` refuses `dot`, `sweep`, `done`, `capture`, `create` (`refuse("%s while a scan is running")`, the `dot` word added to that list), `finish` and `abort`
+  keep their meaning. The camera lock is taken per press (`camera_lock()`), so `camera_busy` is the answer when the lock daemon holds it.
+- **The reference pipe** carries at most 4 encodings for a press (the centre and three other poses; `read_reference` caps at 28); `dot_parse` takes five arguments, each validated (`pose in DOT_POSES`, `0 < ceiling <= 60`,
+  `1 <= need <= 9`, the descriptor in 3..64, the debug flag `0|1`) and the child exits 2 before the camera otherwise. e0 asserts 20 malformed lists are refused.
+- **What leaves the process**: `dotting {pose, need}`, `dot {pose, good, need}`, `dotted {pose, poses, kept}` and `capture_failed {code}`, every key typed and bounded in `_allowed`
+  (a pose is one of five words, `good` 0..9, `poses` a duplicate-free list of those words). Nothing carries an encoding, a frame, a landmark or a path; e1 asserts that no list of 100
+  numbers reaches any transcript and that the four events are the only new ones.
+- **Debug (`debug=true` in root's config, as before)**: one line per press on the child's stderr (the journal, tag `omarchy-face-sweep`, through `logger`):
+  `debug dot pose=... ok=... agree=... frames=... strobe_off=... black=... dark=... none=... multi=... closer=... farther=... edge=... stranger=... centre_max=... t=... why=...`.
+  Words and numbers only, regex-checked in e1. `centre_max` is the largest distance to the centre of a frame that reached the guard (an identity-adjacent number, as the
+  sweep's `hard_max` already was, and visible only to root and the journal).
+
+### 5. The `done` rule
+
+A label scanned with `dot` may be committed only if `dot_floor_ok`: the centre, `left` and `right` are held (`DOT_FLOOR`). `done` otherwise is `capture_failed` `bad_sweep` and the session lives.
+This is the root-side twin of the card's Save link: the card cannot save less than the helper allows. (It does not require all five: see `audit-dot-scan.md` row 12.) A label never touched by `dot`
+(a legacy `capture`, an Advanced lap) is judged by the unchanged rules.
+
+### 6. What was removed, and the one refactor
+
+- **Simple's sweep is gone**: `valid_sweep` no longer accepts `mode: "simple"` (it answers `"mode"`), and the constants and functions only Simple used are deleted (`SIMPLE_TARGETS`, `SIMPLE_MIN_HELD`,
+  `SIMPLE_LAP_SECONDS`, `SIMPLE_WEDGE_HALF`, `TARGET_PATIENCE`, `PROMPT_LEAD`, `progress_mark`, `patience_since`, `patience_expired`, the `skipped` set, `became`/`mark`). `current_target`, `can_finish`, `lap_ended`,
+  `lap_result`, `settle_verdict` and `judge` lose their `mode` argument (Advanced only). The child's argument list is `mode lap targets ceiling stall refd debug` (seven; `patience` and `lead` are gone), and
+  `parse_args` still re-validates it with `valid_sweep`. The `track` and `swept` events lose `skipped`; `_allowed` loses the key and `mode` is `("advanced", "usual")`. **A reviewer should diff the Advanced path
+  against v3.1.7 line by line**: it should be the same except for the removed `mode == "simple"` branches and the `mode` arguments (`git diff a457cd0 -- system/omarchy-face-admin`, the `run` function).
+- **`run_sweep` is now a three-line wrapper over `run_child`**, which is the old body with the argv built by a callback given the reference pipe's descriptor (`arguments(rfd)`) and the ceiling passed in. The
+  lock, the pipe, `Popen` (`pass_fds`, `start_new_session`, `umask`), the relay loop, `finally` (kill, logger, `os.close(lock.fd)` and not `LOCK_UN`) are byte-for-byte the old text. The one addition is
+  `"dot"` in the list of commands refused while a scan runs.
+- Nothing is added to what `install.sh`, the units, the daemon, the gate, the verifier or the lock helpers do; no polkit action, no PAM file, no socket.
+
+### 7. What I could not check
+
+- **A real camera, a real dlib, pkexec, polkit.** All of e1 runs a fake camera and a fake dlib; the identity numbers are the 3.1.x ones, measured on one person's recordings (`dev/SR1-notes.md` 3.1.7 section A).
+  Whether an owner's turned frames are within `CHAIN` of the centre often enough for three to agree inside four seconds is **a usability question I could not measure**; if not, the cost is "That did not look like you" at a
+  press, not a wider acceptance.
+- `DOT_NEED` (3), `DOT_SECONDS` (4) and the 1 s the card gives the ring are chosen, not measured.
+- Space on the real layer-shell card (exclusive keyboard focus): shown offscreen through the same function the window calls (`dev/e3-enrol-view.sh`, "island" case), not on the compositor.
+
+### 8. Tests that pin the above
+
+`e0` (`dev/e0-pose.py`, `test_dot`): the constants and their relations (the poses are the ring bins 3.1.x's Simple held; `DOT_R` inside the store's range and past `SUDO_R_MAX`; every code is in `CODES`), `dot_word`
+for the centre's gates and the turned pose's lack of them, `dot_agree`, `dot_why`, `dot_floor_ok`, `valid_dot` (14 cells), table V for `dot`, and the child's argument refusals.
+`e1` (`dev/e1-enrol-sweep.sh`, the steps starting "the dot scan"): the five-press happy path and what is stored (poses, `r`, `support`, counts, Sudo's one template), a failed press for each of
+no face, a dark room, a covered camera, two faces, a centre too small and too big, at the centre and at a pose; two good frames not closing the ring and a late face still being taken; the turned pose not
+being size-gated; the strobe; the stranger at the left press (1.0, 0.46), the owner at 0.46, the documented limit at 0.30; the `done` floor; eleven malformed presses; a press while one runs; cancel with nothing and with
+something held; a new centre replacing the pending set; the debug line; `judge_dot` unit cases (CHAIN exactly, past it, HARD, NaN, a bool support, a code from nowhere); rule R for the dot scan; and a child whose guard
+passes everything, which the parent still stops (`admin-noguard`).
+`e3` (`dev/e3-enrol-view.sh`): the card's own behaviour (no helper involved), listed in `audit-dot-scan.md`.

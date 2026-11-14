@@ -123,7 +123,7 @@ Item {
     if (view.gateText[s.trackState] !== undefined) return view.gateText[s.trackState]
     if (ph === "centre") return s.centre > 0 ? "Hold still" : "Look straight at the circle"
     var bin = s.target
-    if (Ring.filledCount(Ring.targetsFor("advanced"), s.bins) >= 12) return "The circle is complete."
+    if (Ring.filledCount(Ring.targets(), s.bins) >= 12) return "The circle is complete."
     return typeof bin === "number" && Number(s.bins[bin]) > 0 ? "Hold still" : "Move your head slowly to complete the circle."
   }
 
@@ -242,14 +242,12 @@ Item {
         id: ring
         objectName: "ring"
         anchors.horizontalCenter: parent.horizontalCenter
-        mode: view.mode
-        targets: Ring.targetsFor(view.mode)
+        targets: Ring.targets()
         target: view.demoOn ? demo.target : (view.session && ring.active ? view.session.target : null)
         centre: view.session ? view.session.centre : 0
         bins: view.demoOn ? demo.bins : (view.session ? view.session.bins : [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
         demo: view.demoOn
         demoCentre: demo.centre
-        skipped: view.session ? view.session.skipped : []
         canFinish: view.session ? view.session.canFinish : false
         u: view.session ? view.session.u : 0
         v: view.session ? view.session.v : 0
@@ -281,7 +279,7 @@ Item {
           objectName: "demo"
           anchors.fill: parent
           visible: view.demoOn
-          mode: view.mode
+          mode: "advanced"
           running: view.demoOn
           foreground: view.fg
           secondary: view.secondary

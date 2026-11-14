@@ -101,7 +101,7 @@ Item {
   // --- the scan (plan-face-enroll.md sections 2, 3 and 6) ----------------------
   //
   // What the engine says, held as it says it: the view draws these and decides
-  // nothing. A target is reached, filled or skipped by the engine alone; nothing
+  // nothing. A target is reached or filled by the engine alone; nothing
   // here (or anywhere on the client) says so.
 
   // The helper listed `sweep` in `ready.verbs`; false on an old helper, which
@@ -120,7 +120,6 @@ Item {
   property var target: "centre"
   property real centre: 0
   property var bins: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-  property var skipped: []
   property bool canFinish: false
 
   // --- the dot scan (Simple, 3.2.0) -------------------------------------------------
@@ -475,16 +474,14 @@ Item {
     session.target = "centre"
     session.centre = 0
     session.bins = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    session.skipped = []
     session.canFinish = false
     session.filled = []
     session.kept = 0
     session.notice = ""
   }
 
-  // Lap 1, in the mode that is fixed from here on. The targets are what the
-  // mode names, never a choice the view makes (Simple exactly [9,3,0,6],
-  // Advanced all twelve); root refuses anything else.
+  // Advanced's lap 1. The targets are all twelve, never a choice the view makes; root refuses
+  // anything else (and a sweep in any other mode: Simple is the dot scan).
   function sendSweep() {
     session.clearRing()
     session.message = ""
@@ -499,8 +496,7 @@ Item {
     session.lastAttempt = session.appearance
     var all = []
     for (var i = 0; i < 12; i++) all.push(i)
-    session.send({cmd: "sweep", appearance: session.appearance, mode: session.activeMode, lap: 1,
-                  targets: session.activeMode === "simple" ? [9, 3, 0, 6] : all})
+    session.send({cmd: "sweep", appearance: session.appearance, mode: session.activeMode, lap: 1, targets: all})
   }
 
   // "Scan again" after a lap that has ended (`swept`): lap 1 again at once, which
@@ -522,12 +518,6 @@ Item {
     if (session.sweepFlow && session.scanState === "running" && session.activeMode === "advanced"
         && session.canFinish)
       session.send({cmd: "finish"})
-  }
-
-  function sameList(a, b) {
-    if (a.length !== b.length) return false
-    for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
-    return true
   }
 
   // --- the dot scan's verbs and events --------------------------------------------------
@@ -638,8 +628,6 @@ Item {
       session.target = event.target === undefined ? null : event.target
       session.centre = Number(event.centre) || 0
       if (event.bins && event.bins.length === 12) session.bins = event.bins
-      var skipped = event.skipped || []
-      if (!session.sameList(session.skipped, skipped)) session.skipped = skipped
       session.canFinish = event.canFinish === true
       if (session.trackState === session.acceptedWord) session.acceptedFrames += 1
       // The centre is the first target; anything after it is the lap proper.
@@ -649,7 +637,6 @@ Item {
     if (event.event === "swept") {
       session.scanState = "swept"
       session.filled = event.filled || []
-      session.skipped = event.skipped || []
       session.kept = Number(event.kept) || 0
       session.canFinish = false
       session.captures = 1

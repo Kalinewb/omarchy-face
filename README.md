@@ -285,6 +285,47 @@ A git checkout goes back to the commit it came from (`v2.2.0` when the system fi
 already 3.0.0). A copy installed with `./install.sh` has no commit to go back to: run
 `git checkout v2.2.0 && ./install.sh` in your checkout afterwards.
 
+### Updating from 3.1.x (to 3.2.0)
+
+Face ID 3.2.0 replaces the **Simple** scan. The 3.1.x one asked you to move your head to four positions and
+judged how you moved; it was too much for what it did, and one scan ended with only left and right filled and no
+clear reason. Now a ball is on the card. It starts in the middle and then goes to the left, the top, the right and
+the bottom. Look (or turn) towards it and press **Space**: each press takes one picture, and the ring round the ball
+closes in for about a second while the camera collects several good frames of you. If it did not get a good one the
+ring opens again and the card says why in a few words (*No face found*, *Too dark*, *More than one face*, *That did
+not look like you*) and you press Space again. **Esc** or **Cancel** stops and saves nothing; **Done** keeps the scan.
+**Advanced** (turn slowly all the way round) is unchanged, and the Simple / Advanced choice on the idle card now shows
+both and which is on.
+
+This changes the system files (the enrolment helper, root code), so Setup shows *the plugin (3.2.0) is newer than the
+installed system files*: **Update Face's system files**, one password. Nobody who is already stored is touched, and you
+do not have to scan again. Update the plugin and the system files together: a 3.2.0 card on 3.1.x system files
+falls back to the old single capture with a note ("Finish the update in a terminal for the full scan"), and a 3.1.x
+card on 3.2.0 system files has its Simple scan refused ("Something went wrong"), because the helper no longer
+has a Simple sweep.
+
+What it does not do, honestly:
+
+- **It does not measure your head.** The old scan tried to work out your head's angle from five points on your face;
+  this one takes your word, because you pressed Space while looking at the ball. Pressing Space without turning
+  stores a second picture of your face looking straight ahead: harmless, and no better coverage either.
+- **Who counts as you is the same rule as before.** The first picture (the middle one) has nothing to be compared
+  with. Each later picture must be within 0.40 of one already stored and within 0.55 of the first, the numbers 3.1.x
+  used. Somebody within 0.40 of your first picture can still be added at a later press (the same documented limit);
+  **enrol only yourself**. Two things in the other direction: a picture of you turned so far that it is more than 0.40
+  from everything stored is refused as *That did not look like you*, and you should turn a little less. Both numbers
+  come from the author's recordings of one person, one laptop.
+- **Sudo is unchanged.** It still uses only the straight-on picture (`SUDO_POLICY="centre"`); the four turned pictures
+  are for the lock screen. They carry a fixed stand-in for "how far round" (`r` 1.6, past the limit a wider Sudo
+  setting would need), because nothing here measures it.
+- **Save before all five.** Once the middle, left and right are taken, a **Save** link appears for the case where
+  you cannot get the last one; the helper refuses a save with less than that.
+- **It has not been run against a real camera by its author.** The test suites use a fake camera and fake face
+  model. If your first scan after updating misbehaves, `debug=true` in `/etc/omarchy-face/config` makes the helper
+  write one line per press to `journalctl -t omarchy-face-sweep`: the pose, whether it was taken, how many frames
+  were lit, unlit (the strobing emitter's off half), too dark, without a face, with two faces, too small or too big,
+  or somebody else, and the largest distance from your first picture. Counts and words, never a picture.
+
 ### Updating from 3.0.0
 
 Face ID 3.1.0 changes the system files (the enrolment helper learns the head-turning sweep

@@ -7,11 +7,11 @@ import "common/spring.js" as Spring
 
 // The enrol ring (plan-face-enroll.md section 3): a pure Item. It draws what it is
 // told and decides nothing -- which target is current, how far each is filled and
-// which were skipped all come from the engine through `track`.
+// all come from the engine through `track`.
 //
 //   60 ticks around a circle, 5 to each of 12 pose bins. A tick is in one of four
 //   looks, so state is never colour alone and never motion alone:
-//     inactive  Simple's eight bins that are not targets: 5 px, 0.2, never change
+//     inactive  a bin that is not a target (the ring names all twelve): 5 px, 0.2, never change
 //     rest      a target that is neither current nor started: 8 px, secondary, 0.7
 //     current   the target the engine names: 14 px, foreground, 1.0, static
 //     done      a covered tick: 20 px, accent, 0.9 (the share of a target's five
@@ -25,16 +25,13 @@ import "common/spring.js" as Spring
 Item {
   id: ring
 
-  // "simple" | "advanced"
-  property string mode: "simple"
-  // The bins the lap names (Simple [9,3,0,6], Advanced all twelve).
-  property var targets: Ring.targetsFor(mode)
+  // The bins the lap names: all twelve.
+  property var targets: Ring.targets()
   // "centre", a bin, or null.
   property var target: "centre"
   property real centre: 0
   // Twelve fractions, 0 to 1; 0 for a bin that is not a target, 1 once filled.
   property var bins: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-  property var skipped: []
   property bool canFinish: false
   property real u: 0
   property real v: 0
@@ -79,33 +76,11 @@ Item {
   readonly property var hairSpring: Spring.curve(0.85, 0.55, 8)
 
   function nameOf(bin) {
-    if (mode === "simple") {
-      if (bin === 9) return "Left"
-      if (bin === 3) return "Right"
-      if (bin === 0) return "Up"
-      if (bin === 6) return "Down"
-    }
     return "Position " + (30 * bin) + " degrees"
-  }
-
-  // Simple's words for each of its four targets (the screen's sides, which the
-  // mirrored preview makes the person's own).
-  function prompt(bin) {
-    if (bin === 9) return "turn your head to the left"
-    if (bin === 3) return "turn your head to the right"
-    if (bin === 0) return "tilt your head up"
-    if (bin === 6) return "tilt your head down"
-    return "move your head to position " + (30 * bin) + " degrees"
   }
 
   function percent(bin) {
     return Math.round(100 * Math.max(0, Math.min(1, Number(bins[bin]) || 0)))
-  }
-
-  function targetIndex() {
-    if (target === "centre") return 0
-    for (var i = 0; i < targets.length; i++) if (targets[i] === target) return i + 1
-    return -1
   }
 
   // What a screen reader is told when the current target changes. The ring is a
@@ -113,13 +88,7 @@ Item {
   readonly property string description: {
     // The idle demo moves every frame; a reader is told once what it is, not each frame.
     if (demo) return "A demonstration of the scan, nothing is recording"
-    var filled = Ring.filledCount(targets, bins)
-    if (mode === "advanced") return filled + " of " + targets.length + " positions"
-    var step = targetIndex()
-    if (step < 0) return filled + " of " + targets.length + " positions"
-    var what = step === 0 ? "look straight at the circle, " + Math.round(100 * centre) + " percent"
-             : prompt(target) + ", " + percent(target) + " percent"
-    return "Step " + (step + 1) + " of " + (targets.length + 1) + ", " + what
+    return Ring.filledCount(targets, bins) + " of " + targets.length + " positions"
   }
 
   Accessible.role: Accessible.ProgressBar
@@ -140,7 +109,7 @@ Item {
       Item {
         id: tick
         required property int index
-        readonly property var lk: Ring.look(ring.mode, ring.targets, ring.target, ring.bins, tick.index)
+        readonly property var lk: Ring.look(ring.targets, ring.target, ring.bins, tick.index)
         readonly property color baseColor: lk.role === "foreground" ? ring.foreground : ring.secondary
         readonly property color targetColor: Qt.tint(baseColor, Qt.alpha(ring.accent, lk.cover))
         // What the tick is going to look like; the animated values below follow it.
