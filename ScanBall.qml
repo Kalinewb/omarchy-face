@@ -2,7 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Wayland
 
-// The dot scan's ball, on the output the scan card is on (3.3.0). Service.qml makes ONE, for that output
+// The dot scan's ball, on the output the scan card is on (3.2.1). Service.qml makes ONE, for that output
 // only (the dimming scrims elsewhere stay as they are), after the card, so it is mapped above it on the
 // same Overlay layer: the ball may pass over the card's top edge when it goes to the top of the screen.
 //

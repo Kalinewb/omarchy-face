@@ -60,7 +60,7 @@ function closing(elapsedMs, good, need) {
   return clamp(Math.min(elapsedMs / RING_MS, 0.3 + 0.7 * frames), 0, 1)
 }
 
-// --- the stations on the SCREEN (3.3.0) ------------------------------------------------------
+// --- the stations on the SCREEN (3.2.1) ------------------------------------------------------
 //
 // The ball does not stay on the card. It goes to the real screen: the middle of the output for the
 // centre (where a person looks when they unlock), and the left, top, right and bottom EDGES of the output the

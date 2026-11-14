@@ -1,7 +1,7 @@
 import QtQuick
 import "common/dotscan.js" as Dot
 
-// The dot scan's ball on the real screen (3.3.0): one output's worth of surface, no window (ScanBall.qml is
+// The dot scan's ball on the real screen (3.2.1): one output's worth of surface, no window (ScanBall.qml is
 // the window), so a test can draw it at any size. It fills the output it is on, and everything in it is a
 // function of that output's width and height (Dot.screenStation): the middle for the centre, and the left,
 // top, right and bottom edges, SCREEN_MARGIN in from the physical edge. The card's size and place have no part in it.

@@ -4,7 +4,7 @@ import QtQuick.Effects
 import qs.Commons as Commons
 import "common/dotscan.js" as Dot
 
-// The dot scan card's stage (3.2.0; since 3.3.0 only the camera's circle and, while the card is idle, the
+// The dot scan card's stage (3.2.0; since 3.2.1 only the camera's circle and, while the card is idle, the
 // little demo): a pure Item. It draws what it is told and decides nothing.
 //
 //   The circle is the camera: the live picture while a scan runs (a face has to be in it and at about the

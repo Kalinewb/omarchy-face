@@ -6,7 +6,7 @@ import "common"
 import "common/dotscan.js" as Dot
 
 // The dot scan's card (3.2.0), Simple's face: the camera's circle, the line, the Space key, the links. The ball
-// is not on this card (3.3.0): it is on the real screen, in BallLayer.qml, so the person turns towards the screen's edges.
+// is not on this card (3.2.1): it is on the real screen, in BallLayer.qml, so the person turns towards the screen's edges.
 // It decides nothing. RecordSession.qml holds what the scan is doing (which pose the ball waits
 // for, whether a press is running, how many frames the helper has gathered, why the last one did
 // not work) and the helper decides whether a face is good; this file is what that looks like.

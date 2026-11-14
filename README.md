@@ -298,19 +298,26 @@ The card shrinks to what has to be read from close up: the camera's picture, the
 The top of the screen is a few centimetres below the camera, so "look up" is a smaller turn than left or right; that is the laptop,
 not the scan. Not tried on a real screen by its author (the tests draw it at five output sizes offscreen).
 
-**"Come a little closer" at the first picture.** Your live trace had two first presses fail with every lit frame too small and the
-third work at once: your usual seat has the eyes about 39-45 pixels apart in the camera's picture, and the limit was 40, so it flapped.
-The limit is **36** now (`EYE_MIN`), and the card says how much bigger your face has to look ("Come a little closer (about 14%
-bigger)") instead of only asking. The tradeoff, honestly: the evidence for lowering it is your own seat (39-45, median about 42, in one
-live lap), and the evidence that a smaller face is no noisier is weak. Your recordings have no frames at 34-40 pixels at all, shrinking
-your own close-up frames to those sizes moves the descriptor by only 0.06-0.12 (and detection still finds the face every time), but
-the same method understates what the real distant recording shows (about 0.2 where the real one showed 0.67, at 19 pixels), so it
-is a lower bound and not a measurement. A face 10% smaller makes the stored picture a little lower in resolution; for a stranger
+**"Come a little closer" at the first picture.** Your live trace had two first presses fail with every lit frame too small (62 frames,
+31 lit, all `closer`, both times) and the third work at once. The limit was 40 pixels between the eyes; it is **36** now (`EYE_MIN`),
+and the card says how much bigger your face has to look ("Come a little closer (about 14% bigger)") instead of only asking.
+
+What is known, and what is not, about your seat. In the 3.1.7 live lap the eyes read 44 straight on and 39-45 while you turned,
+with the turned frames reaching 39-40, so the 3.1.7 lap does not show your straight-on seat to be under 40. The only sign that it
+sometimes is, is those two failed presses, and the eye size was not logged, so **how far under 40 they were is unknown**. Your
+recordings are no help either: they hold only 33 lit one-face frames at 34-40 pixels (27 in the `far` one and 6 in `guided`), all taken
+while the head was moving. After your first scan on 3.2.1 the debug trace settles it: with `debug=true` in
+`/etc/omarchy-face/config`, `journalctl -t omarchy-face-sweep` prints `eye_lo` and `eye_hi` for every press, which is how big your face
+really was. If `eye_lo` is under 36 at your seat, sit a little closer; the answer is not a lower limit.
+
+The tradeoff, honestly: smaller faces are noisier. Pose-matched frames of the one distant recording, against the middle of its close
+frames, sit 0.17 away at 56-70 pixels (p50), 0.33 at 40-46, 0.43 at 34-40 (only **4 frames**, one recording) and 0.71 at 17-30, so a
+smaller face is farther from a bigger one's picture, and the stored first picture is itself a little lower in resolution when it
+is formed small. Shrinking your own close-up frames to those sizes moves the descriptor by only 0.06-0.12, but that method understates
+the real recording (0.22 where the real one showed 0.67, at 19 pixels), so it is a lower bound and not a measurement. For a stranger
 the effect on false accepts at that size was **not measured** (no stranger data). Sudo uses the first picture only, so it is the one
-place a lower minimum could weaken: the first picture can now be formed at 36 pixels instead of 40. Face still asks for it, and
-unlocking compares at whatever size you sit; if you would rather keep 40, say so and it goes back. The debug trace now prints
-`eye_lo` and `eye_hi` for every press, so after one scan the journal shows how big your face really was
-(`journalctl -t omarchy-face-sweep`, with `debug=true` in `/etc/omarchy-face/config`).
+place a lower minimum could weaken: the first picture can now be formed at 36 pixels instead of 40. Unlocking compares at whatever size
+you sit. The security review's position: 36 can stand; do not go back to 40 (it flaps at your seat), and do not go lower.
 
 ### Updating from 3.1.x (to 3.2.0)
 

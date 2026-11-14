@@ -628,13 +628,23 @@ change is plugin-side only (`BallLayer.qml`, `BallScreen.qml`, `ScanBall.qml`, `
 **The failure.** Live 3.2.0 trace (journal, `debug dot`, 18:42-18:43): two centre presses ended `why=too_far` with `frames=62 strobe_off=31 closer=31`, that is EVERY lit frame under 40 px, and the third press
 (the user a little closer) closed in 0.4 s. It was not a flapping frame here and there: the seat was below the limit for whole presses.
 
-**The seat, measured (only live data has it).** The 3.1.7 live Advanced lap of 2026-11-14 10:11 (22 trace lines, `journalctl -t omarchy-face-sweep`): `centre_eye` 44; eye 39-45 through the lap
-(`eye_lo`/`eye_hi` 40-45 most seconds, single frames 39); `closer` rose to 25 of 159 lit frames (16%), all at 39 or 40. So the seat's median is about 42 and its lower edge touches 39-40, a
-limit of 40 sits INSIDE the seat's own spread.
+**The seat, as far as it is known (corrected after the 3.2.1 security re-read).** The 3.1.7 live Advanced lap of 2026-11-14 10:11 (22 trace lines, `journalctl -t omarchy-face-sweep`) has `centre_eye` 44, and eye 39-45 through the lap; those 39-45
+values are the TURNED frames (`eye_lo`/`eye_hi` 40-45 most seconds, single frames 39-40, `closer` 25 of 159 lit frames, all at 39 or 40). So that lap does NOT show the straight-on seat to be under 40: it read 44. The only sign that the straight-on seat is sometimes
+under 40 is the two failed 3.2.0 centre presses (62 frames, `closer=31` both times, every lit frame), whose eye size was not logged: **how far under 40 they were is unknown.** After the first 3.2.1 scan, `eye_lo`/`eye_hi` in the journal settle it.
 
 **What the recordings say.** `dev/measure-scale.py` and the eye table over the 8 recordings (`~/.cache/omarchy-face-enrol`): eye p50 per recording 61, 70, 67, 65, 65, 38 (the "far" one, 19-67),
-63, 59 (guided, 11-64). **None has frames at the 34-40 px seat** (these were taken close, laptop lifted; the 3.1.7 notes say so): the only frames at 30-55 are a handful of transitions, against
-references of another size. So the questions "how do same-person distances behave at eye 34-40 versus 40+" cannot be answered from real frames. Stated plainly: **no real same-person data exists at that size.**
+63, 59 (guided, 11-64). They were taken close (laptop lifted; the 3.1.7 notes say so). **They hold very few frames at 34-40 px: 33 lit one-face frames, 27 in `far` and 6 in `guided`, all taken while the head was moving.**
+The same-person distance table (the reviewer's `an5.py`, re-run: frames within 0.15 of the `far` recording's close pose in yaw and pitch, roll under 15; the reference is the medoid of that recording's close, 56-70 px, pose-matched frames):
+
+| frames at eye px | n | distance to the close medoid p50 / p90 / max | within 0.35 | within 0.40 | neighbour-to-neighbour noise within the band (p50 / p90 / max) |
+|---|---|---|---|---|---|
+| 56-70 | 45 | 0.17 / 0.31 / 0.43 | 91% | 96% | 0.10 / 0.23 / 0.42 (n 45) |
+| 40-46 | 18 | 0.33 / 0.41 / 0.45 | 67% | 83% | 0.16 / 0.19 / 0.29 (n 9) |
+| 34-40 | **4** | 0.43 / 0.46 / 0.46 | 0% | 0% | one pair only |
+| 17-30 | 41 | 0.71 / 0.73 / 0.76 | 0% | 0% | 0.15 / 0.21 / 0.27 (n 33) |
+
+**34-40 rests on 4 frames from ONE recording** (one neighbour pair), so it shows direction (a smaller face sits farther from a bigger face's picture: 0.17, 0.33, 0.43, 0.71) and not a number. The noise WITHIN a size (neighbours) does not grow with smallness
+(0.10, 0.16, 0.15): a face formed small and compared at the same small size is no noisier; what grows is the displacement between sizes, which the scale guard (`SCALE_MIN` 0.85) already bounds for the Advanced lap.
 
 **A proxy, and its limit** (`eye3.py`/`eye4.py`, not committed: they read recordings): 120 frontal, lit, one-face frames from the recordings, each shrunk (INTER_AREA, centred on a 400x400 canvas of the frame's own mean)
 to a chosen eye distance and put through the helper's own detector (max_height 320, upsample 1), 5-point predictor and resnet encoder (jitter 1):
@@ -645,15 +655,16 @@ to a chosen eye distance and put through the helper's own detector (max_height 3
 **The proxy under-predicts reality**: the real "far" recording's frames at 19 px sit 0.67-0.69 from its own centre at 65 px (3.1.7 notes), the synthetic 19 vs 44 gives 0.22 (19 vs 65 was not run). Real distant frames are blurrier and noisier than shrunk close ones. So the proxy says
 only: there is no cliff between 34 and 44 px in dlib's behaviour, the same-frame shift grows smoothly as the face shrinks (0.06, 0.07, 0.08, 0.12 at 40, 37, 34, 28 px). It does not say how a REAL 36 px face compares with a real 40 px one.
 
-**The decision: 36, the smallest change that clears the observed seat.** 10% below the seat's median (42), 3 px below its lowest observed frame (39); not lower, because lowering past the observed seat would be a bet on
+**The decision: 36, the smallest change that clears the observed range (the reviewer's position: 36 can stand; do not go back to 40, do not go lower).** 10% below the turned frames' median (42) and 3 px below their lowest (39); not lower, because lowering past the observed seat would be a bet on
 resolution effects nobody measured. If the new trace (below) shows `eye_lo` under 36 at the seat, 36 is not enough, and the answer is to ask the user to sit closer, not to lower it again. **The alternative, equally valid on this
 evidence: keep 40 and rely on the better message** ("Come a little closer (about N% bigger)"); the reviewer may prefer it, and reverting is `EYE_MIN = 40`, the two tests that name 36 and the version. I say this because the evidence for "no noisier" is the weak kind.
 
 ### 2. What changes in the code (re-read all of it, it is short)
 
-- `EYE_MIN, EYE_MAX = 36, 150` (pure half). `EYE_MIN` is read in exactly three places: `frame_word` and `gate_failures` (`eye < EYE_MIN` is `closer`, used by the Advanced lap AND by the centre press through `dot_word`) and `lap2_want`
-  (`reference_eye * LAP2_FAR >= EYE_MIN`: lap 2 wants "farther" from a lap-1 eye of 45 px up instead of 50; lap 2 is not offered by the card). `EYE_MAX` is unchanged: nothing observed (seat 39-45, recordings 11-81) is near 150.
+- `EYE_MIN, EYE_MAX = 36, 150` (pure half). `EYE_MIN` is read in exactly four places: `frame_word` and `gate_failures` (`eye < EYE_MIN` is `closer`, used by the Advanced lap AND by the centre press through `dot_word`), `lap2_want`
+  (`reference_eye * LAP2_FAR >= EYE_MIN`: lap 2 wants "farther" from a lap-1 eye of 45 px up instead of 50; lap 2 is not offered by the card; note that `lap2_want` now offers "farther" with a near-zero window from a lap-1 eye of 45-47, a shifted edge of one that existed at 50 under 40, unreachable from the card) and `dot_short` (the percent a too small face must grow). `EYE_MAX` is unchanged: nothing observed (seat 39-45, recordings 11-81) is near 150.
 - **A turned dot pose has no size gate** (3.2.0, unchanged), so only the centre press and the Advanced lap are affected.
+  An Advanced lap whose centre is 36-40 px now starts (it was refused as `closer` below 40) and can stall (`sweep_stalled`, 20 s without a new supported frame): harmless, and only Lock sees those templates (Sudo takes the centre of an appearance, and `SUDO_POLICY` is "centre").
 - **`scale_word`/`SCALE_MIN` (0.85) is unchanged**: the Advanced lap still refuses frames under 85% of the lap's own centre, so a centre at 36 px asks the rest of the lap for 31 px and up.
 - **New: `dot_short(eye)`** (pure) and a `short` key. When a centre press fails `too_far`, the child sends `{"ok": false, "code": "too_far", "short": N}` with N = whole percent the face must look bigger, from the median eye px of the frames `closer` refused (`small_eyes`);
   `judge_dot` passes `short` through ONLY for `too_far` and only an int from 1 to 99 (anything else is dropped); the parent emits `capture_failed {code, short}`; `_allowed` gains `short` (int, 1 to 99, no bool). It leaks one small integer derived from the person's own distance

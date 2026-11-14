@@ -2,7 +2,7 @@ import QtQuick
 import qs.Commons as Commons
 import "common/dotscan.js" as Dot
 
-// The dot scan's ball and its outer ring (3.2.0, moved out of DotStage in 3.3.0 so the same ball can be on the
+// The dot scan's ball and its outer ring (3.2.0, moved out of DotStage in 3.2.1 so the same ball can be on the
 // card's little demo and on the real screen). A pure Item of no size: it draws what it is told and decides
 // nothing, and it is drawn centred on its own x and y.
 //
