@@ -139,6 +139,8 @@ Item {
   // The helper's code for why the last press did not work, "" when it did or none was made
   property string dotWhy: ""
   // Presses of this session that did not look like the first picture; at Dot.NOT_YOU_CAP the helper closes the session
+  // How much bigger (percent) the helper said the face must look, with a too_far; 0 when it did not say
+  property int dotShort: 0
   property int dotNotYou: 0
   property bool dotCapped: false
   // The pose the last `dotted` took: the ball stays on it for a beat before it moves on
@@ -146,6 +148,11 @@ Item {
   property real dotPressedAt: 0
   property var dotPending: null
   readonly property string dotPose: session.dotFlow ? Dot.nextPose(session.dotHeld) : ""
+  // What the ball on the screen (ScanBall.qml) draws: it is there while the dot scan is on its ball, it stays on the
+  // pose just taken for the beat the ring is closed, and then moves on
+  readonly property bool dotOnBall: session.dotFlow && session.phase === "dot"
+  readonly property string dotBallState: session.dotState
+  readonly property string dotBallPose: session.dotState === "landed" || session.dotPose === "" ? session.dotLast : session.dotPose
   // The card's Save: the centre, left and right are held (the helper's own floor)
   readonly property bool dotCanSave: session.dotFlow && Dot.canSave(session.dotHeld)
   readonly property bool dotAllHeld: session.dotFlow && session.dotHeld.length >= Dot.POSES.length
@@ -557,6 +564,7 @@ Item {
     var pose = Dot.nextPose(session.dotHeld)
     if (pose === "") return
     session.dotWhy = ""
+    session.dotShort = 0
     session.dotGood = 0
     session.dotState = "capturing"
     session.dotPressedAt = Date.now()
@@ -588,6 +596,7 @@ Item {
       // helper refuses at another moment (a Save before its floor) is not a press.
       if (session.dotState === "capturing") {
         session.dotWhy = code
+        session.dotShort = code === "too_far" ? (Number(event.short) || 0) : 0
         session.dotState = "waiting"
         session.failSerial += 1
         if (code === "not_you") {

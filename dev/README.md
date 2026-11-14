@@ -392,7 +392,7 @@ island around it (the notch's silhouette, the drop and the retract, no window); 
 arithmetic (looks, the dot, contrast), `common/EnrolLink.qml` the text link. **Simple (3.2.0) is the dot
 scan**: `DotCard.qml` is its card, `DotStage.qml` the stage (the ball, its breathing and closing ring, the
 five station marks, the camera's circle), `common/dotscan.js` its arithmetic and idle demo, and
-`common/EnrolMode.qml` the Simple/Advanced choice both cards share. `RecordSession.qml` is the state
+`common/EnrolMode.qml` the Simple/Advanced choice both cards share. Since 3.2.1 the BALL is not on the card: `BallLayer.qml` draws it on a whole output (a function of the output's width and height only: the middle, and the four edges 64 px in), `BallScreen.qml` binds that to the session, `ScanBall.qml` is the see-through, input-less, keyboardless window that holds it (made by `Service.qml` for the card's output only, after the card), and `DotBall.qml` is the ball and its ring (breathing, closing, red on failure), shared with the card's small idle demo in `DotStage.qml`. `RecordSession.qml` is the state
 machine: with `scan` on it drives the sweep protocol (`sweep`, `track`, `swept`, `finish`, `abort`, `done`)
 for Advanced and the dot protocol (`dot`, `dotting`, `dot`, `dotted`, `capture_failed`) for Simple, and keeps
 whatever the engine says; the view decides nothing (a target is reached or filled, a pose taken, by the
@@ -438,7 +438,8 @@ Nothing below was run by the build; the camera, dlib, pkexec and the compositor 
 sandbox. Install this branch (`./install.sh`), update the system files from Setup (3.2.0 changes the helper),
 and:
 
-1. **Space on the real card.** Re-record a person. After the password the card shows the ball at the centre.
+0. **(3.2.1) The ball on the screen.** After the password a ball appears in the MIDDLE of the screen the card is on, and Space moves it to the left edge, the top edge, the right edge and the bottom edge, 64 px in, fully visible and not behind the bar; the other screens only show the dimming. The card holds no ball (idle: a small demo). The ball should pass over the card's top edge for the top pose. Check on a second monitor that the ball is only on the card's screen, and that Space and Esc still work with the ball window up (it must take neither).
+1. **Space on the real card.** Re-record a person. After the password the card shows the camera circle and the ball is in the middle of the screen.
    Press Space: the ring should close in for about a second and the ball move to the left. If Space does nothing
    but the **Space** key on the card works when clicked, the layer-shell window is not delivering the key (tell me).
 2. **The five pictures.** Look at each ball and press Space. Watch `journalctl -t omarchy-face-sweep -f` with

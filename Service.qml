@@ -124,10 +124,37 @@ Item {
     }
   }
 
+  // The output the scan card is on, which is also the one the ball goes to the edges of (ScanBall.qml). The card
+  // used to leave its screen to the compositor (the focused output); it is chosen here now, once, so the card and the
+  // ball are on the same one: the focused output, else the built-in panel (the camera is above it), else the first.
+  property var cardScreen: null
+  function pickCardScreen() {
+    var focused = Hyprland.focusedMonitor ? String(Hyprland.focusedMonitor.name || "") : ""
+    var builtin = null
+    for (var i = 0; i < Quickshell.screens.length; i++) {
+      var candidate = Quickshell.screens[i]
+      if (focused !== "" && candidate.name === focused) return candidate
+      if (!builtin && /^(eDP|LVDS|DSI)/i.test(candidate.name || "")) builtin = candidate
+    }
+    return builtin || (Quickshell.screens.length > 0 ? Quickshell.screens[0] : null)
+  }
+
+  // The ball: one window, for the card's output only, made after the card so it is mapped above it.
+  Variants {
+    model: root.card && root.cardScreen ? [root.cardScreen] : []
+    ScanBall {
+      required property var modelData
+      screen: modelData
+      session: root.session
+      presence: root.card ? root.card.presence : 0
+    }
+  }
+
   function closeCard() {
     if (root.closing) return
     root.closing = true
     var goingCard = root.card
+    root.cardScreen = null
     root.scrimOn = false
     scrimWatchdog.stop()
     if (goingCard) root.releaseToasts()
@@ -223,7 +250,8 @@ Item {
     var shape = root.notchShape()
     root.scrimOn = true
     scrimWatchdog.restart()
-    root.card = cardComponent.createObject(root, {
+    root.cardScreen = root.pickCardScreen()
+    var cardProps = {
       session: root.session,
       previewDevice: root.previewDevice,
       bottomRadius: shape.bottom,
@@ -236,7 +264,9 @@ Item {
         return indicator.appearancesFor(root.cardName)
       }),
       notice: Qt.binding(function () { return indicator.suppressedNotice })
-    })
+    }
+    if (root.cardScreen) cardProps.screen = root.cardScreen
+    root.card = cardComponent.createObject(root, cardProps)
     if (!root.card) {
       root.closeCard()
       return "the card could not be created"

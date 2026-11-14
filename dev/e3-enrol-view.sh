@@ -146,8 +146,7 @@ check "idle: the demo plays in the circle (the glyph is hidden) with its caption
 check "idle: no camera exists, previewOn is false, the preview Loader holds nothing" "0 previewOn false previewLoader empty" "$(field idle-cameras "$out")"
 check "idle: Cancel, Start and the Simple/Advanced choice; no Save, Done or Scan again" "cancel=1 start=1 save=0 done=0 again=0 mode=1" "$(field idle-links "$out")"
 check "idle: the choice shows BOTH modes and which is on (Simple filled)" "true/false Simple,Advanced" "$(field idle-modes "$out")"
-check "idle: the five stations are on the stage as faint marks (the ball covers the centre's)" \
-  "centre:open/0 left:open/0.55 top:open/0.55 right:open/0.55 bottom:open/0.55" "$(field idle-marks "$out")"
+check "idle: the ball is not on the screen yet (the layer is hidden; the card's little demo shows how it will go)" "shown false opacity 0 output 1600x900" "$(field idle-screen "$out")"
 check "idle: the Space key is not offered yet (nothing to press)" "hidden opacity 0 enabled false text to take the picture" "$(field idle-key "$out")"
 check "idle: nothing was sent and the helper was not started" "ready sent 0" "$(field idle-state "$out")"
 check "authorising: the camera comes on, the line says why we wait, only Cancel is offered" \
@@ -158,8 +157,8 @@ check "ready lists dot: phase dot, the ball waits on the centre, and NOTHING was
   "dot flow true waiting pose centre|[]" "$(field ready-phase "$out")|$(field ready-sent "$out")"
 check "the line names the pose, in plain words" "Look at the ball" "$(field ready-line "$out")"
 check "the Space key is shown as a key, and Start, Save and Done are not" "cancel=1 start=0 save=0 done=0 again=0 mode=0" "$(field ready-links "$out")"
-check "the ball is on the centre, its ring is open and breathing (between 20 and 24 px, and it moves)" \
-  "0 0 waiting centre|within true moves true" "$(ball ready-ball '"\(.x) \(.y) \(.state) \(.pose)"')|$(field breath "$out" | sed 's/^min [0-9.]* max [0-9.]* //')"
+check "the ball is on the SCREEN, at the middle of the 1600x900 output (800, 450), its ring open and breathing (between 28 and 34 px, and it moves)" \
+  "800 450 waiting centre|within true moves true" "$(ball ready-ball '"\(.x) \(.y) \(.state) \(.pose)"')|$(field breath "$out" | sed 's/^min [0-9.]* max [0-9.]* //')"
 check "the camera is on while the ball waits" "1" "$(field ready-cameras "$out")"
 check "Space is ONE press: the verb dot with the appearance and the pose, nothing else" '[{"cmd":"dot","appearance":"No glasses","pose":"centre"}]' "$(field press-sent "$out")"
 check "...the ball is capturing, the line says to hold still, and the key is off (no second press)" "capturing centre|Hold still|enabled false" "$(field press-state "$out")|$(field press-line "$out")|$(field press-key "$out" | grep -o 'enabled false')"
@@ -167,21 +166,21 @@ check "a second Space and a click on the key during the press send nothing" "1 d
 check "the ring closes in while frames come, and one of three does not close it" "capturing|1 of 3" "$(ball closing-1of3 .state)|$(field closing-good "$out")"
 check "two of three: the ring is held at most 0.3 + 0.7 x 2/3 of the way (0.77) and nothing is taken" "0.77 capturing held 0 line Hold still" "$(field closing-2of3 "$out")"
 check "three of three but the helper has not said dotted: the ring is as far as the frames allow, the ball is still capturing" "1 capturing pose centre" "$(field closing-3of3-undotted "$out")"
-check "dotted closes the ring on the ball (11 px, just outside it): landed, 'Got it', the centre is held, one capture is on the session" \
-  "landed held centre line Got it|0 0 11 1 landed centre|1 No glasses" "$(field landed "$out" | sed 's/ {.*//')|$(field landed "$out" | sed 's/^.* line Got it //' | jq -r '"\(.x) \(.y) \(.r) \(.close) \(.state) \(.pose)"')|$(field landed-captures "$out")"
+check "dotted closes the ring on the ball (15.4 px: 11 at 1.4 times, just outside it): landed, 'Got it', the centre is held, one capture is on the session" \
+  "landed held centre line Got it|800 450 15.4 1 landed centre|1 No glasses" "$(field landed "$out" | sed 's/ {.*//')|$(field landed "$out" | sed 's/^.* line Got it //' | jq -r '"\(.x) \(.y) \(.r) \(.close) \(.state) \(.pose)"')|$(field landed-captures "$out")"
 check "a Space in the beat after the ring closed is ignored" "ignored" "$(field landed-space "$out")"
-check "then the ball is on the left (120 px out), its ring open again, and the line names it" "true true waiting left|Turn to the ball on the left" "$(ball left-ball '"\((.x + 120 | fabs) < 3) \((.y | fabs) < 3) \(.state) \(.pose)"')|$(field left-line "$out")"
+check "then the ball is on the LEFT EDGE of the screen (64 px in, half way down), its ring open again, and the line names it" "true true waiting left|Turn to the ball on the left" "$(ball left-ball '"\((.x - 64 | fabs) < 3) \((.y - 450 | fabs) < 3) \(.state) \(.pose)"')|$(field left-line "$out")"
 check "the centre's station is filled in the accent (taken) and the left's is under the ball" "centre:taken/0.95 left:open/0 top:open/0.55 right:open/0.55 bottom:open/0.55" "$(field left-marks "$out")"
 check "the second press is for the left" '[{"cmd":"dot","appearance":"No glasses","pose":"left"}]' "$(field left-sent "$out")"
 check "somebody else (not_you): the ring opens again, the ball STAYS on the left, the line says why in plain words and in the urgent colour, and the key offers a retry" \
   "waiting | That did not look like you | true waiting left | shown opacity 1 enabled true text to try again | colour urgent" \
-  "$(field fail-notyou "$out" | awk -F' [|] ' '{print $1" | "$2}') | $(field fail-notyou "$out" | awk -F' [|] ' '{print $3}' | jq -r '"\((.x + 120 | fabs) < 3) \(.state) \(.pose)"') | $(field fail-notyou "$out" | awk -F' [|] ' '{print $4" | "$5}')"
+  "$(field fail-notyou "$out" | awk -F' [|] ' '{print $1" | "$2}') | $(field fail-notyou "$out" | awk -F' [|] ' '{print $3}' | jq -r '"\((.x - 64 | fabs) < 3) \(.state) \(.pose)"') | $(field fail-notyou "$out" | awk -F' [|] ' '{print $4" | "$5}')"
 check "...a failed press holds nothing new, and the retry is the same pose" 'centre|[{"cmd":"dot","appearance":"No glasses","pose":"left"}]' "$(field fail-held "$out" | sed 's/ links.*//')|$(field retry-sent "$out" | sed 's/ line.*//')"
-check "the top: the ball is 96 px above the centre, 'Look up at the ball', two stations filled" "true true waiting top|Look up at the ball|centre:taken/0.95 left:taken/0.95 top:open/0 right:open/0.55 bottom:open/0.55" \
-  "$(ball top-ball '"\((.x | fabs) < 3) \((.y + 96 | fabs) < 3) \(.state) \(.pose)"')|$(field top-line "$out")|$(field top-marks "$out")"
-check "the right: 'Turn to the ball on the right', 120 px out" "true true waiting right|Turn to the ball on the right" "$(ball right-ball '"\((.x - 120 | fabs) < 3) \((.y | fabs) < 3) \(.state) \(.pose)"')|$(field right-line "$out")"
+check "the top: the ball is on the TOP EDGE (64 px down, in the middle), 'Look up at the ball', two stations filled" "true true waiting top|Look up at the ball|centre:taken/0.95 left:taken/0.95 top:open/0 right:open/0.55 bottom:open/0.55" \
+  "$(ball top-ball '"\((.x - 800 | fabs) < 3) \((.y - 64 | fabs) < 3) \(.state) \(.pose)"')|$(field top-line "$out")|$(field top-marks "$out")"
+check "the right: the RIGHT EDGE (64 px in from 1600), half way down" "true true waiting right|Turn to the ball on the right" "$(ball right-ball '"\((.x - 1536 | fabs) < 3) \((.y - 450 | fabs) < 3) \(.state) \(.pose)"')|$(field right-line "$out")"
 check "after the right, Save is offered (the centre, left and right are held) and Done is not: the ball is on the bottom" \
-  "true true waiting bottom|Look down at the ball|cancel=1 start=0 save=1 done=0 again=0 mode=0" "$(ball bottom-ball '"\((.x | fabs) < 3) \((.y - 96 | fabs) < 3) \(.state) \(.pose)"')|$(field bottom-line "$out")|$(field bottom-links "$out")"
+  "true true waiting bottom|Look down at the ball|cancel=1 start=0 save=1 done=0 again=0 mode=0" "$(ball bottom-ball '"\((.x - 800 | fabs) < 3) \((.y - 836 | fabs) < 3) \(.state) \(.pose)"')|$(field bottom-line "$out")|$(field bottom-links "$out")"
 check "...four stations are filled" "centre:taken/0.95 left:taken/0.95 top:taken/0.95 right:taken/0.95 bottom:open/0" "$(field bottom-marks "$out")"
 check "too dark at the bottom says so; Save stays on offer" "Too dark | cancel=1 start=0 save=1 done=0 again=0 mode=0 | shown opacity 1 enabled true text to try again" "$(field bottom-fail "$out")"
 check "all five held: 'All set.', Done and Scan again, no Save; the ball is gone, the check is drawn, five stations filled" \
@@ -215,10 +214,32 @@ for pair in no_face:"No face found" too_dark:"Too dark" multiple_faces:"More tha
   check "$code: '$text', the ball waits on the centre, nothing is held, the key offers a retry" \
     "waiting | $text | held 0 pose centre | shown opacity 1 enabled true text to try again" "$(field fail-$code "$out" | sed 's/opacity 0\.9[0-9]*/opacity 1/')"
 done
+check "a too small face with the helper's percent says how much bigger (3.2.1), and a percent on any other code is ignored" "Come a little closer (about 14% bigger) | short 14|No face found | short 0" "$(field fail-short "$out")|$(field fail-short-ignored "$out")"
 check "a code from a later release still says something plain" "That did not work" "$(field fail-unknown "$out")"
 check "a failed press leaves what is held as it was; the next press is for the same pose" "left,left held centre" "$(field fail-same-pose "$out")"
 check "a refusal that is not about a press (a Save before the floor) is not a failed press: no reason appears" "| state waiting line Look up at the ball" "$(field fail-not-a-press "$out")"
 check "no failure made the view send a verb the table refuses" "0" "$(field fail-violations "$out")"
+
+step "Simple: the ball is on the real screen, positioned by the OUTPUT's size and nothing of the card's"
+out=$(run dot-screen E3_OUT_W=1000 E3_OUT_H=1200)
+idx=0
+for size in 1920x1080 2560x1440 1366x768 1080x1920 3840x1080; do
+  w=${size%x*}; h=${size#*x}
+  check "output $size: centre in the middle, left and right edges 64 px in half way down, top and bottom edges 64 px in, in the middle" \
+    "$size $((w / 2)),$((h / 2))|$size 64,$((h / 2))|$size $((w / 2)),64|$size $((w - 64)),$((h / 2))|$size $((w / 2)),$((h - 64))" \
+    "$(field out$idx-centre "$out")|$(field out$idx-left "$out")|$(field out$idx-top "$out")|$(field out$idx-right "$out")|$(field out$idx-bottom "$out")"
+  idx=$((idx + 1))
+done
+check "the session's own ball surface is the size of ITS output (1000x1200 here: the middle is 500,600), and the card's column is 320 px wide whatever the output" \
+  "1000x1200 500,600|the card's column is 320 px wide whatever the output" "$(field screen-centre "$out")|$(field card "$out")"
+least=$(field clearance "$out" | sed 's/.*: \(-\?[0-9]*\) px/\1/')
+check_ge "the whole ball, its ring at its widest, is inside every output: the least gap to the physical edge is at least 20 px" 20 "$least"
+check "the ball's code names no card, island or window size (only the output's width and height and the pose)" "0" \
+  "$(cd "$REPO" && sed -E 's#//.*$##' BallLayer.qml BallScreen.qml DotBall.qml | grep -cE '\b(card|island|ScanIsland|RecordCard|enrol|EnrolView|implicitHeight)\b')"
+check "the ball's window has no keyboard and no input, and is made after the card (so it is mapped above it)" "1 1 1 1" \
+  "$(grep -c 'WlrKeyboardFocus.None' "$REPO/ScanBall.qml") $(grep -c 'mask: Region { item: noInput }' "$REPO/ScanBall.qml") $(grep -c 'width: 0; height: 0' "$REPO/ScanBall.qml") $(grep -c 'interval: 220' "$REPO/ScanBall.qml")"
+check "the service makes ONE ball window, for the card's output only (the scrims stay on every output)" "1 1" \
+  "$(sed -E 's#//.*$##' "$REPO/Service.qml" | grep -c 'model: root.card && root.cardScreen ? \[root.cardScreen\] : \[\]') $(sed -E 's#//.*$##' "$REPO/Service.qml" | grep -c 'model: root.scrimOn ? Quickshell.screens : \[\]')"
 
 step "Simple: the helper closes a session after five presses that did not look like you, and the scan can start over"
 out=$(run dot-cap)
@@ -231,15 +252,15 @@ check "a new session counts from zero" "notyou 0 capped false phase dot waiting 
 step "Simple: the ring completes only with enough good frames, and never early"
 out=$(run dot-ring)
 check "two good frames of three, held for over two seconds: the ring never passes 0.77 and nothing is taken" "true|state capturing good 2 held 0" "$(field held-short-below "$out")|$(field held-short "$out" | sed 's/^max close [0-9.]* state/state/;s/ ring.*//')"
-check "dotted closes it (1, 11 px) and the pose is held" "1 landed held centre ring 11" "$(field closed "$out" | sed 's/ ring 11\.[0-9]*/ ring 11/')"
+check "dotted closes it (1, 15.4 px) and the pose is held" "1 landed held centre ring 15" "$(field closed "$out" | sed 's/ ring 15\.[0-9]*/ ring 15/')"
 check "a dotted that arrives early (a quick camera) still waits for the ring's second before the pose is applied" "held 1 state capturing|a second" "$(field early-dotted "$out")|$(field early-waited "$out")"
 check "a press that fails opens the ring again, from wherever it had got to, and the ball waits" "mid closing then 0 ring 2" "$(field reopened "$out" | sed 's/ ring 2[0-9.]* state waiting/ ring 2/;s/ ring 20\.[0-9]*.*/ ring 2/')"
 
 step "Simple under reduced motion: nothing depends on a running animation"
 out=$(run dot-reduced)
 check "idle: no demo, the glyph and one caption line" "demo none glyph true caption 'The ball moves left, up, right and down.'" "$(field reduced-idle "$out" | sed 's/^demo present/demo none/')"
-check "the ring is still (22 px, no breath), and stays so" "r 22 pulse running 0|r 22 pulse 0|waiting r 22" "$(field reduced-ring "$out")|$(field reduced-static "$out")|$(field reduced-waiting "$out")"
-check "a press closes the ring in steps with the frames (1 of 3: 0.53), and the ball is on its next station at once, no easing" "0.53|-120 0 waiting left easing true" \
+check "the ring is still (30.8 px, no breath), and stays so" "r 30.8 pulse running 0|r 30.8 pulse 0|waiting r 30.8" "$(field reduced-ring "$out")|$(field reduced-static "$out")|$(field reduced-waiting "$out")"
+check "a press closes the ring in steps with the frames (1 of 3: 0.53), and the ball is on its next station at once, no easing" "0.53|64 450 waiting left easing true" \
   "$(ball reduced-1of3 .close)|$(ball reduced-moved '"\(.x) \(.y) \(.state) \(.pose)"') easing $(field reduced-moved "$out" | sed 's/.*easing //')"
 check "a failed press opens the ring at once and says why" "close 0 line Too dark" "$(field reduced-failed "$out")"
 

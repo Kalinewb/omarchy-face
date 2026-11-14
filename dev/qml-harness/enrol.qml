@@ -31,6 +31,9 @@ ShellRoot {
   id: shellRoot
 
   readonly property string caseName: Quickshell.env("E3_CASE") || "simple"
+  // The output the ball is drawn on, for the cases that look at it
+  readonly property int outW: Number(Quickshell.env("E3_OUT_W") || "1600")
+  readonly property int outH: Number(Quickshell.env("E3_OUT_H") || "900")
   readonly property int stored: Number(Quickshell.env("E3_STORED") || "0")
   readonly property string outDir: Quickshell.env("E3_OUT") || "/tmp"
   readonly property string accentEnv: Quickshell.env("E3_ACCENT") || ""
@@ -213,6 +216,37 @@ ShellRoot {
       presence: 0
     }
 
+    // The ball's surface: output-sized, far from the card and outside the window's own 400 px, as a real output is
+    Face.BallScreen {
+      id: ballScreen
+      objectName: "ballScreen"
+      x: 500
+      y: 0
+      width: shellRoot.outW
+      height: shellRoot.outH
+      session: shellRoot.session
+      reducedMotion: shellRoot.reducedCase
+    }
+
+    // The geometry case: the same ball layer at five different output sizes (a laptop, a QHD and a small panel, a
+    // portrait output, an ultrawide), nothing of the card in any of them
+    Repeater {
+      id: outputs
+      model: shellRoot.caseName === "dot-screen" ? [[1920, 1080], [2560, 1440], [1366, 768], [1080, 1920], [3840, 1080]] : []
+      Face.BallLayer {
+        required property var modelData
+        required property int index
+        objectName: "output" + index
+        x: 0
+        y: 0
+        width: modelData[0]
+        height: modelData[1]
+        shown: true
+        reducedMotion: true
+        colors: harnessColors
+      }
+    }
+
     Loader {
       id: viewLoader
       active: sessionLoader.item !== null
@@ -378,6 +412,7 @@ ShellRoot {
     else if (c === "dot-esc") buildDotEsc()
     else if (c === "dot-fail") buildDotFail()
     else if (c === "dot-ring") buildDotRing()
+    else if (c === "dot-screen") buildDotScreen()
     else if (c === "dot-cap") buildDotCap()
     else if (c === "dot-reduced") buildDotReduced()
     else if (c === "dot-demo") buildDotDemo()
@@ -400,14 +435,21 @@ ShellRoot {
   }
 
   // ---- the dot scan (Simple) -------------------------------------------------------------------------
+  // The card's stage (the camera's circle and the idle demo)...
   function stageItem() { return named("stage") }
-  function ballItem() { return named("ball") }
-  function ringItem() { return named("ring") }
-  // Where the ball is on the stage, from the stage's middle, and the ring's radius
+  // ...and the ball on the SCREEN: BallScreen is the output-sized surface ScanBall.qml's window holds, here at a size
+  // of the script's choosing (E3_OUT_W x E3_OUT_H, 1600 x 900 by default) and nowhere near the card.
+  function ballItem() { return ballScreen.balls.ball }
+  // Where the ball is on the output, in px from its top left, and what its ring is doing
   function ballInfo() {
-    var st = stageItem(), b = ballItem()
-    return {x: Math.round(b.x - st.stageW / 2), y: Math.round(b.y - st.stageH / 2), r: r1(ring2().r), close: r1(st.close),
-            state: st.shownState, pose: st.pose, op: r1(b.opacity)}
+    var b = ballItem()
+    return {x: Math.round(b.x), y: Math.round(b.y), r: r1(ring2().r), close: r1(b.close),
+            state: b.ballState, pose: ballScreen.balls.pose, op: r1(b.opacity)}
+  }
+  function atPose(p) {
+    var t = Dot2.screenStation(p, shellRoot.outW, shellRoot.outH)
+    var b = ballInfo()
+    return Math.abs(b.x - t.x) < 2 && Math.abs(b.y - t.y) < 2
   }
   function ring2() { return find(ballItem(), "ballRing") }
   function dotLinks() {
@@ -420,7 +462,7 @@ ShellRoot {
   }
   function marks() {
     return ["centre", "left", "top", "right", "bottom"].map(function (p) {
-      var m = named("station-" + p)
+      var m = find(ballScreen.balls, "screenStation-" + p)
       return p + ":" + (m.taken ? "taken" : "open") + "/" + r1(m.opacity)
     }).join(" ")
   }
@@ -438,8 +480,7 @@ ShellRoot {
     at(function () { return function () { return session.dotState === "waiting" || session.dotState === "done" } }, 20)
     at(function () { return function () {
       var b = ballInfo()
-      var st = Dot2.STATION[session.dotPose]
-      return session.dotPose === "" || (Math.abs(b.x - st.x * stageItem().reachX) < 2 && Math.abs(b.y - st.y * stageItem().reachY) < 2)
+      return session.dotPose === "" || atPose(session.dotPose)
     } }, 20)
   }
 
@@ -455,7 +496,7 @@ ShellRoot {
       log("idle-links", dotLinks())
       log("idle-key", keyInfo())
       log("idle-modes", named("mode-simple").selected + "/" + named("mode-advanced").selected + " " + named("mode-simple").text + "," + named("mode-advanced").text)
-      log("idle-marks", marks())
+      log("idle-screen", "shown " + ballScreen.balls.shown + " opacity " + r1(ballScreen.balls.opacity) + " output " + shellRoot.outW + "x" + shellRoot.outH)
       log("idle-state", session.scanState + " sent " + sent.length)
       log("idle-descr", stageItem().Accessible.description)
     }, 900)
@@ -489,7 +530,7 @@ ShellRoot {
     for (var b = 0; b < 8; b++) at(function () { T.radii.push(ring2().r) }, 250)
     at(function () {
       var lo = Math.min.apply(null, T.radii), hi = Math.max.apply(null, T.radii)
-      log("breath", "min " + r1(lo) + " max " + r1(hi) + " within " + (lo >= 19.9 && hi <= 24.1) + " moves " + (hi - lo > 1))
+      log("breath", "min " + r1(lo) + " max " + r1(hi) + " within " + (lo >= 27.9 && hi <= 33.7) + " moves " + (hi - lo > 1))
       pressSpace()
     }, 10)
     at(function () {
@@ -530,7 +571,7 @@ ShellRoot {
       log("landed-space", sent.length === T.sentBefore ? "ignored" : "sent")
     }, 100)
     at(function () { return function () { return session.dotState === "waiting" } }, 20)
-    at(function () { return function () { return Math.abs(ballInfo().x + 120) < 2 } }, 20)
+    at(function () { return function () { return atPose("left") } }, 20)
     at(function () {
       log("left-ball", JSON.stringify(ballInfo()))
       log("left-line", line())
@@ -555,7 +596,7 @@ ShellRoot {
       feed({event: "dot", pose: "left", good: 3, need: 3}); dotted("left", ["centre", "left"])
     }, 150)
     at(function () { return function () { return session.dotPose === "top" && session.dotState === "waiting" } }, 20)
-    at(function () { return function () { return Math.abs(ballInfo().y + 96) < 2 && Math.abs(ballInfo().x) < 2 } }, 20)
+    at(function () { return function () { return atPose("top") } }, 20)
     at(function () {
       log("top-ball", JSON.stringify(ballInfo()))
       log("top-line", line())
@@ -596,7 +637,7 @@ ShellRoot {
       log("again-sent", "no new message: " + (sentCmds().split(",").filter(function (c) { return c === "dot" }).length) + " dots in all")
       log("again-state", session.scanState + " " + session.captures)
     }, 150)
-    at(function () { return function () { return Math.abs(ballInfo().x) < 2 && Math.abs(ballInfo().y) < 2 } }, 20)
+    at(function () { return function () { return atPose("centre") } }, 20)
     // a Return before all five does nothing; the retake: the centre again
     at(function () { view.activate(); log("again-return", sentCmds().split(",").pop()); pressSpace() }, 100)
     at(function () { log("retake-sent", JSON.stringify(sent.slice(-1))); feed({event: "dot", pose: "centre", good: 3, need: 3}); dotted("centre", ["centre"]) }, 100)
@@ -685,6 +726,13 @@ ShellRoot {
     at(function () { pressSpace() }, 80)
     at(function () { feed({event: "capture_failed", code: "from_the_future"}) }, 100)
     at(function () { log("fail-unknown", line()) }, 60)
+    // a too small face with the helper's percent says how much bigger; with a percent on any other code it is ignored
+    at(function () { pressSpace() }, 80)
+    at(function () { feed({event: "capture_failed", code: "too_far", short: 14}) }, 100)
+    at(function () { log("fail-short", line() + " | short " + session.dotShort) }, 60)
+    at(function () { pressSpace() }, 80)
+    at(function () { feed({event: "capture_failed", code: "no_face", short: 14}) }, 100)
+    at(function () { log("fail-short-ignored", line() + " | short " + session.dotShort) }, 60)
     // a failed press leaves the held poses as they were, and the next press is for the same pose
     at(function () { pressSpace() }, 80)
     at(function () { feed({event: "dotted", pose: "centre", poses: ["centre"], kept: 1}) }, 80)
@@ -704,6 +752,41 @@ ShellRoot {
       log("fail-not-a-press", before + "|" + session.dotWhy + " state " + session.dotState + " line " + line())
       log("fail-violations", violations)
     }, 100)
+  }
+
+  // ---- the ball goes to the screen's own edges, whatever the output and whatever the card ----------------------------
+  function buildDotScreen() {
+    var poses = ["centre", "left", "top", "right", "bottom"]
+    at(function () { }, 400)
+    poses.forEach(function (pose) {
+      at(function () {
+        for (var i = 0; i < outputs.count; i++) outputs.itemAt(i).pose = pose
+      }, 60)
+      at(function () {
+        for (var i = 0; i < outputs.count; i++) {
+          var o = outputs.itemAt(i)
+          var b = o.ball
+          log("out" + i + "-" + pose, o.width + "x" + o.height + " " + Math.round(b.x) + "," + Math.round(b.y))
+        }
+        // the ball on the session's own surface (the harness's output size), and the card's size, which has nothing to do with it
+        log("screen-" + pose, shellRoot.outW + "x" + shellRoot.outH + " " + Math.round(ballScreen.balls.target.x) + "," + Math.round(ballScreen.balls.target.y))
+      }, 20)
+    })
+    at(function () {
+      // the whole ball (its ring at its widest) is inside the output at every station of every output
+      var worst = 1e9
+      for (var i = 0; i < outputs.count; i++) {
+        var o = outputs.itemAt(i)
+        var ring = (Dot2.REST + Dot2.BREATH) * Dot2.SCREEN_UNIT
+        for (var k = 0; k < poses.length; k++) {
+          var t = Dot2.screenStation(poses[k], o.width, o.height)
+          worst = Math.min(worst, t.x - ring, o.width - t.x - ring, t.y - ring, o.height - t.y - ring)
+        }
+      }
+      log("clearance", "least gap between the widest ring and the physical edge over all outputs: " + Math.round(worst) + " px")
+      log("card", "the card's column is " + (named("dotCard") ? Math.round(named("dotCard").width) : -1) + " px wide whatever the output")
+      log("sizes", "the margin is " + Dot2.SCREEN_MARGIN + " and the unit " + Dot2.SCREEN_UNIT)
+    }, 20)
   }
 
   // ---- the helper closes a session after DOT_NOT_YOU_CAP presses that did not look like you ------------------------
@@ -783,7 +866,7 @@ ShellRoot {
     at(function () { }, 900)
     at(function () {
       log("reduced-idle", "demo " + (demoItem() === null ? "none" : "present") + " glyph " + named("glyph").visible + " caption '" + named("caption").text + "'")
-      log("reduced-ring", "r " + r1(ring2().r) + " pulse running " + stageItem().pulse)
+      log("reduced-ring", "r " + r1(ring2().r) + " pulse running " + ballItem().pulse)
       session.start()
     }, 200)
     at(function () { ready(true) })
@@ -791,12 +874,12 @@ ShellRoot {
       var a = ring2().r
       log("reduced-waiting", ballInfo().state + " r " + r1(a))
     }, 300)
-    at(function () { log("reduced-static", "r " + r1(ring2().r) + " pulse " + stageItem().pulse) }, 500)
+    at(function () { log("reduced-static", "r " + r1(ring2().r) + " pulse " + ballItem().pulse) }, 500)
     at(function () { pressSpace() }, 50)
     at(function () { feed({event: "dot", pose: "centre", good: 1, need: 3}) }, 100)
     at(function () { log("reduced-1of3", JSON.stringify(ballInfo())); feed({event: "dot", pose: "centre", good: 3, need: 3}); dotted("centre", ["centre"]) }, 100)
     at(function () { return function () { return session.dotState === "waiting" } }, 20)
-    at(function () { log("reduced-moved", JSON.stringify(ballInfo()) + " easing " + (ballItem().x === stageItem().stageW / 2 + stageItem().targetX)) }, 5)
+    at(function () { log("reduced-moved", JSON.stringify(ballInfo()) + " easing " + (ballItem().x === ballScreen.balls.target.x)) }, 5)
     at(function () { pressSpace(); feed({event: "capture_failed", code: "too_dark"}) }, 100)
     at(function () { log("reduced-failed", "close " + ballInfo().close + " line " + line()) }, 5)
   }
@@ -817,12 +900,14 @@ ShellRoot {
       t0 = Date.now()
       return function () {
         note()
-        var f = demoItem().frame, i = ballInfo()
+        // the card's little demo ball (named "ball" inside the stage), from the circle's middle
+        var f = demoItem().frame, db = named("ball"), st = stageItem()
+        var i = {x: db.x - st.stageW / 2, y: db.y - st.circleY, close: db.close}
         if (f.pose === "left" && f.close >= 0.95 && i.close >= 0.9) seen.leftClosed = true
-        if (f.pose === "left" && i.x < -100) seen.leftBall = true
-        if (f.pose === "top" && i.y < -80) seen.topBall = true
-        if (f.pose === "right" && i.x > 100) seen.rightBall = true
-        if (f.pose === "bottom" && i.y > 80) seen.bottomBall = true
+        if (f.pose === "left" && i.x < -90) seen.leftBall = true
+        if (f.pose === "top" && i.y < -60) seen.topBall = true
+        if (f.pose === "right" && i.x > 90) seen.rightBall = true
+        if (f.pose === "bottom" && i.y > 60) seen.bottomBall = true
         if (f.pose === "left" && f.yaw < -0.9) seen.leftYaw = true
         if (f.pose === "right" && f.yaw > 0.9) seen.rightYaw = true
         if (f.pose === "top" && f.pitch > 0.9) seen.upPitch = true
@@ -1362,13 +1447,13 @@ ShellRoot {
       at(function () { feed({event: "dot", pose: "centre", good: 2, need: 3}) }, 500)
       at(function () { shoot(m + "-3-closing") }, 300)
       at(function () { feed({event: "dot", pose: "centre", good: 3, need: 3}); dotted("centre", ["centre"]) }, 100)
-      at(function () { return function () { return session.dotState === "waiting" && Math.abs(ballInfo().x + 120) < 2 } }, 20)
+      at(function () { return function () { return session.dotState === "waiting" && atPose("left") } }, 20)
       at(function () { shoot(m + "-4-left") }, 300)
       at(function () { pressSpace() }, 100)
       at(function () { feed({event: "capture_failed", code: "no_face"}) }, 300)
       at(function () { shoot(m + "-5-nofacefound") }, 300)
       at(function () { feed({event: "dotted", pose: "right", poses: ["centre", "left", "top", "right"], kept: 4}) }, 100)
-      at(function () { return function () { return session.dotState === "waiting" && Math.abs(ballInfo().y - 96) < 2 } }, 20)
+      at(function () { return function () { return session.dotState === "waiting" && atPose("bottom") } }, 20)
       at(function () { shoot(m + "-6-save") }, 300)
       at(function () { feed({event: "dotted", pose: "bottom", poses: ["centre", "left", "top", "right", "bottom"], kept: 5}) }, 100)
       at(function () { return function () { return session.dotState === "done" } }, 20)

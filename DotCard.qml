@@ -5,7 +5,8 @@ import qs.Ui
 import "common"
 import "common/dotscan.js" as Dot
 
-// The dot scan's card (3.2.0), Simple's face: a ball on a stage, the line, the Space key, the links.
+// The dot scan's card (3.2.0), Simple's face: the camera's circle, the line, the Space key, the links. The ball
+// is not on this card (3.3.0): it is on the real screen, in BallLayer.qml, so the person turns towards the screen's edges.
 // It decides nothing. RecordSession.qml holds what the scan is doing (which pose the ball waits
 // for, whether a press is running, how many frames the helper has gathered, why the last one did
 // not work) and the helper decides whether a face is good; this file is what that looks like.
@@ -62,7 +63,7 @@ Item {
     if (card.dotState === "capturing") return "Hold still"
     if (card.finished || (card.dotState === "landed" && s.dotAllHeld)) return "All set."
     if (card.dotState === "landed") return "Got it"
-    if (s.dotWhy !== "") return Dot.why(s.dotWhy)
+    if (s.dotWhy !== "") return Dot.why(s.dotWhy, s.dotShort)
     return Dot.PROMPT[s.dotPose] !== undefined ? Dot.PROMPT[s.dotPose] : ""
   }
   readonly property string line: card.lineText()
@@ -107,12 +108,10 @@ Item {
       objectName: "stage"
       anchors.horizontalCenter: parent.horizontalCenter
       ballState: card.playing ? card.dotState : "idle"
-      // the ball stays on the pose just taken for the beat the ring is closed, then moves on
-      pose: !card.playing || !card.session ? "centre"
-            : (card.dotState === "landed" ? card.session.dotLast : card.session.dotPose)
-      held: card.session ? card.session.dotHeld : []
-      good: card.session ? card.session.dotGood : 0
-      need: card.session ? card.session.dotNeed : 3
+      summary: !card.playing || !card.session ? "The camera"
+               : (card.session.dotAllHeld ? "All five pictures taken"
+                  : Dot.count(card.session.dotHeld) + " of " + Dot.POSES.length + " pictures taken. "
+                    + "Look at the ball on the screen: " + (Dot.PROMPT[card.session.dotPose] || ""))
       colors: ({ foreground: card.fg, secondary: card.secondary, accent: card.accent })
       reducedMotion: card.reduced
       masked: card.previewShown

@@ -60,14 +60,34 @@ function closing(elapsedMs, good, need) {
   return clamp(Math.min(elapsedMs / RING_MS, 0.3 + 0.7 * frames), 0, 1)
 }
 
+// --- the stations on the SCREEN (3.3.0) ------------------------------------------------------
+//
+// The ball does not stay on the card. It goes to the real screen: the middle of the output for the
+// centre (where a person looks when they unlock), and the left, top, right and bottom EDGES of the output the
+// card is on, so the head physically turns towards the sides of the screen. A pure function of the output's
+// size, never of the card's: `w` and `h` are the output's width and height in px. SCREEN_MARGIN keeps the
+// ball's centre that far from the physical edge, so the ball and its breathing ring (about 34 px at
+// SCREEN_UNIT) are whole and not under a bar.
+var SCREEN_MARGIN = 64
+var SCREEN_UNIT = 1.4
+function screenStation(pose, w, h) {
+  var cx = w / 2, cy = h / 2, m = SCREEN_MARGIN
+  if (pose === "left") return { x: m, y: cy }
+  if (pose === "right") return { x: w - m, y: cy }
+  if (pose === "top") return { x: cx, y: m }
+  if (pose === "bottom") return { x: cx, y: h - m }
+  return { x: cx, y: cy }
+}
+
 // The ring's radius in pixels: wide at rest (breathing between REST and REST + BREATH), then in
 // to just outside the ball as it closes.
 var BALL = 8
 var REST = 20
 var BREATH = 4
-function ringRadius(close, pulse) {
-  var open = REST + BREATH * clamp(pulse, 0, 1)
-  return open - (open - (BALL + 3)) * clamp(close, 0, 1)
+function ringRadius(close, pulse, unit) {
+  var u = unit === undefined ? 1 : unit
+  var open = (REST + BREATH * clamp(pulse, 0, 1)) * u
+  return open - (open - (BALL + 3) * u) * clamp(close, 0, 1)
 }
 
 // What the line says for the pose the ball is on.
@@ -99,7 +119,10 @@ var WHY = {
   bad_sweep: "Something went wrong"
 }
 
-function why(code) {
+// `short` is the helper's whole percent by which a too small face has to look bigger (1 to 99), when it said one
+function why(code, short) {
+  if (code === "too_far" && Number(short) >= 1)
+    return "Come a little closer (about " + Math.round(Number(short)) + "% bigger)"
   return WHY[code] !== undefined ? WHY[code] : "That did not work"
 }
 
