@@ -754,12 +754,21 @@ def test_pick():
     check("lock keeps no ordinary template beyond HARD or r 2.2",
           all(extra["band"] == "usual" or (extra["r"] <= 2.2 and sw.distance(extra["encoding"], enc(0.0)) <= 0.55) for _, extra in lock))
     tiny = {"appearances": [{"label": "A", "time": 1, "encoding": enc(0.0),
-                             "extra": [make_extra("a000", "near", 1.4, 3, 0.6, 5), make_extra("a030", "near", 2.3, 3, 0.1, 6),
+                             "extra": [make_extra("a000", "near", 1.4, 3, 0.63, 5), make_extra("a030", "near", 2.3, 3, 0.1, 6),
                                        make_extra("a060", "far", 1.4, 3, 0.55, 7), make_extra("a090", "near", 1.5, 3, 0.40, 8),
                                        make_extra("a120", "near", 1.51, 3, 0.1, 9)]}]}
-    check("lock drops HARD+ (a000) and r > 2.2 (a030), keeps exactly HARD (a060)",
+    check("lock drops past DOT_TOP_HARD (a000 at 0.63) and r > 2.2 (a030), keeps exactly HARD (a060)",
           {key_of(tiny, ref)[1] for ref in sw.pick(tiny, "lock", 12)} == {"centre", "a060", "a090", "a120"},
           str({key_of(tiny, ref)[1] for ref in sw.pick(tiny, "lock", 12)}))
+    topish = {"appearances": [{"label": "A", "time": 1, "encoding": enc(0.0),
+                               "extra": [make_extra("a000", "near", 1.6, 3, 0.62, 5), make_extra("a150", "near", 1.6, 3, 0.56, 6),
+                                         make_extra("a090", "near", 1.6, 3, 0.56, 7), make_extra("a180", "near", 1.6, 3, 0.5501, 8)]}]}
+    check("lock takes the TOP pose (a000) up to DOT_TOP_HARD (0.62) from its centre and every other pose only up to HARD (0.55): a150, a090 at 0.56 and a180 at 0.5501 are dropped",
+          {key_of(topish, ref)[1] for ref in sw.pick(topish, "lock", 12)} == {"centre", "a000"},
+          str({key_of(topish, ref)[1] for ref in sw.pick(topish, "lock", 12)}))
+    topish["appearances"][0]["extra"][0] = make_extra("a000", "near", 1.6, 3, 0.6201, 5)
+    check("...and a000 at 0.6201 is dropped; sudo (policy centre) never takes it", "a000" not in {key_of(topish, ref)[1] for ref in sw.pick(topish, "lock", 12)}
+          and {key_of(topish, ref)[1] for ref in sw.pick(topish, "sudo", 12)} == {"centre"})
     check("sudo keeps r 1.5 at 0.40 (a090), drops r 1.51 (a120) and 0.55 away (a060)",
           {key_of(tiny, ref)[1] for ref in sw.pick(tiny, "sudo", 12)} == {"centre", "a090"},
           str({key_of(tiny, ref)[1] for ref in sw.pick(tiny, "sudo", 12)}))
@@ -1036,6 +1045,9 @@ def test_dot():
           and len({k for k, _ in sw.DOT_REASONS}) == len(sw.DOT_REASONS))
     check("the need fits the child's argument bound (1..9), a press fits inside the store's support bound (2..99), and Simple's stored cap holds five",
           1 <= sw.DOT_NEED <= 9 and 2 <= sw.DOT_NEED <= 99 and sw.SIMPLE_MAX_STORED >= 5)
+    check("per-pose guard limits: the top pose has DOT_TOP_CHAIN 0.60 and DOT_TOP_HARD 0.62 (HARD never under CHAIN), every other pose the 3.1.x CHAIN 0.40 and HARD 0.55",
+          sw.dot_limits("top") == (sw.DOT_TOP_CHAIN, sw.DOT_TOP_HARD) == (0.60, 0.62) and sw.DOT_TOP_CHAIN <= sw.DOT_TOP_HARD
+          and all(sw.dot_limits(p) == (sw.CHAIN, sw.HARD) == (0.40, 0.55) for p in ("centre", "left", "right", "bottom")))
     check("a press cannot out-wait its own ceiling: DOT_SECONDS is short (under 10 s) and positive", 0 < sw.DOT_SECONDS < 10)
 
     # --- dot_short: how much bigger a too-small face has to look (3.2.1)

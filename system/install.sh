@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # omarchy-face v2
-# omarchy-face-version: 3.2.1
+# omarchy-face-version: 3.2.2
 #
 # Every install of Face's system half -- the first one, an upgrade, and a
 # repair -- and the only way root ever receives files from the plugin folder.
@@ -116,16 +116,16 @@ logger -t omarchy-face -p auth.notice -- \
 # exactly this; there is no other list, so a name missing here is never copied.
 # pins:begin
 declare -A PINS=(
-  [omarchy-face-admin]=ead17332ca910cdb7250714b3a6191dfee9276c8f0815ef9a41ec2ba66e0b058
-  [omarchy-face-gate]=664dcfd9991ea03e88cb2a190e2ad7de79f263ac82c414f9e1c1bc0cc6ce28cf
-  [omarchy-face-verify]=5fb430e3496591ac3590eb8d6c9cc9010f778c48a123c306d7adabec58f14ebb
-  [omarchy-faced]=6a2093609ad750b0f6837680fc05198bc4c0c26f6a62466568cac34f06b6ae0e
-  [omarchy-face-identity]=a691ef62ab8f00daf575256aaff0fed5c3d874274f8f7419e9095c679948d975
-  [omarchy-face-lock-verify]=919c49a9382ede46d21d4e05419c70ba6986d70a8a02213b357526cb7e11759b
-  [omarchy-face-camera]=d25d92b4c549527261ff107caa9e379eaf762b3d762e5bd3eefcd57784770c31
-  [omarchy-faced.socket]=be0a2d7a3c97a1bc1e7a0966062d0186d7d34df0b64cf8fe1ac82961b6d54efb
-  [omarchy-faced.service]=eb78a5b546eabca449062c84fa2674dfe14b9563b401772ba262e470e3011dbd
-  [no.kalinewb.face.policy]=d21140c7a0b46e22552b35c0dba2a13d7f39b7d76752ff41c9279d242f3722de
+  [omarchy-face-admin]=65c3274135c49a639f88a866e3959fe3c358a8194aa35faed8df9f57436227f0
+  [omarchy-face-gate]=327a139fe21ef99f3262084196e06d1bb6c8590d5c2eac15c0d4e3a3f8f08ec0
+  [omarchy-face-verify]=9e3bc519327afcfc1b2b2af4742e0e9a05b1ad804850932f0267faca169cccc6
+  [omarchy-faced]=ef73b6cff84d18fbb316bddf928e4f9659fb3cdefce7bb3d9191a213bf2b30b3
+  [omarchy-face-identity]=e28cdabc7a4437f6e4642f051093501ed63ba27b5ef37b8669832b0fd9895497
+  [omarchy-face-lock-verify]=ae079eb60f1fa86857b9df211952fb3a0fb1f5cf02bad3037ceba2f4680ef698
+  [omarchy-face-camera]=c55da4ae2dd1c6aafa5934d914051817ac5b7c17336ca9f0c568db4eba3a27bb
+  [omarchy-faced.socket]=dfe60be3c4748188e8446b6eed65694dbe458f587b6ed301f8b99bae868a90d2
+  [omarchy-faced.service]=18b4af3e85f1073da22844bce93286327e2b4764e704e50958e1713a0246281e
+  [no.kalinewb.face.policy]=b351d47257cce5d6132449ce2feede05280d65018bfa07a2883725b0f5511599
 )
 # pins:end
 

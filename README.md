@@ -195,7 +195,7 @@ sudo /usr/bin/bash -c 'PATH=/usr/bin; set -o pipefail; t=$(mktemp -d) || exit 1
     bash "$t/install.sh" "$1" "$2"
   }
   run "$@"; s=$?; rm -rf -- "$t"; exit $s' \
-  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.2.1
+  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.2.2
 ```
 
 What it does, from the button or from a terminal: root copies the installer out of the
@@ -284,6 +284,31 @@ command puts it back byte for byte, moves the folders back and restarts the shel
 A git checkout goes back to the commit it came from (`v2.2.0` when the system files are
 already 3.0.0). A copy installed with `./install.sh` has no commit to go back to: run
 `git checkout v2.2.0 && ./install.sh` in your checkout afterwards.
+
+### Updating from 3.2.1 (to 3.2.2)
+
+One change, in root code (Setup offers **Update Face's system files**, one password): **the top pose is judged more loosely than the other four.**
+Your live scan took the centre (eyes 46 px apart) and the left (0.29 from the centre) and then refused the top four times, "That did not
+look like you": the up pictures sat 0.46-0.60 from the first picture (0.52, 0.60, 0.54, 0.46, the largest distance of each press), and the rule
+was 0.40 to the nearest stored picture and 0.55 to the first. Three of the four presses were refused by the 0.40 rule (their frames were under
+0.55 from the first picture), the second possibly by both; the fourth had three good frames but not three in a row. In three presses your face
+also read 36-40 px between the eyes against the first picture's 46, and a smaller face sits farther from a bigger one's picture, so part of the
+distance was your leaning back. For the **top pose only**, a picture may now be up to **0.60** from the nearest stored picture and **0.62**
+from the first (`DOT_TOP_CHAIN`, `DOT_TOP_HARD`); left, right and bottom keep 0.40 and 0.55, and the runs (three in a row to take it, five in a
+row to refuse it) and the five-refusals cap are unchanged. The lock screen takes a stored top picture up to 0.62 from the first one; Sudo is
+unchanged (the first picture only).
+
+What it admits, honestly, because it is the largest loosening Face has had. Dlib's own default for "same person" is 0.6, and the top pose now
+takes anybody who looks that much like you. In the fake-camera test (20 presses per cell, uniform wobble of 0.08 or Gaussian 0.04 from frame to
+frame), somebody whose pictures sit on average 0.46, 0.50, 0.54 or 0.58 from yours was refused every time under 3.2.1 (0 of 20, both wobbles)
+and is **stored every time** under 3.2.2 (20 of 20 at 0.46, 0.50, 0.54; 19-20 of 20 at 0.58); 0.60 stores 17-18 of 20, 0.62 5-12 of 20, 0.64
+0-4 of 20 and 0.66 none. So a lookalike (a relative, a similar face) can be enrolled as your up picture. There is no real stranger data anywhere
+in this project, so what that means for a real second person is **not measured**; what the numbers show is only where the line now is. What it
+does not do: the first picture is still needed, the other four poses are as strict as before, it needs your authorised session and a person
+in front of the camera pressing Space, and a stored up picture helps only the lock screen. If you would rather not have this, tell me and the
+top pose goes back to 0.40 and 0.55 (and you may need to lean forward a little, so your face stays as big as it was in the first picture).
+The debug trace now says which bound refused a press (`refused_hard`: over 0.62/0.55 from the first picture, `refused_chain`: over 0.60/0.40
+from the nearest stored one, `maxrun`: the longest run of good frames, `end=`: ok, run or time), so the journal answers it directly next time.
 
 ### Updating from 3.2.0 (to 3.2.1)
 

@@ -325,12 +325,32 @@ def grid(name):
     return _identity(_late2_base(), 135, float(gap), float(wobble), seed=int(seed))
 
 
+def _identity_gauss(frames, start, gap, sigma, seed=7):
+    """Like _identity, but each frame's gap is Gaussian (mean `gap`, standard deviation `sigma`), the other wobble model."""
+    import random
+    rng = random.Random(seed)
+    out = []
+    for i, frame in enumerate(frames):
+        frame = dict(frame)
+        if i >= start:
+            frame["who"] = max(0.0, rng.gauss(gap, sigma))
+        out.append(frame)
+    return out
+
+
 def straddle(name):
-    """dot-straddle:GAP:WOBBLE:SEED -- a LEFT press by somebody whose descriptor is GAP from the centre's, plus a per-frame
-    wobble of up to +-WOBBLE (seeded), from the first frame. At GAP 0.46 and WOBBLE 0.08 about one frame in eight is within
-    CHAIN: the lookalike that 3.2.0 as first built stored in most presses. At 0.30 or 0.34 it is the owner's proxy."""
-    _, gap, wobble, seed = name.split(":")
-    return _identity(dot_press("left", drift=0.0), 0, float(gap), float(wobble), seed=int(seed))
+    """dot-straddle:GAP:WOBBLE:SEED[:MODEL[:POSE]] -- a press of POSE (default left) by somebody whose descriptor is GAP from the
+    centre's, plus a per-frame wobble from the first frame: MODEL `uni` (default; up to +-WOBBLE, uniform) or `gauss` (standard
+    deviation WOBBLE). At GAP 0.46 and WOBBLE 0.08 about one frame in eight is within 0.40: the lookalike that 3.2.0 as first
+    built stored in most presses. At 0.30 or 0.34 it is the owner's proxy. For POSE top the limits are DOT_TOP_CHAIN and DOT_TOP_HARD."""
+    parts = name.split(":")
+    _, gap, wobble, seed = parts[:4]
+    model = parts[4] if len(parts) > 4 else "uni"
+    pose = parts[5] if len(parts) > 5 else "left"
+    frames = dot_press(pose, drift=0.0)
+    if model == "gauss":
+        return _identity_gauss(frames, 0, float(gap), float(wobble), seed=int(seed))
+    return _identity(frames, 0, float(gap), float(wobble), seed=int(seed))
 
 
 def main(argv):
