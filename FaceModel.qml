@@ -507,6 +507,11 @@ Item {
     // the popup closes is about a switch that has already been read back
     // through the status document, and must not surface on some later visit.
     root.resumeWord = ""
+    // Closing forgets where the popup was (3.3.0): the next open starts at the home, or at the route it is
+    // opened at (openAt / openWithBase set the stack after this, never before), not at whatever view was
+    // last on screen. Esc already pops one step at a time, so a close from deeper in is a click outside or the bar.
+    root.resetView("setup")
+    root.personName = ""
   }
 
   // --- recording a face ------------------------------------------------------------

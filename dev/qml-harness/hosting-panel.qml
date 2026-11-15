@@ -18,6 +18,8 @@ import "face" as Face
 //                       hosted   the notch's panel: the REAL Surface.qml, its
 //                                `panel` Component created the way the host
 //                                creates it, on a stand-in host
+//                       reset    the popup's model alone: closing it resets the view stack to the
+//                                home, an open route still lands where it asked (3.3.0; headless)
 //                       test     Test pressed in the hosted panel (see below)
 //                       record   Scan pressed in the hosted panel: it must ask
 //                                the Face service for its card and close the
@@ -169,6 +171,65 @@ ShellRoot {
   }
   Timer { id: recordExit; interval: 900; onTriggered: Qt.exit(0) }
 
+  // The popup forgets where it was when it closes (FaceModel.onOpenedChanged), and an open route still wins.
+  property int closeRequests: 0
+  function runReset(m) {
+    var steps = []
+    function state() { return m.view + " stack " + m.viewStack.length + " person '" + m.personName + "'" }
+    m.closeRequested.connect(function () { shellRoot.closeRequests += 1 })
+    // a bar press with the stack at the home: FacePanel opens at the bar's target on top of the home
+    function barPress() {
+      if (!m.opened && m.viewStack.length === 1 && m.view !== m.barTarget) m.openWithBase(m.barTarget)
+      m.opened = true
+    }
+    steps.push(function () {
+      m.opened = false
+      shellRoot.log("start", state())
+      m.openWithBase("people"); m.opened = true
+      m.openPerson("anna")
+      shellRoot.log("deep", state())
+      m.opened = false
+      shellRoot.log("closed-deep", state())
+      barPress()
+      shellRoot.log("bar-reopen", state() + " barTarget " + m.barTarget)
+      m.opened = false
+      m.openWithBase("settings"); m.opened = true
+      shellRoot.log("settings", state())
+      m.opened = false
+      shellRoot.log("closed-settings", state())
+      // Esc: pops one step, then closes
+      m.openWithBase("people"); m.opened = true
+      m.back()
+      shellRoot.log("esc-1", state() + " closes " + shellRoot.closeRequests)
+      m.back()
+      shellRoot.log("esc-2", state() + " closes " + shellRoot.closeRequests)
+      m.opened = false
+      // a route: openAt lands where it asked, even straight after a close from somewhere else
+      m.openWithBase("settings"); m.opened = true; m.opened = false
+      shellRoot.log("route-from", state())
+      shellRoot.log("route", m.openAt("person", "anna"))
+    })
+    steps.push(function () {
+      shellRoot.log("route-landed", state())
+      m.opened = true
+      shellRoot.log("route-open", state())
+      m.opened = false
+      shellRoot.log("route-closed", state())
+      // resumeAt (the lock switch handing back): the word is kept for the view it opens on, cleared on close
+      shellRoot.log("resume", m.resumeAt("settings", "lock-on"))
+    })
+    steps.push(function () {
+      m.opened = true
+      shellRoot.log("resume-landed", state() + " word '" + m.resumeWord + "'")
+      m.opened = false
+      shellRoot.log("resume-closed", state() + " word '" + m.resumeWord + "'")
+      Qt.exit(0)
+    })
+    var i = 0
+    var timer = Qt.createQmlObject('import QtQuick; Timer { interval: 700; repeat: true; running: true }', shellRoot)
+    timer.triggered.connect(function () { if (i < steps.length) steps[i++](); else timer.stop() })
+  }
+
   function grab(item, label) {
     item.grabToImage(function (result) {
       shellRoot.log("size", Math.round(item.width) + "x" + Math.round(item.height))
@@ -252,10 +313,11 @@ ShellRoot {
     onTriggered: {
       ticks += 1
       if (ticks > 80) { shellRoot.log("timeout", "no status/people in 20 s"); Qt.exit(1); return }
-      if (shellRoot.caseName === "stock" || shellRoot.caseName === "popup") {
-        var m = shellRoot.caseName === "stock" ? stockModel : shellRoot.stockPanel
+      if (shellRoot.caseName === "stock" || shellRoot.caseName === "popup" || shellRoot.caseName === "reset") {
+        var m = shellRoot.caseName === "popup" ? shellRoot.stockPanel : stockModel
         if (!m || m.status === null || m.people === null) return
         running = false
+        if (shellRoot.caseName === "reset") { shellRoot.runReset(m); return }
         var parts = shellRoot.route.split(":")
         m.openAt(parts[0], parts.length > 1 ? parts[1] : "")
         settle.start()

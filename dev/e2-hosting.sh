@@ -449,6 +449,26 @@ check "nothing in the panel's files shows or hosts a recording any more" "0" \
 check "the Face service answers record with the card and never asks the notch (no routing, no heartbeat, no enrol.json)" "0" \
   "$(cd "$REPO" && ls NotchRoute.qml 2>/dev/null | wc -l; sed -E 's#//.*$##' Service.qml | grep -cE 'NotchRoute|omarchy-shell.*notch|platform\.json|enrol\.json|notchPending')" | awk '{s+=$1} END {print s}'
 
+step "(xiv) the popup opens on the home: closing forgets the last view, and a route still lands where it asked (3.3.0)"
+# Before 3.3.0 closing left the view stack alone, so the bar button reopened the popup on whatever view was last
+# on screen (Settings, a person). FaceModel now resets the stack on every close; openAt / openWithBase / resumeAt set it after.
+reset_run() {
+  env "${face_env[@]}" FACE_HARNESS_CASE=reset FACE_HARNESS_ROUTE=people FACE_HARNESS_HOST=identity \
+    timeout 60 quickshell -p "$panel_root" -n 2>&1 | tee -a "$logs/render.log" \
+    | sed -n 's/^.*HARNESS \([a-zA-Z0-9-]*\) \(.*\)$/\1=\2/p'
+}
+x1=$(reset_run)
+check "People over the home, then a person: three steps deep" "person stack 3 person 'anna'" "$(field deep "$x1")"
+check "a person two steps in, then close: the stack is the home alone and no person is remembered" "setup stack 1 person ''" "$(field closed-deep "$x1")"
+check "the bar button then opens at its own target on top of the home (people, with Back to the home), as before" "people stack 2 person '' barTarget people" "$(field bar-reopen "$x1")"
+check "Settings, then close: the home alone" "setup stack 1 person ''" "$(field closed-settings "$x1")"
+check "Esc pops one step and does not close; Esc on the home closes (once)" "setup stack 1 person '' closes 0|setup stack 1 person '' closes 1" "$(field esc-1 "$x1")|$(field esc-2 "$x1")"
+check "a route opened straight after a close from Settings lands on its view (the person, over the home) and is kept while open" "setup stack 1 person ''|ok|person stack 2 person 'anna'|person stack 2 person 'anna'" \
+  "$(field route-from "$x1")|$(field route "$x1")|$(field route-landed "$x1")|$(field route-open "$x1")"
+check "…and closing it goes back to the home" "setup stack 1 person ''" "$(field route-closed "$x1")"
+check "a resume (the lock switch handing back) opens Settings with its word, and the close clears the word and the view" "ok|settings stack 2 person '' word 'lock-on'|setup stack 1 person '' word ''" \
+  "$(field resume "$x1")|$(field resume-landed "$x1")|$(field resume-closed "$x1")"
+
 step "(vii) available is false until the status has answered and the engine row says installed"
 avail() { # avail <fixture> -> "<at creation> <after the read>"
   env "${face_env[@]}" OMARCHY_FACE_DEV_FIXTURE="$1" FACE_HARNESS_CASE=available \

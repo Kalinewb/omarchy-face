@@ -213,7 +213,8 @@ Panel {
       // else the notch answers, and under any other bar, the popup is ours.
       if (!root.opened && root.hostTook(root.barTarget)) return
       // Opening from the bar starts where the button said it would. Closing
-      // leaves the stack alone, so reopening returns to the same place.
+      // resets the stack to the home (FaceModel.onOpenedChanged), so a reopen
+      // never returns to the last view.
       if (!root.opened && root.viewStack.length === 1 && root.view !== root.barTarget)
         root.openWithBase(root.barTarget)
       root.toggle()

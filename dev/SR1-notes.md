@@ -808,3 +808,8 @@ check-pins-test (7). e1 additions: the Advanced verbs refused one by one with no
 the legacy `capture` refused after a press. e3 additions: no choice of scan on the idle card, the card sends only `create`, `dot`, `capture` and `done`, a 3.2.x helper.
 Deleted dev tools (they drove removed code): `measure-guard.py`, `measure-scale.py`, `replay-recording.py`, `e1-late-grid.sh`, the `ir-held-head-stats.json` and
 `live-coupling-3.1.4.json` fixtures. Their results stay in this file. Kept: `enrol-record.py` and its test (they do not touch the helper).
+
+### 7. Plugin-only, same release: the popup opens on the home
+`FaceModel.onOpenedChanged` resets the view stack to `["setup"]` and clears the remembered person when the popup closes (nothing in `system/`; no re-pin).
+Openers that set the stack (`openAt`, `openWithBase`, `resumeAt`, the bar press) all run after a close, never before, so they are unaffected. e2 (xiv) pins it
+(deep view then close, bar reopen, Esc twice, a route after a close, a resume with its word); with the reset line removed six of its checks fail.

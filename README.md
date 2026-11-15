@@ -316,6 +316,10 @@ now replaces it, after the same password, and only when you save (Esc or Cancel 
   Esc, nothing is stored. A `sweep` line from any other source is refused ("bad_sweep"), nothing started, nothing stored.
   Update the plugin to get the dot scan back.
 
+**The popup opens on the home.** Closing the Face popup now forgets where you were: it used to reopen on the last view
+(Settings, a person), and now every open starts from the home (*Face ID is set up*) or from where the bar button points
+(People, over the home, on a machine that is set up). Esc still goes back one step before it closes. Plugin only, no password.
+
 **What did not change.** The identity rule (0.40 and 0.55, 0.56 and 0.60 for the top picture), the runs of three and
 five frames, the cap of five "That did not look like you" presses, the floor (the first picture, left and right), `sudo`
 using only the first picture, and the store format. The debug trace (`debug=true`, `journalctl -t omarchy-face-sweep`) is
