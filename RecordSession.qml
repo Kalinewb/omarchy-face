@@ -155,12 +155,13 @@ Item {
 
   readonly property var failText: ({
     "no_face": "No face found",
-    "multiple_faces": "Only one person in view",
-    "too_dark": "Too dark for the camera",
-    "black_frames": "Too dark for the camera",
-    "camera_busy": "The camera is in use — try again",
-    "timeout": "Took too long",
-    "bad_sweep": "Something went wrong. Try again."
+    // the same words as the dot scan's card (common/dotscan.js WHY), so one failure reads one way
+    "multiple_faces": "More than one face",
+    "too_dark": "Too dark",
+    "black_frames": "Too dark",
+    "camera_busy": "The camera is in use",
+    "timeout": "That took too long",
+    "bad_sweep": "Something went wrong"
   })
 
   readonly property var errorText: ({

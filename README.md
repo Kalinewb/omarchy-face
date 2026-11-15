@@ -306,7 +306,7 @@ now replaces it, after the same password, and only when you save (Esc or Cancel 
 
 - *3.3.0 plugin, 3.2.x system files* (you updated the plugin and have not pressed the Setup button yet): the card works,
   because a 3.2.x helper lists the dot scan. The only difference: that helper still refuses to re-record an appearance
-  that holds more than five pictures, and the card shows "Something went wrong. Try again." Update the system files and it
+  that holds more than five pictures, and the card shows "Something went wrong" Update the system files and it
   works. Nothing is stored.
 - *3.2.x plugin, 3.3.0 system files* (the system files were updated first): the old card's Simple scan works. Its
   **Advanced** choice (and an appearance with more than five pictures, which the old card forces into Advanced) finds that
