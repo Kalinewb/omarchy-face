@@ -1,37 +1,28 @@
 import QtQuick
-import "common/enrolring.js" as Ring
 import "common/dotscan.js" as Dot
 
 // What the scan will ask, shown while nothing is running (the camera is off until
-// Start): a calm head silhouette in the circle. Simple's (the dot scan, in DotCard.qml's stage):
+// Start): a calm head silhouette in the circle (the dot scan's, in DotCard.qml's stage):
 // it holds still at the centre, then turns to the ball as it visits each station while its ring
-// closes in. Advanced's (in the ring): one slow turn all the way round while the ticks fill.
-// A loop of a few seconds, drawn from rectangles in the theme's own roles, no pictures, no camera.
+// closes in. A loop of a few seconds, drawn from rectangles in the theme's own roles, no pictures, no camera.
 //
 // It costs nothing unless it is running: the one animation below is `running` only
 // while `running` is true (the card is idle, on screen, with motion allowed), and
 // every number it shows is a pure function of the time that animation advances
-// (common/dotscan.js or common/enrolring.js demoFrame). It stops the moment Start is pressed.
+// (common/dotscan.js demoFrame). It stops the moment Start is pressed.
 Item {
   id: demo
 
-  property string mode: "simple"
   property bool running: false
   property color foreground: "white"
   property color secondary: "grey"
   // The moment in the loop, in seconds.
   property real t: 0
 
-  // Simple's frame is the dot scan's (common/dotscan.js: the ball, the ring, the head turning to it);
-  // Advanced's is the ring's.
-  readonly property bool dot: demo.mode !== "advanced"
-  readonly property var frame: demo.dot ? Dot.demoFrame(demo.t) : Ring.demoFrame(demo.t)
-  readonly property var bins: demo.dot ? [] : frame.bins
-  readonly property var target: demo.dot ? null : frame.target
-  readonly property real centre: demo.dot ? 0 : frame.centre
+  // The frame is the dot scan's (common/dotscan.js: the ball, the ring, the head turning to it)
+  readonly property var frame: Dot.demoFrame(demo.t)
   readonly property string caption: frame.caption
-  readonly property real seconds: demo.dot ? Dot.demoSeconds() : Ring.demoSeconds()
-  // The head is drawn for the ring's 160 px circle; the dot scan's is smaller
+  readonly property real seconds: Dot.demoSeconds()
   property real headScale: 1
 
   NumberAnimation on t {
@@ -42,8 +33,6 @@ Item {
     loops: Animation.Infinite
     running: demo.running
   }
-
-  onModeChanged: { demo.t = 0; if (clock.running) clock.restart() }
 
   // The head: an outline, two eyes, a nose and a mouth. A turn slides the features
   // across the face and narrows it a little; a nod slides them up or down.

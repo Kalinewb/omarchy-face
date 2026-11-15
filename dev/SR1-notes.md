@@ -738,3 +738,73 @@ e0: `dot_limits`, `pick` for bin 0 vs other bins at the boundaries (a000 at 0.60
 **F1 tests.** e0 `dot_references` (the centre first; a top press gets everything; a held top picture 0.52 or 0.58 from the centre, or one over HARD, is NOT a reference for other poses; one the 3.1.x rule admits, within CHAIN of the centre or of another reference with the centre within HARD, still is; Advanced-style sets untouched). e1: owner's centre and left held, a stranger takes the top at 0.52 (stored), then right and bottom with frames 0.1 from his top picture: both `not_you`, nothing saved; the control (a patched helper with every held picture a reference, as first built) stores the same flow 5 of 5; the owner's flow (centre, left, top 0.52, right and bottom at 0.30) still stores all five.
 
 At this commit: e0 255 checks, e1 248, e3 222, lint, check-pins and check-pins-test pass. The top-pose stranger table was re-run after the reference-list fix (a top press is still judged against everything held) and is cell for cell the same as above.
+
+## Delta in 3.3.0 vs 99190cd (3.2.2): the Advanced scan is removed. What a security re-read must check (root code, and it only shrinks)
+
+**What the change is.** The user said "Remove the advanced scan". Everything that served it is deleted from `system/omarchy-face-admin`
+(5355 to 4294 lines: **1061 removed**, 90 lines added) and from the plugin; the dot scan, the single `capture`, the store, `pick`, `regenerate`,
+`set-limits`, `remove-*` and the Sudo policy are untouched in behaviour. The other nine pinned files change only their version header;
+`system/install.sh` the version, the pins and its checksum file. `git diff --stat 99190cd`: 47 files, 687 insertions, 5310 deletions.
+
+### 1. What was removed from the helper (re-read the diff; every line in it is a deletion or a narrowing)
+- **The verbs.** `enroll-session` no longer has `sweep`, `trial`, `usual`, `finish` or `abort`. The first three are named and answered `bad_sweep`
+  (`refuse("... is not in this release")`, nothing started); `finish` and `abort` fall into "ignoring an unknown command". `ready.verbs` is
+  `["capture", "dot"]` (it was `["capture", "sweep", "dot", "abort", "finish"]`). While a press runs, `sweep`/`trial`/`usual` are refused, as before.
+- **The sweep child and its parent half.** `run_sweep` (the 90 s lap loop: pose estimation, the 12-bin wedge, dwell, patience, steadiness, the
+  scale band, lap 2, `trial`), `judge` (the parent's re-check of a lap), `sweep_args`/the old argument vector, the lap clock and stall bound, the
+  `track`/`sweeping`/`swept`/`aborted` events and their allow-list keys (`mode`, `lap`, `targets`, `quota`, `u`, `v`, `target`, `centre`, `bins`,
+  `canFinish`, `filled`, `centreHeld`), and `stored_count` with rule R. `SWEEP_EVENTS` is now `ready, capturing, captured, capture_failed, dotting,
+  dot, dotted, saved, discarded, error`. `CODES` is twelve (was seventeen: `changed`, `too_few`, `lap_timeout`, `sweep_stalled`, `not_enough` went).
+- **The pure half.** `neutral_of`, `pose_uv`, `pose_decouple`, `is_steady`, `in_target`, the dwell functions, `current_target`, `can_finish`, `lap_ended`,
+  `lap_result`, `lap2_want`, `lap2_word`, `scale_word`, `guard_ok`, `guard_distances`, `settle_verdict`, `changed_step`, `refine_for`, `track_bins`,
+  `valid_sweep`, `gate_failures`, and the constants only they read (`SMOOTH_FRAMES`, `STEADY_*`, `COUPLING_C`, `SIMPLE_*`, `R_MIN`, `SCALE_MIN`, the dwell
+  and patience numbers). `frame_word` has seven arguments (sharpness and steadiness are not gates of a press). `verb_allowed` is stricter: any state but
+  `ready` and `swept` refuses everything.
+- **The child's entry.** `main` accepts `dot` only and refuses everything else (`not started by omarchy-face-admin`).
+
+### 2. What the reviewer should confirm is NOT reachable any more
+1. **Nothing can start a head-turning lap**, from the wire or from the card: grep the parent for `sweep` and the only hits are the refusal, the table
+   V refusal, the journal tag name `omarchy-face-sweep`, the file name `SWEEP_PY` and the test override `OMARCHY_FACE_SWEEP_SECONDS` (kept so existing notes
+   and tests find them; they now name the dot scan).
+2. **No template with a pose, a band or an `r` the dot scan does not produce can be stored.** The parent only ever writes `centre` plus the `extra`
+   entries `judge_dot`/`candidate` build: pose names from `DOT_BINS`, band `near`, `r` = `DOT_R` (1.6), `support` from the child. A stored `far` or `usual`
+   entry can exist only if it was already in a record written by 3.1.x (validation still accepts them; see 4).
+3. **No path stores more than one appearance's worth in one press**, and none stores a frame the same-person guard did not see: the guard
+   (`guard_verdict`), `judge_dot`'s independent re-check and the three-in-a-row / five-in-a-row runs are exactly 3.2.2's. The `done` floor
+   (centre, left, right) is unchanged.
+4. **The attack surface shrinks, nothing in it widens:** one fewer child program mode, five fewer verbs, twelve fewer event keys on the allow-list, one fewer
+   code path that stores templates (`judge` + lap merging), no pose arithmetic at all in root code (`pose_indices` remains for the eye distance and roll of
+   one frame). No new constant, no new file, no new verb, no change to `SUDO_POLICY`, `CHAIN`, `HARD`, `DOT_TOP_*`, `EYE_MIN`, the caps or the store format.
+
+### 3. The one rule dropped on purpose: rule R
+Rule R (3.2.0) made the dot scan's *centre* press `bad_sweep` for an appearance holding more than five stored templates, so that Simple could not shrink
+an Advanced set by accident. With Advanced gone that rule has no purpose and a harmful side: such an appearance could never be re-recorded. `valid_dot`
+no longer takes a `stored` count. **Effect:** a dot scan that is saved replaces the whole appearance (centre and `extra`) with its own, as it always did
+for a smaller one; the old pictures are replaced only at `done` (Esc keeps them). e1 pins this ("a dot re-scan of the Advanced appearance is accepted ...
+replaces it whole"). **If the reviewer wants the rule back** it is a three-line restoration (`stored` in `valid_dot` and `prior`); then the only way to
+change an Advanced appearance would be Remove and record again.
+
+### 4. Stored Advanced appearances keep working (the store format and `pick` are untouched)
+`validate_appearance` still accepts `near`/`far`/`usual` extras (12 + 12 + 2); `pick`, `regenerate`, `set-limits`, `remove-appearance`, `remove-person`,
+`public()` (what People and Person read: `templates`, `lockTemplates`, `sudoTemplates`) are byte-for-byte what they were. e1 builds a record in the 3.1.x shape
+(centre, 12 near, 12 far, 2 usual = 27 templates) and shows: `regenerate` accepts it, the Lock set has 12 entries (the cap) all labelled `person/appearance`,
+the Sudo set has 1 (policy `centre`), `people.json` says 27 / 12 / 1 and carries no encoding, a second `regenerate` is byte-identical, `set-limits` 3 3 and back
+works, `remove-appearance` and `remove-person` (on a non-owner) take it away, and a dot re-scan replaces it with three templates. e0's `pick` tests cover records of
+both shapes. **What I did not verify:** a record written by a *real* 3.1.x helper (none exists on this machine to take a byte copy of); the shape above is built
+from `validate_appearance` and 3.1.x's own `make_extra` conventions. The user's own stored appearances (this laptop) were not touched or read.
+
+### 5. Mixed versions (fail-safe both ways; stated in the README)
+- *3.3.0 card, 3.2.x helper*: `ready.verbs` has `dot`, so the card takes the dot scan and sends nothing else. The 3.2.x helper's rule R refuses an appearance
+  with more than five stored templates (`bad_sweep`, "Something went wrong"), nothing stored. e3 `dot-skew-326`.
+- *3.2.x card, 3.3.0 helper*: the old card needs `sweep` in `ready.verbs` for Advanced and does not find it, so it takes the legacy single `capture` (its 3.1.0
+  fallback; e3 `dot-skew`). **That stores one centre picture if the person presses Done, replacing that appearance** (Esc stores nothing). It is not "refused,
+  nothing stored" in that one case; I judged a fallback the person must confirm to be acceptable and the same as 3.2.0's behaviour with a pre-3.1.0 helper.
+  A raw `sweep` line is refused and starts nothing (e1).
+
+### 6. Tests
+e0 126 (was 255: the pose, noise, coupling, scale, support, plain-turn, lap and wedge tests went; `frame_word` seven-argument gates, the strobe rule, `guard_verdict`,
+`pick` on both record shapes, table V including the refused Advanced verbs, `test_dot` stay), e1 150 (was 248; 9m30s), e3 153 (was 222), lint, check-pins and
+check-pins-test (7). e1 additions: the Advanced verbs refused one by one with no child started, a stored 27-template record regenerated / limited / removed / replaced,
+the legacy `capture` refused after a press. e3 additions: no choice of scan on the idle card, the card sends only `create`, `dot`, `capture` and `done`, a 3.2.x helper.
+Deleted dev tools (they drove removed code): `measure-guard.py`, `measure-scale.py`, `replay-recording.py`, `e1-late-grid.sh`, the `ir-held-head-stats.json` and
+`live-coupling-3.1.4.json` fixtures. Their results stay in this file. Kept: `enrol-record.py` and its test (they do not touch the helper).

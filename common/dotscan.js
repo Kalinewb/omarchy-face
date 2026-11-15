@@ -128,7 +128,7 @@ function why(code, short) {
 
 // --- the idle demo (no camera): what the scan will ask, played as a loop ----------------------
 //
-// A pure function of time, as the ring's was. The head turns towards the ball; the ring
+// A pure function of time. The head turns towards the ball; the ring
 // breathes, then closes and the ball moves on. Poses are (yaw, pitch) in [-1, 1], yaw
 // positive to the person's right (the screen's right in the mirrored preview), pitch
 // positive up. `ball` is the ball's station in the stage's own fractions, `close` the ring

@@ -15,7 +15,7 @@ import qs.Commons as Commons
 // ~/.config/omarchy/plugins destroys (plan-engine.md E13).
 //
 // This file is the window; the shape, the drop and the retract are ScanIsland.qml,
-// and what is inside that -- the ring, the line, the links, and on an old helper
+// and what is inside that -- the dot scan's card, and on an old helper
 // the single capture's picker and buttons -- is EnrolView.qml. This window is
 // where every scan lives, whichever home asked for it: Start brings up polkit's
 // password dialog, and a scan drawn inside the notch's panel died with the panel

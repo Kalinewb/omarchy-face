@@ -1,6 +1,5 @@
 import QtQuick
 import Quickshell
-import Quickshell.Io
 import "common/dotscan.js" as Dot
 
 // One `enroll-session`, as a state machine with no window around it
@@ -29,32 +28,26 @@ Item {
   property string label: ""
   property bool isNew: false
 
-  // Whether the owner wants the full scan: the ring, one target at a time or all
-  // twelve (plan-face-enroll.md sections 2 and 3). Off, this is the single
-  // capture it always was; on, it is that only when the helper is older than
-  // 3.1.0 and does not list `sweep` in `ready.verbs` (version skew, section 6).
+  // Whether this is the dot scan or the single capture it replaced. On, it is the scan, and the single
+  // capture only when the helper does not list `dot` in `ready.verbs` (older than 3.2.0: version skew);
+  // off, it is the single capture it always was. There has been no other scan since 3.3.0 removed the
+  // Advanced one.
   property bool scan: false
-  // How many templates this appearance already holds (people.json `templates`).
-  // More than Simple can produce means Simple would shrink it: rule R.
-  property int stored: 0
 
   // The Ask instance to launch through (common/Ask.qml).
   property var ask: null
 
-  // The single capture (a session with `scan` off, or one on an old helper):
+  // The single capture (a session with `scan` off, or one on a helper that does not list `dot`):
   //   framing      nothing running yet; Start is on screen
   //   authorising  the session is starting: polkit's dialog is up
   //   countdown    3 · 2 · 1 at 800 ms, started by `ready`
   //   capturing    the IR sensor is open; Esc is ignored here
   //   verdict      what came back, with Again / Done
   //   closing      the session is finishing; the card is on its way out
-  // The scan (`scan` on, helper 3.1.0 or later): `idle` in place of `framing`,
-  //   centre       Advanced: the middle is the first target
-  //   lap1         Advanced's first lap
-  //   dot          Simple (3.2.0): the ball, from the centre to the last pose; what is
-  //                taken and what the ball waits for are `dotHeld` and `dotState`
-  // and `verdict` is a lap that ended in failure, with Try again. `swept` is not a
-  // phase: the view stays in lap1 with the ring full and only its links change.
+  // The scan (`scan` on): `idle` in place of `framing`, and
+  //   dot          the ball, from the centre to the last pose; what is taken and what the ball
+  //                waits for are `dotHeld` and `dotState`
+  // and `verdict` is a single capture that came back, with Try again.
   property string phase: "framing"
 
   property int countdown: 0
@@ -100,29 +93,18 @@ Item {
 
   // --- the scan (plan-face-enroll.md sections 2, 3 and 6) ----------------------
   //
-  // What the engine says, held as it says it: the view draws these and decides
-  // nothing. A target is reached or filled by the engine alone; nothing
-  // here (or anywhere on the client) says so.
+  // What the helper says, held as it says it: the view draws these and decides nothing.
 
-  // The helper listed `sweep` in `ready.verbs`; false on an old helper, which
-  // gets the single capture and a line saying why.
-  property bool sweepFlow: false
+  // The helper listed `dot` in `ready.verbs`; false on an older helper, which gets the single
+  // capture and a line saying why.
+  property bool scanFlow: false
   // ...and the helper did not: the single capture, in the scan's own view.
   property bool legacy: false
   readonly property string legacyNote: "Finish the update in a terminal for the full scan"
   // Table V's scan state, mirrored from events: ready | running | swept.
   property string scanState: "ready"
 
-  property string trackState: ""
-  property real u: 0
-  property real v: 0
-  // "centre", a bin 0..11, or null (Advanced: the head is in no unfilled wedge).
-  property var target: "centre"
-  property real centre: 0
-  property var bins: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-  property bool canFinish: false
-
-  // --- the dot scan (Simple, 3.2.0) -------------------------------------------------
+  // --- the dot scan (3.2.0) -------------------------------------------------
   // The helper listed `dot`. The ball is on the first pose it does not hold; Space (`capture`)
   // sends ONE press for it and everything after that is the helper's word: `dot` counts the
   // frames it has gathered, `dotted` says the pose is taken (and which are), `capture_failed`
@@ -157,109 +139,16 @@ Item {
   readonly property bool dotCanSave: session.dotFlow && Dot.canSave(session.dotHeld)
   readonly property bool dotAllHeld: session.dotFlow && session.dotHeld.length >= Dot.POSES.length
 
-  property var targets: []
-  property var filled: []
-  property int kept: 0
-  // Counted at every track whose state is the engine's accepted word. The scan
-  // hairline re-arms on this and on nothing else.
-  property int acceptedFrames: 0
-  // Bumped by every failure that shakes the circle, so the view can react to the
-  // same code twice in a row.
-  property int failSerial: 0
-  // The reason a lap ended without a result, for the outcome list's line. A
-  // non-terminal one (`not_enough`, `sweep_stalled`) leaves the lap running.
-  property string notice: ""
   property bool discarding: false
-  readonly property string acceptedWord: "hold"
 
   // Whether the RGB preview may be open: from the moment Start is pressed until
   // a verdict, closing or a failure (plan-face-enroll.md 6a.1). A session that
   // is not the scan keeps the card's old behaviour (the card decides).
   readonly property bool previewWanted: !scan
-      || phase === "authorising" || phase === "centre" || phase === "lap1" || phase === "lap2" || phase === "dot"
-      || phase === "trial" || phase === "countdown" || phase === "capturing"
-
-  // --- the mode: Simple or Advanced, remembered ----------------------------------
-  //
-  // One word in $XDG_STATE_HOME/omarchy-face/enrol-mode, read once when the
-  // session is made and written when the link is used. The helper never reads it:
-  // the mode travels in each `sweep` line and nowhere else. The read is never
-  // waited for -- `timeout 1 head -c 16` in a process of its own -- so a FIFO or a
-  // symlink planted at the path costs a second and not a hung view, and only the
-  // first 16 bytes are ever looked at. Anything but the word `advanced` is
-  // Simple.
-  property string mode: "simple"
-  // Rule R: Simple may not replace a set it cannot match, so for such an
-  // appearance the mode is Advanced whatever the file says (the file is not
-  // rewritten).
-  readonly property bool simpleAllowed: stored <= 5
-  readonly property string activeMode: simpleAllowed ? mode : "advanced"
-  // Once Start is pressed the mode is the lap's and the link does nothing.
-  readonly property bool modeFixed: phase !== "idle"
-
-  // Where the state home is. Under a harness (OMARCHY_FACE_DEV_BIN) it is empty
-  // unless the harness names a state home of its own, as RemoveView's is.
-  readonly property string modeDir: {
-    if ((Quickshell.env("OMARCHY_FACE_DEV_BIN") || "") !== "") {
-      var sandbox = Quickshell.env("OMARCHY_FACE_DEV_STATE_HOME") || ""
-      return sandbox === "" ? "" : sandbox + "/omarchy-face"
-    }
-    var base = Quickshell.env("XDG_STATE_HOME") || ""
-    if (base === "") {
-      var home = Quickshell.env("HOME") || ""
-      if (home === "") return ""
-      base = home + "/.local/state"
-    }
-    return base + "/omarchy-face"
-  }
-  readonly property string modePath: modeDir !== "" ? modeDir + "/enrol-mode" : ""
-
-  function parseMode(text) {
-    return String(text || "").trim().slice(0, 16) === "advanced" ? "advanced" : "simple"
-  }
-
-  function setMode(word) {
-    if (session.modeFixed || (word !== "simple" && word !== "advanced")) return
-    if (word === "simple" && !session.simpleAllowed) return
-    session.modeTouched = true
-    session.mode = word
-    session.writeMode(word)
-  }
-
-  // A rename over the path, not a write through it: a symlink or a FIFO planted
-  // there is replaced and never opened. An unwritable state home fails silently.
-  function writeMode(word) {
-    if (session.modePath === "" || modeWriter.running) return
-    modeWriter.command = ["timeout", "2", "sh", "-c",
-      'mkdir -p -- "$1" 2>/dev/null && printf %s "$3" >"$1/.enrol-mode.$$" 2>/dev/null ' +
-      '&& mv -f -- "$1/.enrol-mode.$$" "$2" 2>/dev/null; rm -f -- "$1/.enrol-mode.$$" 2>/dev/null; true',
-      "sh", session.modeDir, session.modePath, word]
-    modeWriter.running = true
-  }
-
-  function readMode() {
-    if (session.modePath === "") return
-    modeReader.command = ["timeout", "1", "head", "-c", "16", "--", session.modePath]
-    modeReader.running = true
-  }
-
-  Process { id: modeWriter }
-
-  Process {
-    id: modeReader
-    stdout: StdioCollector {
-      onStreamFinished: {
-        // Only while the view is still waiting to be asked: a word that arrives
-        // after Start must not change a lap that has begun.
-        if (session.phase === "idle" && !session.modeTouched) session.mode = session.parseMode(text)
-      }
-    }
-  }
-  property bool modeTouched: false
+      || phase === "authorising" || phase === "dot" || phase === "countdown" || phase === "capturing"
 
   Component.onCompleted: {
     if (session.scan && session.phase === "framing") session.phase = "idle"
-    if (session.scan) session.readMode()
   }
 
   // --- copy, in one place ---------------------------------------------------
@@ -271,10 +160,7 @@ Item {
     "black_frames": "Too dark for the camera",
     "camera_busy": "The camera is in use — try again",
     "timeout": "Took too long",
-    "too_few": "Only a few positions were reached. Try again.",
-    "lap_timeout": "That took too long. Nothing was saved.",
-    "bad_sweep": "Something went wrong. Try again.",
-    "changed": "That was not you"
+    "bad_sweep": "Something went wrong. Try again."
   })
 
   readonly property var errorText: ({
@@ -307,7 +193,6 @@ Item {
     session.message = ""
     session.verdict = ""
     session.failCode = ""
-    session.notice = ""
     session.discarding = false
     session.dotNotYou = 0
     session.dotCapped = false
@@ -348,18 +233,12 @@ Item {
       // that can be discarded without trace.
       if (session.isNew) session.send({cmd: "create", label: session.label})
       // The scan only on a helper that says it knows the verb: an older one would
-      // ignore it and the view would wait for ever (section 6). Simple is the dot scan
-      // (`dot`, 3.2.0), Advanced the sweep.
-      if (session.scan && session.activeMode === "simple") {
-        if (session.listsVerb(event.verbs, "dot")) {
-          session.sweepFlow = true
-          session.dotFlow = true
-          session.startDots()
-          return
-        }
-      } else if (session.scan && session.listsVerb(event.verbs, "sweep")) {
-        session.sweepFlow = true
-        session.sendSweep()
+      // ignore it and the view would wait for ever (section 6). The scan is the dot scan
+      // (`dot`, 3.2.0).
+      if (session.scan && session.listsVerb(event.verbs, "dot")) {
+        session.scanFlow = true
+        session.dotFlow = true
+        session.startDots()
         return
       }
       if (session.scan) session.legacy = true
@@ -367,7 +246,7 @@ Item {
       return
     }
 
-    if (session.sweepFlow && session.onScanEvent(event)) return
+    if (session.dotFlow && session.onDotEvent(event)) return
 
     if (event.event === "capturing") {
       session.phase = "capturing"
@@ -433,15 +312,14 @@ Item {
       session.message = "The recording stopped."
     }
     if (session.scan) {
-      // Back to the start, with the reason on it and the circle shaking.
-      session.sweepFlow = false
+      // Back to the start, with the reason on it.
+      session.scanFlow = false
       session.dotFlow = false
       session.dotState = "waiting"
       landTimer.stop()
       beatTimer.stop()
       session.legacy = false
       session.scanState = "ready"
-      session.failSerial += 1
     }
     session.phase = session.scan ? "idle" : "framing"
   }
@@ -452,7 +330,6 @@ Item {
     countdownTimer.stop()
     session.message = session.errorText[code] !== undefined
                       ? session.errorText[code] : "That did not work: " + code + "."
-    if (session.scan) session.failSerial += 1
     session.phase = session.scan ? "idle" : "framing"
   }
 
@@ -481,57 +358,11 @@ Item {
     return false
   }
 
-  function clearRing() {
-    session.trackState = ""
-    session.u = 0
-    session.v = 0
-    session.target = "centre"
-    session.centre = 0
-    session.bins = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    session.canFinish = false
-    session.filled = []
-    session.kept = 0
-    session.notice = ""
-  }
-
-  // Advanced's lap 1. The targets are all twelve, never a choice the view makes; root refuses
-  // anything else (and a sweep in any other mode: Simple is the dot scan).
-  function sendSweep() {
-    session.clearRing()
-    session.message = ""
-    session.verdict = ""
-    session.failCode = ""
-    // A lap 1 replaces the appearance's pending set, so nothing is held until it
-    // sweeps again.
-    session.captures = 0
-    session.capturedLabels = session.capturedLabels.filter(function (l) { return l !== session.appearance })
-    session.scanState = "running"
-    session.phase = "centre"
-    session.lastAttempt = session.appearance
-    var all = []
-    for (var i = 0; i < 12; i++) all.push(i)
-    session.send({cmd: "sweep", appearance: session.appearance, mode: session.activeMode, lap: 1, targets: all})
-  }
-
-  // "Scan again" after a lap that has ended (`swept`): lap 1 again at once, which
-  // replaces the pending set (root's rule). Same session, same mode, no second
-  // password. There is no way to restart a lap that is running: Cancel is EOF.
+  // "Scan again" once all five are held: the ball goes back to the centre. The first press (Space) then
+  // retakes the centre, which replaces whatever the helper still holds for the appearance; no second password.
+  // There is no way to restart a press that is running: Cancel is EOF.
   function startOver() {
-    if (session.dotFlow) { if (session.dotAllHeld) session.startDots(); return }
-    if (session.sweepFlow && session.scanState === "swept") session.sendSweep()
-  }
-
-  // Try again after a lap that ended without a result.
-  function tryAgain() {
-    if (session.sweepFlow && session.scanState === "ready") session.sendSweep()
-  }
-
-  // Done while a lap runs (Advanced, once the engine says `canFinish`): `finish`.
-  // The engine checks it again and answers `not_enough` if it was a race.
-  function finish() {
-    if (session.sweepFlow && session.scanState === "running" && session.activeMode === "advanced"
-        && session.canFinish)
-      session.send({cmd: "finish"})
+    if (session.dotFlow && session.dotAllHeld) session.startDots()
   }
 
   // --- the dot scan's verbs and events --------------------------------------------------
@@ -541,7 +372,6 @@ Item {
   function startDots() {
     landTimer.stop()
     beatTimer.stop()
-    session.clearRing()
     session.message = ""
     session.verdict = ""
     session.failCode = ""
@@ -598,7 +428,6 @@ Item {
         session.dotWhy = code
         session.dotShort = code === "too_far" ? (Number(event.short) || 0) : 0
         session.dotState = "waiting"
-        session.failSerial += 1
         if (code === "not_you") {
           session.dotNotYou += 1
           // The helper ends the session on this press (its cap, the same number): say why, in words, and
@@ -611,7 +440,7 @@ Item {
       }
       return true
     }
-    return event.event === "aborted"
+    return false
   }
 
   function applyDotted() {
@@ -622,7 +451,6 @@ Item {
     session.dotLast = String(event.pose || "")
     session.dotGood = session.dotNeed
     session.dotWhy = ""
-    session.kept = Number(event.kept) || 0
     session.captures = 1
     session.capturedLabels = session.hasCaptured(session.appearance)
                              ? session.capturedLabels : session.capturedLabels.concat([session.appearance])
@@ -637,65 +465,6 @@ Item {
     id: beatTimer
     interval: 320
     onTriggered: if (session.dotState === "landed") session.dotState = session.dotAllHeld ? "done" : "waiting"
-  }
-
-  // The scan's events. True when taken.
-  function onScanEvent(event) {
-    if (session.dotFlow) return session.onDotEvent(event)
-    if (event.event === "sweeping") {
-      session.targets = event.targets || []
-      return true
-    }
-    if (event.event === "track") {
-      session.trackState = String(event.state || "")
-      session.u = Number(event.u) || 0
-      session.v = Number(event.v) || 0
-      session.target = event.target === undefined ? null : event.target
-      session.centre = Number(event.centre) || 0
-      if (event.bins && event.bins.length === 12) session.bins = event.bins
-      session.canFinish = event.canFinish === true
-      if (session.trackState === session.acceptedWord) session.acceptedFrames += 1
-      // The centre is the first target; anything after it is the lap proper.
-      if (session.phase === "centre" && session.target !== "centre") session.phase = "lap1"
-      return true
-    }
-    if (event.event === "swept") {
-      session.scanState = "swept"
-      session.filled = event.filled || []
-      session.kept = Number(event.kept) || 0
-      session.canFinish = false
-      session.captures = 1
-      session.capturedLabels = session.hasCaptured(session.appearance)
-                               ? session.capturedLabels : session.capturedLabels.concat([session.appearance])
-      session.notice = ""
-      if (session.phase === "centre") session.phase = "lap1"
-      return true
-    }
-    if (event.event === "aborted") {
-      session.scanState = "ready"
-      return true
-    }
-    if (event.event === "capture_failed") {
-      var code = String(event.code || "timeout")
-      // The two that leave the lap running: a line, no shake, no new phase.
-      if (code === "not_enough") { session.notice = "A few more positions first."; return true }
-      if (code === "sweep_stalled") { session.notice = "Try turning a little further."; return true }
-      session.verdict = "failed"
-      session.failCode = code
-      session.scanState = "ready"
-      session.failSerial += 1
-      session.clearRingKeepNothing()
-      session.phase = "verdict"
-      return true
-    }
-    return false
-  }
-
-  // After a failed lap the ring empties; the reason stays in failCode.
-  function clearRingKeepNothing() {
-    var code = session.failCode
-    session.clearRing()
-    session.failCode = code
   }
 
   // A session that stood still for too long, or has simply been open too long.
@@ -714,7 +483,7 @@ Item {
   function done() {
     if (!session.proc) { session.finished(session.saved); return }
     // Table V: `done` is legal in `swept` and nowhere else in the scan.
-    if (session.sweepFlow && session.scanState !== "swept") return
+    if (session.scanFlow && session.scanState !== "swept") return
     if (session.captures === 0) { session.discard(); return }
     session.phase = "closing"
     session.send({cmd: "done"})
@@ -738,7 +507,7 @@ Item {
   // Esc, or the card being closed. Three different things depending on where
   // the session is (plan-gui.md §5.3).
   function requestClose() {
-    // The scan is abortable in every phase and Esc never saves: Done is the one
+    // The scan is abortable in every phase and Esc never saves: Save or Done is the one
     // way to keep what was recorded (plan-face-enroll.md section 3, Phases).
     if (session.scan && !session.legacy) { session.discard(); return true }
     if (session.phase === "capturing") {

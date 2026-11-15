@@ -378,43 +378,42 @@ branch first (`./install.sh`, which restarts the shell), then:
 Known, not changed here: the lock-screen switch's resume (`kalinewb.face resume`)
 still reopens the stock popup, not the notch's panel.
 
-## E3 — the enrol view and its ring, offscreen
+## E3 — the enrol view (the dot scan), offscreen
 
 ```sh
 ./dev/e3-enrol-view.sh                       # headless: no window, no camera
-E3_KEEP=/some/dir ./dev/e3-enrol-view.sh     # keep the PNG strip, the GIFs and the logs
+E3_KEEP=/some/dir ./dev/e3-enrol-view.sh     # keep the PNG strip, the GIF and the logs
 ```
 
-Phase 4 of `plan-face-enroll.md`. `EnrolView.qml` is the enrol screen; `ScanIsland.qml` is the
-island around it (the notch's silhouette, the drop and the retract, no window); `RecordCard.qml`
-(the Face service's own layer-shell window, in every home) is the only thing that makes one;
-`EnrolRing.qml` is Advanced's ring (60 ticks, 12 pose bins x 5); `common/enrolring.js` is the ring's
-arithmetic (looks, the dot, contrast), `common/EnrolLink.qml` the text link. **Simple (3.2.0) is the dot
-scan**: `DotCard.qml` is its card, `DotStage.qml` the stage (the ball, its breathing and closing ring, the
-five station marks, the camera's circle), `common/dotscan.js` its arithmetic and idle demo, and
-`common/EnrolMode.qml` the Simple/Advanced choice both cards share. Since 3.2.1 the BALL is not on the card: `BallLayer.qml` draws it on a whole output (a function of the output's width and height only: the middle, and the four edges 64 px in), `BallScreen.qml` binds that to the session, `ScanBall.qml` is the see-through, input-less, keyboardless window that holds it (made by `Service.qml` for the card's output only, after the card), and `DotBall.qml` is the ball and its ring (breathing, closing, red on failure), shared with the card's small idle demo in `DotStage.qml`. `RecordSession.qml` is the state
-machine: with `scan` on it drives the sweep protocol (`sweep`, `track`, `swept`, `finish`, `abort`, `done`)
-for Advanced and the dot protocol (`dot`, `dotting`, `dot`, `dotted`, `capture_failed`) for Simple, and keeps
-whatever the engine says; the view decides nothing (a target is reached or filled, a pose taken, by the
-engine alone).
+Phase 4 of `plan-face-enroll.md`, as left by 3.3.0 (which removed the Advanced scan and its ring). `EnrolView.qml` is the
+enrol screen; `ScanIsland.qml` is the island around it (the notch's silhouette, the drop and the retract, no window);
+`RecordCard.qml` (the Face service's own layer-shell window, in every home) is the only thing that makes one;
+`common/EnrolLink.qml` is the text link. **The scan is the dot scan**: `DotCard.qml` is its card, `DotStage.qml` the stage
+(the ball, its breathing and closing ring, the five station marks, the camera's circle) and `common/dotscan.js` its arithmetic
+and idle demo. Since 3.2.1 the BALL is not on the card: `BallLayer.qml` draws it on a whole output (a function of the output's
+width and height only: the middle, and the four edges 64 px in), `BallScreen.qml` binds that to the session, `ScanBall.qml` is the see-through, input-
+less window that holds it (made by the service, for the card's output only). `RecordSession.qml` is the state
+machine: with `scan` on it drives the dot protocol (`dot`, `dotting`, `dot`, `dotted`, `capture_failed`, `done`) and
+keeps whatever the helper says; the view decides nothing (a pose is taken by the helper alone). The single capture
+(`RecordView.qml`) is what a helper older than 3.2.0 (no `dot` in `ready.verbs`) and a session that is not the scan
+still get.
 
-`e3` loads the REAL view, ring and session against the running Omarchy's `qs.Commons` and
+`e3` loads the REAL view and session against the running Omarchy's `qs.Commons` and
 `qs.Ui`, driven by a fake root session that enforces table V (and counts the verbs it must
-refuse: the view must cause none). The picture the circle would hold is a counting stand-in,
-so "no camera object exists in idle" is a count. The harness (`dev/qml-harness/enrol.qml`) runs the
-ring's cases in Advanced and the `dot*` cases in Simple. Cases, Simple (the dot scan): start to finish (the ball
-on each station, the line for each state, a press is ONE `dot` and a second Space does nothing, the ring
-breathing, closing in with the frames and held short when they are not enough, a failed press says why and the
-ball stays, Save after the left and right, Done after all five, Scan again), Esc and Cancel in every state, each
-reason in plain words, the ring only closing on the helper's `dotted` (and not before its second), reduced
-motion, the idle demo, a 3.1.x helper (no `dot` in `verbs` -> the single capture, with the note). Advanced
-(any fill order, Done = `finish` then `done`), Esc from every phase, each failure of the outcome list with its
-shake and Try again, the version-skew fallback (`ready` without `sweep` in `verbs`), a session that is
-not the scan (what g3/g8 drive), reduced motion with every animation stopped, the hairline
-(only an accepted frame arms it), the preview fence (the card being live and Start pressed), the mode file (path, one word, 16-byte
-cap, fallback, FIFO, symlinks, unwritable, rule R), the ring's idle demo, contrast over `#000` for the ring's looks,
-the island's geometry and its drop and retract, the card's keys reaching the session, and the PNG strips (the
-scan, and the demo's steps).
+refuse: the view must cause none; the fake refuses the Advanced scan's verbs as the 3.3.0 helper does). The picture the
+circle would hold is a counting stand-in, so "no camera object exists in idle" is a count. The harness
+(`dev/qml-harness/enrol.qml`) runs the `dot*` cases. Cases: start to finish (the ball on each station, the line for
+each state, a press is ONE `dot` and a second Space does nothing, the ring breathing, closing in with the frames and
+held short when they are not enough, a failed press says why and the ball stays, Save after the left and right, Done
+after all five, Scan again, no choice of scan anywhere on the card), Esc and Cancel in every state, each reason in
+plain words, the ball on the real screen at five output sizes, the cap on presses that did not look like you, the ring
+only closing on the helper's `dotted` (and not before its second), reduced motion, the idle demo, a helper that does
+not list `dot` (the single capture, with the note), a 3.2.x helper that lists `sweep` as well (this card takes the dot
+scan and sends nothing else), a session that is not the scan (what g3/g8 drive), the preview fence (the card being live
+and Start pressed), the island's geometry and its drop and retract, the card's keys reaching the session, the dimming
+behind the island, and the PNG strip (the scan, and the demo's steps). Its static checks also pin that `EnrolRing.qml`,
+`common/EnrolMode.qml`, `common/enrolring.js` and the mode file are gone and that the card sends only `create`, `dot`,
+`capture` and `done`.
 
 What it cannot say: that the picture looks right on a real screen, that a real `VideoOutput`
 paints in the card's circle under its `MultiEffect` mask, that pkexec's dialog leaves the card
@@ -430,7 +429,7 @@ Known departures, all reported with the phase: `palette` is `colors` (QQuickItem
 which `g3` and `g8` drive, keeps `framing` and the old flow), the card's `secondary` is an
 opaque grey (the contrast rule needs an opaque role), and the hairline arms on the state word
 `hold` because the helper has no word for "accepted" (SR1 notes, item 1: a one-line change in
-`system/`, not made here).
+`system/`, not made here). (3.3.0 removed the hairline with the ring; the departure is history.)
 
 ### What only you can try, live (3.2.0: the dot scan)
 
@@ -455,15 +454,16 @@ and:
    stored. (At the first, centre press anybody is accepted: that press has no reference, as in 3.1.x.)
 5. **Save, Done, Scan again, Cancel.** After the right, **Save** is offered; after the last, **Done** and a quiet
    **Scan again**. Esc or Cancel at any point saves nothing (`fuser /dev/video0` empty within a second).
-6. **Outline.** Click Start, Cancel, Save and the Simple/Advanced buttons with the mouse: none should keep an
+6. **Outline.** Click Start, Cancel, Save and the Space key with the mouse: none should keep an
    outline afterwards. Tab to one: it should show one.
-7. **Simple / Advanced.** Both are visible on the idle card and the one in use is filled; hover shows one line
-   each; Advanced still does the slow turn.
+7. **(3.3.0) No choice of scan.** The idle card has no Simple / Advanced buttons; the dot scan is the only scan. An
+   appearance that a 3.1.x Advanced scan stored (check Person: its picture count is more than five) still shows in
+   People and Person, still unlocks, and "Re-record" on it runs the dot scan and replaces it.
 8. **The ring's timing.** Does the ring feel right (about a second, closing only as frames arrive)? Is a press
    ever slow (camera start-up is inside it)? The journal's `t=` is the press's frame time.
 9. **Unlock.** After a Simple scan, lock and unlock: it should recognise you at least as well as after a 3.1.x scan.
 
-### What only you can try, live (Phase 4's user gate; steps 1, 5 and 7 are about the 3.1.x Simple scan and are superseded by the above)
+### What only you can try, live (Phase 4's user gate; steps 1, 5, 6, 6b and 7 are about the 3.1.x Simple and Advanced scans, which are gone, and are superseded by the above; steps 2 to 4 and 6c, 6d still apply)
 
 The first live run failed: Start in the notch brought up polkit's dialog, the notch collapsed
 and the scan died with it, so the scan is now the standalone card in every home (see E2). Nothing
@@ -1050,81 +1050,54 @@ in the countdown (130, no recording, the camera never opened) and during a promp
 (130, what it has is kept). The pictures hold no face, so the HOG lists are empty:
 it cannot say anything about how real landmarks look. About a minute.
 
-### E0 — the sweep's pure functions (and the dot scan's, 3.2.0)
+### E0 — the helper's pure functions (the dot scan's, 3.2.0)
 
-`./dev/e0-pose.py` pulls `SWEEP_PY` out of `system/omarchy-face-admin` (the text
-root will run, not a copy) and tests it with landmarks drawn from a canonical 3D
-face turned by known angles: pose from five points, the 12 bins and the mirror,
-every gate at its boundary, the same-person guard and the 5-frame counter,
-supported frames and the medoid, and `pick`. It needs only the standard library,
-and proves `python3 -I` loads the module with dlib, cv2 and numpy made
-unimportable. It ends with the synthetic model's own coupling and noise as
-"findings"; they are not measurements, and Phase 0's recordings replace them.
-Mutating a boundary in `SWEEP_PY` makes it fail, which is the evidence it tests
-anything.
+`./dev/e0-pose.py` pulls `SWEEP_PY` out of `system/omarchy-face-admin` (the text root will run, not a copy) and tests
+it: the gates at their boundary (`frame_word`: one face, `EYE_MIN` 36 at its edge, the box margin, dark and bright, the
+roll), the strobing emitter's off phase against the measured numbers, the same-person guard (`guard_verdict` at
+`CHAIN`, `HARD` and the top pose's own pair), `pick` (which stored templates Lock and Sudo may take, on records shaped
+like a dot scan's AND like a 3.1.x Advanced scan's: near and far bands, `usual`), table V's `verb_allowed` and the dot
+scan's rules (`test_dot`: the constants and their relations, `dot_word`, `dot_limits`, `dot_references`, `dot_agree`,
+`dot_why`, `dot_short`, `dot_floor_ok`, `valid_dot`, the child's argument refusals). It needs only the standard
+library, and proves `python3 -I` loads the module with dlib, cv2 and numpy made unimportable. Mutating a boundary in
+`SWEEP_PY` makes it fail, which is the evidence it tests anything. The text splits at `# ==== THE CAPTURE HALF`: the
+part above is pure (math and sys, no I/O) and is all the store program ever executes; the part below is the camera
+child, importing dlib, cv2 and numpy only inside `run_dot()`. 3.3.0 deleted the head-turning scan's share of it (pose
+estimation, the 12-bin wedge, dwell, patience, steadiness, the lap clock, the scale band, lap 2) and its tests with it;
+a test that says `sweep` in its name is about a refusal.
 
-The sequencer joined it in Phase 2: `valid_sweep` and table V's `verb_allowed`, the wedge, dwell
-and grace, rule P's patience with its high-water mark, rule L's `can_finish`, `lap_ended` and
-`lap_result`, plain physical turns (the finding that a yaw-only 20 degree turn reads bin 4 is
-asserted, and the synthetic `pose_decouple` fixes it), `over`, and the smoothed steadiness of rule J
-(the smallest `STEADY_STEP` that reaches 80% at 0.25 and 0.5 px of jitter is printed as a finding).
-The text splits at `# ==== THE CAPTURE HALF`: the part above is pure (math and sys, no I/O) and is
-all the store program ever executes; the part below is the camera child, importing dlib, cv2 and
-numpy only inside `run()` and `run_dot()`. 3.2.0 deleted Simple's share of it (its targets, patience,
-skipped list and floor) and added the dot scan's: `test_dot` pins the constants and their relations,
-`dot_word` (the centre's gates against a turned pose's lack of them), `dot_agree`, `dot_why`, `dot_floor_ok`,
-`valid_dot`, table V for `dot`, and the child's argument refusals.
-
-### E1 — the sweep through the real parent
+### E1 — the dot scan through the real parent
 
 ```sh
-./dev/e1-enrol-sweep.sh
+./dev/e1-enrol-sweep.sh        # about ten minutes: the lookalike tables run 40 presses per cell
 ```
 
-The real `enroll-session` and the real child, in the usual private namespace, with a fake camera
-and a fake dlib. `dev/e1-frames.py` writes scripted laps (a head moving to each bin, held, with a
-second identity, faults, a second distance); the stub `video_capture.py` plays them as real numpy
-images, so the engine's own darkness, saturation and sharpness gates run, and keeps a **virtual
-clock** (it patches `time.monotonic` in the child), so a 60 s lap is a second or two and every
-dwell, grace, patience and ceiling is exact. A real dlib on the machine is not linked into the
-sandbox (the fake would lose to it). `OMARCHY_FACE_SWEEP_SECONDS` lowers the ceilings for the
-ceiling cases; the helper ignores it as root of the machine. Cases: the dot scan end to end (the five
-presses and what is stored, a failed press for every reason, at the centre and at a pose; strobing emitter;
-stranger at a press; the `done` floor; malformed presses; cancel; the debug line; rule R), the Advanced lap
-end to end, rule L's ends and the ceiling, `finish` and its race, table V and every `bad_sweep`, `changed`,
-abort and EOF killing the child, Start over, `set-limits`, the session bound, and the typed allow-list and the
-stored shapes as code. 3.2.0 removed Simple's laps from it (a Simple sweep is now refused); the guard's
-stranger cases that did not depend on Simple's floor (a stranger after the centre, below the floor) run in
-Advanced, under scenario names `stranger-*`, `owner-*`, `lap-*` and `four-bins` in `dev/e1-frames.py`.
+The real `enroll-session` and the real child, in the usual private namespace, with a fake camera and a fake dlib.
+`dev/e1-frames.py` writes scripted presses (a face at the centre or turned to a pose, held; a second identity, faults,
+a strobing camera); the stub `video_capture.py` plays them as real numpy images, so the engine's own darkness and
+saturation gates run, and keeps a **virtual clock** (it patches `time.monotonic` in the child), so a press is a second or two and its
+ceiling is exact. A real dlib on the machine is not linked into the sandbox (the fake would lose to it).
+`OMARCHY_FACE_SWEEP_SECONDS` lowers the ceiling for the ceiling cases; the helper ignores it as root of the machine.
+Cases: the five presses and what is stored, a failed press for every reason (at the centre and at a pose), the
+strobing emitter, a stranger at a press, the lookalike tables (CHAIN, the top pose's pair), the cap on `not_you`
+presses, the `done` floor, malformed presses, cancel, the debug line, the verbs of the Advanced scan refused one by
+one (`bad_sweep`, no child), **a stored 3.1.x Advanced appearance** (the centre, 12 near, 12 far and 2 `usual`
+templates, written the way 3.1.x wrote them) that still regenerates, picks the right Lock and Sudo sets, takes
+`set-limits`, is removed by `remove-appearance` and `remove-person`, and is replaced whole by a dot re-scan, the
+legacy single `capture`, root re-checking the guard against a child that has been broken on purpose, the child's stderr
+never reaching the client, the camera lock, a 60,000-bracket line, the session bound, and the typed allow-list and the
+stored shapes as code.
 
-It cannot say that five landmarks measure a real head, or that real dlib behaves like the fake;
-that is `dev/enrol-record.py` and Phase 0. Do not edit the script while it runs: bash reads it as it goes.
-`E1_SHELL='command' ./dev/e1-enrol-sweep.sh` runs one command in the sandbox with the helpers loaded.
+It cannot say that real dlib behaves like the fake; that is the user's own live run. Do not edit the script while
+it runs: bash reads it as it goes. `E1_SHELL='command' ./dev/e1-enrol-sweep.sh` runs one command in the sandbox with
+the helpers loaded. The SR1 fixes (3.1.0) are in it too: the parent refusing a stranger's template from a child whose
+guard has been broken on purpose (patched copies of the helper), the child's stderr, the camera lock, a bad label, a
+corrupt record's error carrying no path, and the two copies of the template caps being equal.
 
-The SR1 fixes (3.1.0) are in it too: the parent refusing a stranger's template or an out-of-range
-`r` from a child whose guard has been broken on purpose (patched copies of the helper), the
-child's stderr never reaching the client, the child holding the camera lock, a 60,000-bracket
-line, a bad label, a corrupt record's error carrying no path, the session bound no longer
-lengthened by a sweep, and the two copies of the template caps being equal.
-
-### Measuring the same-person guard (3.1.4)
-
-`dev/measure-guard.py --model <dlib_face_recognition_resnet_model_v1.dat[.bz2]> <recording dirs...>` computes the
-helper's own 128-d descriptors with real dlib for a person's recordings (user-run; never committed) and prints, by how far
-off-centre the head is, the percentiles of the owner's distance to the centre template and to the chain, and replays the
-guard (the shipped constants, a sliding chain, and one with HARD growing with r: both variants withdrawn, see
-`dev/SR1-notes.md`) over the frames that reach it. The helper's
-own model is in `/usr/lib/security/howdy/dlib-data/`, root-only, so the script takes the same upstream file from where
-you can read it (`~/.cache/yay/howdy/dlib_face_recognition_resnet_model_v1.dat.bz2`). `--cache <dir>` keeps the
-descriptors in a scratch directory so a rerun takes seconds. The descriptor cache is a private (0700) directory. The tables and the decision are in `dev/SR1-notes.md` (3.1.4).
-
-### Measuring the face's size against the distance (3.1.7)
-
-`dev/measure-scale.py --model <dlib model[.bz2]> --cache <private dir> [--reference <recording> ...] [--detect <recording>] <recordings...>` (user-run, real dlib, nothing committed) prints the eye px of each recording, the distance to a lap's centre by the frame's eye px over the centre's (the table that gave `SCALE_MIN`), the distance to the nearest of several reference centres by eye px (what howdy's 0.35 sees at another distance than the enrolment's) and, for one recording, how often the HOG detector finds a face and a match at 400 or 320 px with upsample 0, 1 or 2. The tables and the decisions are in `dev/SR1-notes.md` (3.1.7). The trace's 3.1.7 fields: `hard_min` (smallest guard distance this second), `eye` (last frame's eye px), `centre_eye`, `hm_eye` (the frame that gave `hard_max`), `eye_lo` and `eye_hi` (range over the frames that reached the guard), `step_hi` (largest smoothed step among them) and `scale` (frames refused for their size).
-
-### Replaying a recording (3.1.3)
-
-`dev/replay-recording.py <recording dir> ...` (user-run; the recordings in `~/.cache/omarchy-face-enrol` are never committed) runs a recording through the real pure functions and the capture loop's decisions and prints, for the lit one-face frames, every `frame_word` result, each gate's failure count on its own, the accepted frames, when the centre would be held and, for a guided recording, how many accepted frames of each prompt land in the Simple wedge. `E0_ADMIN=<another omarchy-face-admin>` compares helper versions; `--step`, `--roll`, `--sharp` try other thresholds. It found that 3.1.2's head-steadiness test read a held head as moving 96% of the time; see `dev/SR1-notes.md` (3.1.3). Not replayed: the encoder (so no `other`/`changed`, and `supported` is approximated by frame spacing) and the child's own face detection.
+The measuring tools of the 3.1.x scan (`measure-guard.py`, `measure-scale.py`, `replay-recording.py`, the late-stranger
+grid and the fixtures they read) were deleted in 3.3.0 with the code they drove; their results stay in
+`dev/SR1-notes.md`. `dev/enrol-record.py` and its test stay: they record raw camera frames and landmarks and do not
+touch the helper.
 
 ### A strobing emitter (3.1.1, corrected in 3.1.2)
 
@@ -1140,8 +1113,8 @@ property of a lit frame. A stream with no lit frame for `STROBE_SILENCE` (2 s: `
 or dead camera or a room too dark for the emitter, says `dark` as before and ends `black_frames`.
 `refine` is decided over lit frames only (`refine_for`). `e0` covers the pure functions against the
 measured numbers; `e1`'s fake camera produces frames with the measured distribution (`unlit`,
-`unlit-start`, `lit`; a step checks them against the fixture) and has `advanced-strobe`, `dot-strobe-*`,
-`unlit-room`, `strobe-black`, `dim` and `strobe-dim`.
+`unlit-start`, `lit`; a step checks them against the fixture) and has `dot-strobe-*`,
+`unlit-room`, `dot-strobe-dim`.
 
 **The debug trace.** `debug=true` in root's `/etc/omarchy-face/config` (not an environment variable:
 root never reads one, and the GUI cannot set a root file) makes the sweep child log one line a second,
@@ -1160,8 +1133,6 @@ as the camera sees it. Signs: `yaw` is positive to the right of the (mirrored) p
 under 0.55 is a band frame: past the floor (four bins) it is left out and not counted towards `changed` (`band` counts it); below the floor it is a stranger frame (`other`, `guard_run`). `dev/SR1-notes.md` has the deltas for SR1.
 
 **The dot scan's line (3.2.0).** One line per press, not per second, at the end of the press: `debug dot pose=left ok=1 agree=3 frames=9 strobe_off=4 black=0 dark=0 none=0 multi=0 closer=0 farther=0 edge=0 stranger=0 centre_max=0.31 t=0.5 why=-`. `agree` is how many good frames sat within 0.30 of the kept one, `closer farther edge` are the centre's size gates (`closer` is a face too small), `stranger` counts frames the guard refused, `centre_max` the largest distance to the first picture of a frame that reached the guard (`n/a` for the centre), `t` the press's frame time and `why` the code it failed with (`-` when taken).
-
-**Late-stranger grid.** `dev/e1-late-grid.sh` (sourced through e1's `E1_SHELL`, see its header) runs the owner's left and right and then somebody else at a chosen identity gap and wobble, seeded, through any version of the helper, and prints one `GRID` line per lap (how it ended, what filled, whether a stranger descriptor was stored). The scenario is `dev/e1-frames.py grid-late2:GAP:WOBBLE:SEED`.
 
 ### How to widen Sudo later
 

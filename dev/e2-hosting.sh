@@ -26,8 +26,8 @@
 #
 # (iii)-(vi), the heartbeat routing of `record` to an in-notch scan and its
 # enrol.json confirmation, are gone with the in-notch scan (Phase 4's live gate:
-# polkit's dialog collapses the notch). (viii) is Phase 6's. (x) is Phase 4's and is
-# in dev/e3-enrol-view.sh (the mode file).
+# polkit's dialog collapses the notch). (viii) is Phase 6's. (x) was Phase 4's, the
+# remembered scan mode; the mode and its file went with the Advanced scan (3.3.0).
 #
 # HEADLESS BY DEFAULT: no window opens anywhere. Every Quickshell harness runs
 # with QT_QPA_PLATFORM=offscreen and no WAYLAND_DISPLAY. What cannot run without a
@@ -461,7 +461,7 @@ check "fresh (the engine not built): false, and stays false" "false false " "$(a
 check "broken-engine (the row says broken): false, and stays false" "false false " "$(avail broken-engine)"
 
 step "no QML errors from Face's files in any harness"
-errors=$(cat "$logs"/*.log 2>/dev/null | grep -E '(Surface|FaceModel|FaceViews|EnrolView|EnrolRing|RecordView|RecordCard|FacePanel|Service)\.qml:[0-9]+.*(TypeError|ReferenceError|Unable to assign)' | head -3 | cut -c1-140)
+errors=$(cat "$logs"/*.log 2>/dev/null | grep -E '(Surface|FaceModel|FaceViews|EnrolView|RecordView|RecordCard|FacePanel|Service)\.qml:[0-9]+.*(TypeError|ReferenceError|Unable to assign)' | head -3 | cut -c1-140)
 check "the service, the panels and the notch logged none" "" "$errors"
 
 echo

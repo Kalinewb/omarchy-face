@@ -195,7 +195,7 @@ sudo /usr/bin/bash -c 'PATH=/usr/bin; set -o pipefail; t=$(mktemp -d) || exit 1
     bash "$t/install.sh" "$1" "$2"
   }
   run "$@"; s=$?; rm -rf -- "$t"; exit $s' \
-  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.2.2
+  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.3.0
 ```
 
 What it does, from the button or from a terminal: root copies the installer out of the
@@ -284,6 +284,42 @@ command puts it back byte for byte, moves the folders back and restarts the shel
 A git checkout goes back to the commit it came from (`v2.2.0` when the system files are
 already 3.0.0). A copy installed with `./install.sh` has no commit to go back to: run
 `git checkout v2.2.0 && ./install.sh` in your checkout afterwards.
+
+### Updating from 3.2.x (to 3.3.0)
+
+Face ID 3.3.0 **removes the Advanced scan**. The idle card no longer asks "Simple or Advanced": the dot scan (look at
+the ball, press Space, five pictures) is the only way to record a face. This changes the system files (the enrolment
+helper, root code, gets smaller: the head-turning scan and everything that served it are deleted), so Setup shows *the
+plugin (3.3.0) is newer than the installed system files* and offers **Update Face's system files**, one password.
+Nothing is lost by the update and **nobody has to scan again**.
+
+**What happens to a face you recorded with Advanced.** Nothing. The record keeps its twelve (or twenty-four) pictures
+and the store format is unchanged: People and Person show it as before, it unlocks the lock screen and `sudo` exactly as
+before (the lock screen picks the same pictures; `sudo` still uses only the first picture), "Remove" works, and
+`regenerate` and the Lock / Sudo counts in Settings read it. What is gone is the way to *make* one. To change it you
+record again with the dot scan, which replaces the whole appearance with five new pictures. Until 3.2.2 the dot scan
+refused to replace an appearance that held more than five pictures (so as not to shrink an Advanced set by accident); that
+rule went with Advanced, because without it such an appearance could not be re-recorded at all. Pressing Re-record on one
+now replaces it, after the same password, and only when you save (Esc or Cancel keeps the old pictures).
+
+**Mixed versions, in both directions (nothing unsafe in either, and nothing is stored that you did not save).**
+
+- *3.3.0 plugin, 3.2.x system files* (you updated the plugin and have not pressed the Setup button yet): the card works,
+  because a 3.2.x helper lists the dot scan. The only difference: that helper still refuses to re-record an appearance
+  that holds more than five pictures, and the card shows "Something went wrong. Try again." Update the system files and it
+  works. Nothing is stored.
+- *3.2.x plugin, 3.3.0 system files* (the system files were updated first): the old card's Simple scan works. Its
+  **Advanced** choice (and an appearance with more than five pictures, which the old card forces into Advanced) finds that
+  the helper no longer lists `sweep`; the old card then falls back to the **single capture**, with the note "Finish the
+  update in a terminal for the full scan". That is the same fallback 3.2.0 had for a helper older than 3.1.0. It takes one
+  centre picture after a 3-2-1; if you press Done it **replaces that appearance with that one picture**, and if you press
+  Esc, nothing is stored. A `sweep` line from any other source is refused ("bad_sweep"), nothing started, nothing stored.
+  Update the plugin to get the dot scan back.
+
+**What did not change.** The identity rule (0.40 and 0.55, 0.56 and 0.60 for the top picture), the runs of three and
+five frames, the cap of five "That did not look like you" presses, the floor (the first picture, left and right), `sudo`
+using only the first picture, and the store format. The debug trace (`debug=true`, `journalctl -t omarchy-face-sweep`) is
+the dot scan's, one line per press; the tag keeps its old name so existing notes still find it.
 
 ### Updating from 3.2.1 (to 3.2.2)
 

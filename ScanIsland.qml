@@ -167,7 +167,7 @@ Item {
       notice: root.notice
       onCloseRequested: root.closeRequested()
 
-      // Only once the bar is mostly grown, so the ring and the links are never
+      // Only once the bar is mostly grown, so the card's line and links are never
       // seen half-clipped inside a bar still arriving. The bar itself never
       // fades; this is what is in it.
       opacity: root.reduced ? (root.heightP > 0.5 ? 1 : 0)

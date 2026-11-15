@@ -11,9 +11,9 @@ import qs.Ui
 // Every decision about the session is in RecordSession.qml; this file is what
 // that state machine looks like.
 //
-// Phase 4 of plan-face-enroll.md put EnrolView.qml in front of this: the ring is
+// Phase 4 of plan-face-enroll.md put EnrolView.qml in front of this: the dot scan is
 // the enrol screen, and this stays as the single capture an old helper (before
-// 3.1.0, no `sweep` in `ready.verbs`) and a session that is not the scan still get.
+// 3.2.0, no `dot` in `ready.verbs`) and a session that is not the scan still get.
 Item {
   id: view
 

@@ -5,13 +5,13 @@ import qs.Ui
 import "common"
 import "common/dotscan.js" as Dot
 
-// The dot scan's card (3.2.0), Simple's face: the camera's circle, the line, the Space key, the links. The ball
+// The dot scan's card (3.2.0), the scan's face since 3.3.0 removed the Advanced one: the camera's circle, the line, the Space key, the links. The ball
 // is not on this card (3.2.1): it is on the real screen, in BallLayer.qml, so the person turns towards the screen's edges.
 // It decides nothing. RecordSession.qml holds what the scan is doing (which pose the ball waits
 // for, whether a press is running, how many frames the helper has gathered, why the last one did
 // not work) and the helper decides whether a face is good; this file is what that looks like.
-// EnrolView.qml puts it in the card instead of the ring when the mode is Simple, and puts the
-// camera's picture in `circle` (it is the only file that names the RGB camera).
+// EnrolView.qml puts it in the card and puts the camera's picture in `circle` (it is the only file
+// that names the RGB camera).
 //
 // Every row has a fixed height, shown or not, so the island does not change size from one state
 // to the next. What is on it, and why, is in the plan's audit-dot-scan.md.
@@ -217,8 +217,7 @@ Item {
       textFormat: Text.PlainText
       width: parent.width
       height: Style.font.caption * 1.6
-      readonly property string words: !card.session ? "" : card.session.message !== "" ? card.session.message
-                                      : card.session.notice !== "" ? card.session.notice : ""
+      readonly property string words: !card.session ? "" : card.session.message
       text: words
       color: card.secondary
       font.family: card.fontFamily
@@ -269,23 +268,10 @@ Item {
       }
     }
 
-    // Under it: the choice of Simple or Advanced while idle, "Scan again" once all five are held.
+    // Under it: "Scan again" once all five are held.
     Item {
       width: parent.width
       height: Style.space(32)
-
-      EnrolMode {
-        id: modeChoice
-        objectName: "modeChoice"
-        anchors.horizontalCenter: parent.horizontalCenter
-        visible: card.idle && !!card.session && card.session.simpleAllowed
-        mode: card.session ? card.session.activeMode : "simple"
-        accentColor: card.accent
-        quietColor: card.secondary
-        foregroundColor: card.fg
-        fontFamily: card.fontFamily
-        onChosen: function (word) { card.session.setMode(word) }
-      }
 
       EnrolLink {
         id: againLink
@@ -339,7 +325,6 @@ Item {
     sourceComponent: Component {
       EnrolDemo {
         objectName: "demo"
-        mode: "simple"
         running: card.demoOn
         headScale: 0.7
         foreground: card.fg

@@ -144,11 +144,11 @@ for f in "${hosted_files[@]}"; do
   # A scan is never drawn inside a host: polkit's dialog takes the focus the notch
   # needs to stay open (the Phase 4 live gate), so nothing the panel is made of
   # may make an EnrolView or a session.
-  sed -E 's#//.*$##' "$f" | grep -qE '\b(ScanIsland|ScrimLayer|EnrolView|EnrolRing|RecordSession|RecordView|RecordPreview)\b' && named+=("$f hosts a scan")
+  sed -E 's#//.*$##' "$f" | grep -qE '\b(ScanIsland|ScrimLayer|EnrolView|RecordSession|RecordView|RecordPreview)\b' && named+=("$f hosts a scan")
 done
 # The card is the one window of a scan: the island and everything in it draw
 # inside it (so a test can draw them with no compositor) and open none.
-for f in ScanIsland.qml ScrimLayer.qml BallLayer.qml DotBall.qml DotStage.qml DotCard.qml EnrolView.qml EnrolRing.qml; do
+for f in ScanIsland.qml ScrimLayer.qml BallLayer.qml DotBall.qml DotStage.qml DotCard.qml EnrolView.qml; do
   window_type <"$f" | grep -q . && named+=("$f opens a window")
 done
 for f in *.qml; do

@@ -229,8 +229,7 @@ Item {
       label: String(label || name),
       isNew: !!isNew,
       ask: engine,
-      scan: true,
-      stored: indicator.templatesFor(String(name), String(appearance || "No glasses"))
+      scan: true
     })
     if (!root.session) return "the session could not be created"
     root.session.finished.connect(function (saved) {

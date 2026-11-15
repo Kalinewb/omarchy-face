@@ -1,24 +1,19 @@
 import QtQuick
-import QtQuick.Shapes
 import Quickshell
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-import "common"
-import "common/enrolring.js" as Ring
 
-// The enrol screen (plan-face-enroll.md section 3): the ring around the live
-// circle, the line, the links. RecordCard.qml puts it in its window under the
-// camera, in every home: a scan is never drawn inside the notch (Start brings up
-// polkit's password dialog, which takes the focus the notch needs to stay open;
-// the Phase 4 live gate, doubt 11). It draws no window, no background and no
-// container animation, and it takes its look from `colors` (foreground,
-// secondary, accent, urgent, fontFamily, radiusFor, reducedMotion), the card's.
+// The enrol screen (plan-face-enroll.md section 3): the dot scan's card (DotCard.qml), or on a
+// helper older than 3.2.0 the single capture (RecordView.qml). RecordCard.qml puts it in its window
+// under the camera, in every home: a scan is never drawn inside the notch (Start brings up
+// polkit's password dialog, which takes the focus the notch needs to stay open; the Phase 4 live
+// gate, doubt 11). It draws no window, no background and no container animation, and it takes its
+// look from `colors` (foreground, secondary, accent, urgent, fontFamily, radiusFor,
+// reducedMotion), the card's.
 //
-// Everything about the scan is RecordSession.qml's (the state machine) and the
-// engine's (what is reached, filled, skipped); this file is what that looks like.
-// A session that is not the scan, or one on a helper older than 3.1.0, gets the
-// single-capture view it always had (RecordView.qml), drawn inside this one.
+// Everything about the scan is RecordSession.qml's (the state machine) and the helper's (what is
+// taken, whether a face is good); this file is what that looks like.
 //
 // This is the only file that names the RGB camera (RecordPreview.qml). The camera
 // exists only while `previewOn`: the card is showing this view AND the person has
@@ -50,10 +45,7 @@ Item {
   property var irCrop: ({ x: 0.05, y: 0.05, w: 0.9, h: 0.9 })
 
   readonly property bool legacy: !view.session || !view.session.scan || view.session.legacy
-  // Simple is the dot scan (DotCard.qml); Advanced keeps the ring.
-  readonly property bool dot: !view.legacy && view.mode === "simple"
   readonly property string phase: view.session ? view.session.phase : "idle"
-  readonly property string mode: view.session ? view.session.activeMode : "simple"
 
   // --- the card's colours -------------------------------------------------------
   readonly property color fg: view.colors ? view.colors.foreground : Commons.Color.foreground
@@ -79,68 +71,16 @@ Item {
   function actionText() { return legacyLoader.item ? legacyLoader.item.actionText() : "" }
   function actionNote() { return legacyLoader.item ? legacyLoader.item.actionNote() : "" }
 
-  // Space: one press of the dot scan, when the card is showing it.
-  function capture() { if (view.dot) dotCard.capture() }
+  implicitHeight: view.legacy ? (legacyLoader.item ? legacyLoader.item.implicitHeight : 0) : dotCard.implicitHeight
 
-  // Return: Start, Done, or Try again, whichever the view is offering.
+  // Space: one press of the dot scan, when the card is showing it.
+  function capture() { if (!view.legacy) dotCard.capture() }
+
+  // Return: Start, Save or Done, whichever the view is offering.
   function activate() {
     if (!view.session) return
     if (view.legacy) { if (legacyLoader.item) legacyLoader.item.activate(); return }
-    if (view.dot) { dotCard.activate(); return }
-    var s = view.session
-    if (view.phase === "idle") s.start()
-    else if (s.scanState === "swept") s.done()
-    else if (view.phase === "verdict") s.tryAgain()
-    else if (s.scanState === "running" && s.canFinish) s.finish()
-  }
-
-  implicitHeight: view.legacy ? (legacyLoader.item ? legacyLoader.item.implicitHeight : 0)
-                              : (view.dot ? dotCard.implicitHeight : col.implicitHeight)
-
-  // --- the line (section 3, Text and the outcome list): Advanced's. Simple's is DotCard.qml's ---------
-  readonly property var gateText: ({
-    "over": "A little less",
-    "edge": "Centre your face",
-    "closer": "A little closer",
-    "farther": "A little farther",
-    "multiple": "Only you, please",
-    "dark": "Too dark here",
-    "other": "Face the circle and hold still."
-  })
-
-  function lineText() {
-    var s = view.session
-    if (!s) return ""
-    if (s.discarding) return "Nothing was saved"
-    var ph = s.phase
-    if (ph === "idle") return "Fit your face in the circle."
-    if (ph === "authorising") return "Waiting for authorisation…"
-    if (ph === "closing") return "Saving…"
-    if (ph === "verdict") return s.failText[s.failCode] !== undefined ? s.failText[s.failCode] : "That did not work"
-    if (s.scanState === "swept")
-      return s.filled.length >= 12 ? "The circle is complete." : "All set."
-    // a gate that needs the person to do something (centre, closer, only you) is said as it is
-    if (view.gateText[s.trackState] !== undefined) return view.gateText[s.trackState]
-    if (ph === "centre") return s.centre > 0 ? "Hold still" : "Look straight at the circle"
-    var bin = s.target
-    if (Ring.filledCount(Ring.targets(), s.bins) >= 12) return "The circle is complete."
-    return typeof bin === "number" && Number(s.bins[bin]) > 0 ? "Hold still" : "Move your head slowly to complete the circle."
-  }
-
-  readonly property string line: view.lineText()
-
-  // The circle shakes on the outcomes that shake (the outcome list): +6, -6, +3, 0.
-  property real shakeX: 0
-  SequentialAnimation {
-    id: shake
-    NumberAnimation { target: view; property: "shakeX"; to: 6; duration: 50 }
-    NumberAnimation { target: view; property: "shakeX"; to: -6; duration: 50 }
-    NumberAnimation { target: view; property: "shakeX"; to: 3; duration: 50 }
-    NumberAnimation { target: view; property: "shakeX"; to: 0; duration: 50 }
-  }
-  Connections {
-    target: view.session
-    function onFailSerialChanged() { if (!view.reduced && !view.legacy) shake.restart() }
+    dotCard.activate()
   }
 
   // --- the preview, shared with the single capture view --------------------------------
@@ -182,18 +122,11 @@ Item {
     }
   }
 
-  // --- the scan ---------------------------------------------------------------------
-  // The idle demo (EnrolDemo.qml) plays only while the card is idle, on screen and
-  // motion is allowed; Start stops it, and with reduced motion there is the static
-  // glyph and one caption line instead.
-  readonly property bool demoOn: view.phase === "idle" && !view.legacy && !view.dot && !view.reduced && view.live
-  readonly property string staticCaption: "Then turn slowly all the way round."
-
-  // --- Simple: the dot scan ---------------------------------------------------------------------
+  // --- the dot scan -----------------------------------------------------------------------
   DotCard {
     id: dotCard
     objectName: "dotCard"
-    visible: view.dot
+    visible: !view.legacy
     width: view.width
     session: view.session
     fg: view.fg
@@ -204,259 +137,16 @@ Item {
     reduced: view.reduced
     live: view.live
     notice: view.notice
-    previewShown: previewLoader.active && view.dot
+    previewShown: previewLoader.active && !view.legacy
     onCloseRequested: view.closeRequested()
   }
 
-  Column {
-    id: col
-    visible: !view.legacy && !view.dot
-    width: view.width
-    spacing: Style.space(8)
-
-    Item {
-      width: parent.width
-      height: Style.space(32)
-
-      EnrolLink {
-        id: cancelLink
-        objectName: "cancelLink"
-        anchors.left: parent.left
-        text: "Cancel"
-        quiet: true
-        quietColor: view.secondary
-        accentColor: view.accent
-        fontFamily: view.fontFamily
-        visible: view.phase !== "closing"
-        // Esc and Cancel are one verb: the session decides.
-        onClicked: view.closeRequested()
-      }
-    }
-
-    Item {
-      width: parent.width
-      height: ring.implicitHeight
-      transform: Translate { x: view.shakeX }
-
-      EnrolRing {
-        id: ring
-        objectName: "ring"
-        anchors.horizontalCenter: parent.horizontalCenter
-        targets: Ring.targets()
-        target: view.demoOn ? demo.target : (view.session && ring.active ? view.session.target : null)
-        centre: view.session ? view.session.centre : 0
-        bins: view.demoOn ? demo.bins : (view.session ? view.session.bins : [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
-        demo: view.demoOn
-        demoCentre: demo.centre
-        canFinish: view.session ? view.session.canFinish : false
-        u: view.session ? view.session.u : 0
-        v: view.session ? view.session.v : 0
-        phase: view.phase
-        message: view.line
-        colors: ({ foreground: view.fg, secondary: view.secondary, accent: view.accent })
-        scanning: !!view.session && view.session.trackState === view.session.acceptedWord
-        scans: view.session ? view.session.acceptedFrames : 0
-        reducedMotion: view.reduced
-        masked: previewLoader.active
-
-        // The face glyph in its dotted ring, and nothing live: no camera object.
-        Text {
-          id: glyph
-          objectName: "glyph"
-          anchors.centerIn: parent
-          visible: !previewLoader.active && !view.demoOn && !(view.session && view.session.scanState === "swept")
-          textFormat: Text.PlainText
-          text: "\u{f0643}"
-          color: view.secondary
-          opacity: 0.3
-          font.family: view.fontFamily
-          font.pixelSize: 80
-        }
-
-        // What the scan will ask, played while idle (no camera).
-        EnrolDemo {
-          id: demo
-          objectName: "demo"
-          anchors.fill: parent
-          visible: view.demoOn
-          mode: "advanced"
-          running: view.demoOn
-          foreground: view.fg
-          secondary: view.secondary
-        }
-
-        // Completion draws a check in 180 ms; there is no celebration.
-        Item {
-          id: checkBox
-          objectName: "check"
-          anchors.centerIn: parent
-          width: 44
-          height: 44
-          // The check is drawn along its path in 180 ms (no celebration spring).
-          property real drawn: view.session && view.session.scanState === "swept" ? 1 : 0
-          Behavior on drawn { enabled: !view.reduced; NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
-          readonly property real first: Math.min(1, drawn * 43.1 / 14.1)
-          readonly property real second: Math.max(0, Math.min(1, (drawn * 43.1 - 14.1) / 29))
-          visible: drawn > 0
-          Shape {
-            width: 44; height: 44
-            preferredRendererType: Shape.CurveRenderer
-            ShapePath {
-              strokeColor: view.accent
-              strokeWidth: 3
-              fillColor: "transparent"
-              capStyle: ShapePath.RoundCap
-              joinStyle: ShapePath.RoundJoin
-              startX: 8; startY: 23
-              PathLine { x: 8 + 10 * checkBox.first; y: 23 + 10 * checkBox.first }
-              PathLine { x: 18 + 19 * checkBox.second; y: 33 - 22 * checkBox.second }
-            }
-          }
-        }
-      }
-    }
-
-    Text {
-      id: lineLabel
-      objectName: "line"
-      textFormat: Text.PlainText
-      width: parent.width
-      text: view.line
-      color: view.fg
-      font.family: view.fontFamily
-      font.pixelSize: Style.font.body
-      font.weight: Font.DemiBold
-      horizontalAlignment: Text.AlignHCenter
-      wrapMode: Text.WordWrap
-      maximumLineCount: 2
-      elide: Text.ElideRight
-      Accessible.role: Accessible.StaticText
-      Accessible.name: lineLabel.text
-      opacity: 1
-    }
-
-    // One short caption under it while idle: the demo's step ("Turn your head to the
-    // left"), or with reduced motion a single static line. Its height is always
-    // reserved, so the island does not change size when Start removes it.
-    Text {
-      id: captionLabel
-      objectName: "caption"
-      textFormat: Text.PlainText
-      width: parent.width
-      height: Style.font.caption * 1.6
-      text: view.demoOn ? demo.caption : (view.phase === "idle" && !view.legacy && view.reduced ? view.staticCaption : "")
-      color: view.secondary
-      font.family: view.fontFamily
-      font.pixelSize: Style.font.caption
-      horizontalAlignment: Text.AlignHCenter
-      verticalAlignment: Text.AlignVCenter
-      elide: Text.ElideRight
-      Accessible.role: Accessible.StaticText
-      Accessible.name: captionLabel.text
-    }
-
-    // The quiet second line: a reason (Not authorised), an engine hint that does
-    // not end the lap (A few more positions first), the old helper's note.
-    Text {
-      id: noteLabel
-      objectName: "note"
-      textFormat: Text.PlainText
-      width: parent.width
-      readonly property string words: !view.session ? ""
-          : view.session.message !== "" ? view.session.message
-          : view.session.notice !== "" ? view.session.notice
-          : view.session.legacy ? view.session.legacyNote : ""
-      visible: words !== ""
-      text: words
-      color: view.secondary
-      font.family: view.fontFamily
-      font.pixelSize: Style.font.caption
-      horizontalAlignment: Text.AlignHCenter
-      wrapMode: Text.WordWrap
-      Accessible.role: Accessible.StaticText
-      Accessible.name: noteLabel.text
-    }
-
-    // --- links: text only, accent, in Tab order -----------------------------------
-    Column {
-      id: links
-      anchors.horizontalCenter: parent.horizontalCenter
-      spacing: Style.space(2)
-
-      readonly property bool scanLive: !!view.session && view.session.sweepFlow
-      readonly property string scanState: view.session ? view.session.scanState : "ready"
-
-      EnrolLink {
-        id: startLink
-        objectName: "startLink"
-        anchors.horizontalCenter: parent.horizontalCenter
-        text: "Start"
-        accentColor: view.accent
-        fontFamily: view.fontFamily
-        visible: view.phase === "idle"
-        onClicked: view.session.start()
-      }
-
-      EnrolLink {
-        id: doneLink
-        objectName: "doneLink"
-        anchors.horizontalCenter: parent.horizontalCenter
-        // Advanced while the lap runs once the engine says so (it sends `finish`);
-        // in both modes on `swept` (it sends `done` and ends the session). The
-        // Simple view never sends `finish`.
-        text: "Done"
-        accentColor: view.accent
-        fontFamily: view.fontFamily
-        visible: links.scanLive && ((links.scanState === "swept")
-                 || (links.scanState === "running" && view.mode === "advanced" && view.session.canFinish))
-        onClicked: links.scanState === "swept" ? view.session.done() : view.session.finish()
-      }
-
-      EnrolLink {
-        id: againLink
-        objectName: "againLink"
-        anchors.horizontalCenter: parent.horizontalCenter
-        text: "Try again"
-        accentColor: view.accent
-        fontFamily: view.fontFamily
-        visible: view.phase === "verdict" && links.scanState === "ready"
-        onClicked: view.session.tryAgain()
-      }
-
-      // Simple or Advanced, while idle: both shown, the one in use filled (common/EnrolMode.qml).
-      EnrolMode {
-        id: modeChoice
-        objectName: "modeChoiceAdv"
-        anchors.horizontalCenter: parent.horizontalCenter
-        visible: view.phase === "idle" && !!view.session && view.session.simpleAllowed
-        mode: view.mode
-        accentColor: view.accent
-        quietColor: view.secondary
-        foregroundColor: view.fg
-        fontFamily: view.fontFamily
-        onChosen: function (word) { view.session.setMode(word) }
-      }
-    }
-
-    Text {
-      textFormat: Text.PlainText
-      width: parent.width
-      visible: view.notice !== ""
-      text: view.notice
-      color: view.accent
-      font.family: view.fontFamily
-      font.pixelSize: Style.font.caption
-      horizontalAlignment: Text.AlignHCenter
-      wrapMode: Text.WordWrap
-    }
-  }
-
-  // The RGB preview, mirrored, in the circle (the ring's in Advanced, the stage's in Simple). The
-  // Loader exists, and so does the camera, only while `previewOn` and a device is named.
+  // The RGB preview, mirrored, in the stage's circle. The Loader exists, and so does the camera,
+  // only while `previewOn` and a device is named.
   Loader {
     id: previewLoader
     objectName: "previewLoader"
-    parent: view.dot ? dotCard.circle : ring.circle
+    parent: dotCard.circle
     anchors.centerIn: parent
     width: parent ? parent.width : 0
     height: parent ? parent.height : 0
