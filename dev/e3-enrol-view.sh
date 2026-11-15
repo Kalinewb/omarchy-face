@@ -277,7 +277,7 @@ step "A helper that does not know dot (before 3.2.0): the single capture, with a
 out=$(run dot-skew)
 check "before Start nothing is different" "idle legacy=false" "$(field skew-idle "$out")"
 check "ready without dot: the old single capture's countdown, in the legacy view, and the dot scan is not used" "countdown legacy true dotFlow false scanFlow false|legacy true" "$(field skew-phase "$out")|$(field skew-view "$out")"
-check "...nothing was sent (no sweep and no dot to a helper that would ignore them), and it says why" "|Finish the update in a terminal for the full scan" "$(field skew-sent "$out")|$(field skew-note "$out")"
+check "...nothing was sent (no sweep and no dot to a helper that would ignore them), and it says why" "|Update Face's system files in Setup for the new scan" "$(field skew-sent "$out")|$(field skew-note "$out")"
 
 step "A 3.2.x helper (it lists sweep as well as dot) with this card: the dot scan, and the Advanced verbs are never sent"
 out=$(run dot-skew-326)
@@ -294,7 +294,7 @@ out=$(run skew)
 check "before Start nothing is different (the idle view)" "idle false" "$(field skew-idle "$out")"
 check "ready without verbs: the countdown of the single capture, in the legacy view" "countdown true | true" "$(field skew-phase "$out") | $(field skew-legacy-view "$out")"
 check "…the picker and its Start are the old ones" "Start" "$(field skew-picker "$out")"
-check "…it says why, in the old helper's note" "Finish the update in a terminal for the full scan" "$(field skew-note-text "$out")"
+check "…it says why, in the old helper's note" "Update Face's system files in Setup for the new scan" "$(field skew-note-text "$out")"
 check "…capture (not dot) is what it sends" "capture | countdown" "$(field skew-capture-after-countdown "$out")"
 check "…and no sweep was ever sent" "true" "$(field skew-no-sweep "$out")"
 check "…the verdict closes the preview" "verdict good cameras 0" "$(field skew-verdict "$out")"

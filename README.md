@@ -311,7 +311,7 @@ now replaces it, after the same password, and only when you save (Esc or Cancel 
 - *3.2.x plugin, 3.3.0 system files* (the system files were updated first): the old card's Simple scan works. Its
   **Advanced** choice (and an appearance with more than five pictures, which the old card forces into Advanced) finds that
   the helper no longer lists `sweep`; the old card then falls back to the **single capture**, with the note "Finish the
-  update in a terminal for the full scan". That is the same fallback 3.2.0 had for a helper older than 3.1.0. It takes one
+  update in a terminal for the full scan" (3.3.0 reworded the note to "Update Face's system files in Setup for the new scan"). That is the same fallback 3.2.0 had for a helper older than 3.1.0. It takes one
   centre picture after a 3-2-1; if you press Done it **replaces that appearance with that one picture**, and if you press
   Esc, nothing is stored. A `sweep` line from any other source is refused ("bad_sweep"), nothing started, nothing stored.
   Update the plugin to get the dot scan back.
@@ -406,7 +406,7 @@ both and which is on.
 This changes the system files (the enrolment helper, root code), so Setup shows *the plugin (3.2.0) is newer than the
 installed system files*: **Update Face's system files**, one password. Nobody who is already stored is touched, and you
 do not have to scan again. Update the plugin and the system files together: a 3.2.0 card on 3.1.x system files
-falls back to the old single capture with a note ("Finish the update in a terminal for the full scan"), and a 3.1.x
+falls back to the old single capture with a note ("Finish the update in a terminal for the full scan"; reworded in 3.3.0), and a 3.1.x
 card on 3.2.0 system files has its Simple scan refused ("Something went wrong"), because the helper no longer
 has a Simple sweep.
 

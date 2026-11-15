@@ -100,7 +100,7 @@ Item {
   property bool scanFlow: false
   // ...and the helper did not: the single capture, in the scan's own view.
   property bool legacy: false
-  readonly property string legacyNote: "Finish the update in a terminal for the full scan"
+  readonly property string legacyNote: "Update Face's system files in Setup for the new scan"
   // Table V's scan state, mirrored from events: ready | running | swept.
   property string scanState: "ready"
 
