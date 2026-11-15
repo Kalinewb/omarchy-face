@@ -2690,8 +2690,8 @@ def cmd_enroll_session(name):
                 reference = []
             else:
                 # the centre first, then what is held (this pose's own earlier take is being replaced)
-                reference = [captured[label]["encoding"]] + [
-                    e["encoding"] for e in (captured[label].get("extra") or []) if e["pose"] != stored_pose]
+                reference = sw["dot_references"](pose, captured[label]["encoding"], [
+                    (e["pose"], e["encoding"]) for e in (captured[label].get("extra") or []) if e["pose"] != stored_pose])
             state = "running"
             emit_checked({"event": "dotting", "pose": pose, "need": sw["DOT_NEED"]})
             outcome = run_press(reader, pose, reference, bounds, ends_at)
@@ -3749,6 +3749,21 @@ def dot_limits(pose):
     """(CHAIN, HARD) for a press of `pose`: the guard's two bounds, loosened for the top pose only. The one place the numbers
     are chosen: the child's guard, the parent's `judge_dot` and `pick` (which templates a use may take) all read it."""
     return (DOT_TOP_CHAIN, DOT_TOP_HARD) if pose == "top" else (CHAIN, HARD)
+
+
+def dot_references(pose, centre, held):
+    """The list of held pictures a press of `pose` is judged against (the centre first), by the child's guard and by the parent's
+    `judge_dot` alike: ONE list, so they stay in step. `held` is [(stored pose name, encoding)] of the other poses this appearance holds.
+    The top pose is stored up to DOT_TOP_HARD from the centre, beyond what any other pose may be (3.2.2); a held top picture must not
+    become a chain link for the OTHER poses, or somebody admitted at the top could walk on into right and bottom with the loosened
+    reach. So for a press of any other pose a held top picture counts only if the 3.1.x bounds would have admitted it: within HARD of the
+    centre and within CHAIN of the other references. A press of the top itself is judged against everything held."""
+    top = pose_name(DOT_BINS["top"])
+    reference = [centre] + [encoding for name, encoding in held if name != top]
+    tops = [encoding for name, encoding in held if name == top]
+    if pose == "top":
+        return reference + tops
+    return reference + [e for e in tops if distance(e, centre) <= HARD and min(distance(e, o) for o in reference) <= CHAIN]
 
 
 def dot_agree(frames):

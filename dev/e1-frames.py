@@ -186,6 +186,10 @@ SCENARIOS = {
     "dot-strobe-dim": lambda: strobe(build([dict(n=200, kind="dim")])),
     # no face, a dark room, a covered camera, two faces, a face too small or too big (the centre's gates)
     "dot-none": lambda: build([dict(n=120, faces=0)]),
+    # somebody who took the TOP at 0.52 from the centre, then presses right and bottom: his frames sit 0.1 from that top picture
+    # (so inside CHAIN of it) and 0.53 from the centre (inside HARD), but over CHAIN of the centre and of the owner's left
+    "dot-chain-right": lambda: dot_press("right", who=0.53, drift=0.10, travel=0),
+    "dot-chain-bottom": lambda: dot_press("bottom", who=0.53, drift=0.10, travel=0),
     # the centre with the eye line tilted past ROLL_MAX (25 degrees)
     "dot-centre-roll": lambda: build([dict(n=120, roll=30.0)]),
     "dot-dim": lambda: build([dict(n=120, kind="dim")]),

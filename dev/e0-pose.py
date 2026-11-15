@@ -1048,6 +1048,27 @@ def test_dot():
     check("per-pose guard limits: the top pose has DOT_TOP_CHAIN 0.56 and DOT_TOP_HARD 0.60 (HARD never under CHAIN), every other pose the 3.1.x CHAIN 0.40 and HARD 0.55",
           sw.dot_limits("top") == (sw.DOT_TOP_CHAIN, sw.DOT_TOP_HARD) == (0.56, 0.60) and sw.DOT_TOP_CHAIN <= sw.DOT_TOP_HARD
           and all(sw.dot_limits(p) == (sw.CHAIN, sw.HARD) == (0.40, 0.55) for p in ("centre", "left", "right", "bottom")))
+    # --- dot_references: a held TOP picture is a chain link for the other poses only under the 3.1.x bounds (F1 of the 3.2.2 re-read)
+    dr = sw.dot_references
+    c0 = enc(0.0)
+    left = ("a270", enc(0.0, 0.0, 0.30))
+    def top_at(d):
+        return ("a000", enc(d))
+    names = lambda refs: sorted(round(r[0], 2) for r in refs)
+    check("the centre first, always; a press of any pose gets every held non-top picture",
+          dr("right", c0, [left])[0] == c0 and len(dr("right", c0, [left])) == 2 and len(dr("top", c0, [left])) == 2)
+    check("a TOP press is judged against everything held, a held top picture included, wherever it sits",
+          len(dr("top", c0, [left, top_at(0.58)])) == 3)
+    check("another pose is NOT judged against a held top picture 0.52 from the centre (over CHAIN of every other reference): somebody admitted at the top cannot chain on",
+          len(dr("right", c0, [left, top_at(0.52)])) == 2 and len(dr("bottom", c0, [left, top_at(0.58)])) == 2)
+    check("...nor one over HARD (0.56-0.60 is the top's own reach), nor one within CHAIN of a reference but over HARD of the centre",
+          len(dr("right", c0, [left, top_at(0.56)])) == 2
+          and len(dr("right", c0, [("a270", enc(0.0, 0.0, 0.50)), top_at(0.56)])) == 2)
+    check("a held top picture the 3.1.x rule WOULD have admitted (within CHAIN of the centre, or of another reference with the centre within HARD) is still a reference",
+          len(dr("right", c0, [left, top_at(0.30)])) == 3 and len(dr("right", c0, [left, top_at(0.40)])) == 3
+          and len(dr("right", c0, [("a270", enc(0.50)), top_at(0.54)])) == 3
+          and len(dr("right", c0, [left, top_at(0.4001)])) == 2)
+    check("an Advanced-style held set (other bins) is untouched, in order", [r[0] for r in dr("top", c0, [("a090", enc(0.1)), ("a180", enc(0.2))])] == [0.0, 0.1, 0.2])
     check("a press cannot out-wait its own ceiling: DOT_SECONDS is short (under 10 s) and positive", 0 < sw.DOT_SECONDS < 10)
 
     # --- dot_short: how much bigger a too-small face has to look (3.2.1)

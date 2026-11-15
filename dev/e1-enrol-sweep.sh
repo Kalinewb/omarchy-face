@@ -525,6 +525,21 @@ for pose in left right bottom; do
   got=$(top_stored 0.38 0.02 10 uni "$pose")
   same "...and 0.38 +-0.02 still stores at $pose (inside CHAIN 0.40): 10 of 10" '10' "$got"
 done
+step "dot scan: a stranger admitted at the TOP cannot chain on into right and bottom (3.2.2 re-read F1)"
+reset_store
+scenario dot-centre dot-left "dot-straddle:0.52:0.02:1:uni:top" dot-chain-right dot-chain-bottom
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"dotted\",\"pose\":\"left\"} 60" "send $DOTT" "awaitwhere {\"event\":\"dotted\",\"pose\":\"top\"} 60" "send $DOTR" "awaitwhere {\"event\":\"capture_failed\"} 60" "send $DOTB" "sleep 1.5" "send $DONE" "sleep 1" "eof")
+same "centre and left held, a stranger takes the top at 0.52 (stored: that is the top pose's reach), then right and bottom with frames 0.1 from his top picture: both are not_you, nothing of his chains in, the scan is not saveable" '[["centre","left","top"],2,false]' "$(q "$out" '[[e["pose"] for e in evs if e.get("event") == "dotted"], len([e for e in evs if e.get("event") == "capture_failed" and e.get("code") == "not_you"]), any(e.get("event") == "saved" for e in evs)]')"
+check "...and nothing was written" bash -c "[[ ! -e $STORE/people/emil.json ]]"
+reset_store
+scenario dot-centre dot-left "dot-straddle:0.52:0.02:1:uni:top" dot-right dot-bottom
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"dotted\",\"pose\":\"left\"} 60" "send $DOTT" "awaitwhere {\"event\":\"dotted\",\"pose\":\"top\"} 60" "send $DOTR" "awaitwhere {\"event\":\"dotted\",\"pose\":\"right\"} 60" "send $DOTB" "awaitwhere {\"event\":\"dotted\",\"pose\":\"bottom\"} 60" "send $DONE" "await saved 30")
+same "the owner: centre, left, top at 0.52, right and bottom at their normal 0.30: all five are taken and saved" '[["centre","left","top","right","bottom"],true,0]' "$(q "$out" '[[e["pose"] for e in evs if e.get("event") == "dotted"], any(e.get("event") == "saved" for e in evs), len([e for e in evs if e.get("event") == "capture_failed"])]')"
+same "...with five templates stored (the centre and the four poses)" '5' "$(python3 -c '
+import json, sys
+a = json.load(open(sys.argv[1]))["appearances"][0]
+print(1 + len(a.get("extra") or []))' "$STORE/people/emil.json")"
+
 step "dot scan: what can be saved, and the refusals"
 reset_store
 scenario dot-centre dot-left dot-right
@@ -980,6 +995,16 @@ reset_store
 scenario dot-centre "dot-straddle:0.58:0.0:1:uni:left"
 out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"capture_failed\"} 60" "eof")
 same "...(the left press at 0.58, same broken child)" '"not_you"' "$(q "$out" 'last("capture_failed")["code"]')"
+ADMIN=$REAL_ADMIN
+# the control: the 3.2.2 helper as first built (every held picture a reference) stores the same flow
+patch_admin "$LAB/admin-allref" '                reference = sw["dot_references"](pose, captured[label]["encoding"], [
+                    (e["pose"], e["encoding"]) for e in (captured[label].get("extra") or []) if e["pose"] != stored_pose])' '                reference = [captured[label]["encoding"]] + [
+                    e["encoding"] for e in (captured[label].get("extra") or []) if e["pose"] != stored_pose]'
+ADMIN=$LAB/admin-allref
+reset_store
+scenario dot-centre dot-left "dot-straddle:0.52:0.02:1:uni:top" dot-chain-right dot-chain-bottom
+out=$(session emil "await ready 30" "send $CREATE" "send $DOTC" "await dotted 60" "send $DOTL" "awaitwhere {\"event\":\"dotted\",\"pose\":\"left\"} 60" "send $DOTT" "awaitwhere {\"event\":\"dotted\",\"pose\":\"top\"} 60" "send $DOTR" "awaitwhere {\"event\":\"dotted\",\"pose\":\"right\"} 60" "send $DOTB" "awaitwhere {\"event\":\"dotted\",\"pose\":\"bottom\"} 60" "send $DONE" "await saved 30")
+same "control: with every held picture a reference (as first built) the same stranger chains into right and bottom and is saved" '[["centre","left","top","right","bottom"],true]' "$(q "$out" '[[e["pose"] for e in evs if e.get("event") == "dotted"], any(e.get("event") == "saved" for e in evs)]')"
 ADMIN=$REAL_ADMIN
 reset_store
 scenario dot-centre dot-stranger-left
