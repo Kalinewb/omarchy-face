@@ -742,9 +742,9 @@ At this commit: e0 255 checks, e1 248, e3 222, lint, check-pins and check-pins-t
 ## Delta in 3.3.0 vs 99190cd (3.2.2): the Advanced scan is removed. What a security re-read must check (root code, and it only shrinks)
 
 **What the change is.** The user said "Remove the advanced scan". Everything that served it is deleted from `system/omarchy-face-admin`
-(5355 to 4294 lines: **1061 removed**, 90 lines added) and from the plugin; the dot scan, the single `capture`, the store, `pick`, `regenerate`,
+(5355 to 4290 lines: `git diff --numstat 99190cd` says **1156 deleted, 91 added**, net 1065) and from the plugin; the dot scan, the single `capture`, the store, `pick`, `regenerate`,
 `set-limits`, `remove-*` and the Sudo policy are untouched in behaviour. The other nine pinned files change only their version header;
-`system/install.sh` the version, the pins and its checksum file. `git diff --stat 99190cd`: 47 files, 687 insertions, 5310 deletions.
+`system/install.sh` the version, the pins and its checksum file. `git diff --shortstat 99190cd` at b08ac1a (the last code commit, before this notes fix): 52 files, 896 insertions, 5335 deletions.
 
 ### 1. What was removed from the helper (re-read the diff; every line in it is a deletion or a narrowing)
 - **The verbs.** `enroll-session` no longer has `sweep`, `trial`, `usual`, `finish` or `abort`. The first three are named and answered `bad_sweep`
@@ -753,8 +753,9 @@ At this commit: e0 255 checks, e1 248, e3 222, lint, check-pins and check-pins-t
 - **The sweep child and its parent half.** `run_sweep` (the 90 s lap loop: pose estimation, the 12-bin wedge, dwell, patience, steadiness, the
   scale band, lap 2, `trial`), `judge` (the parent's re-check of a lap), `sweep_args`/the old argument vector, the lap clock and stall bound, the
   `track`/`sweeping`/`swept`/`aborted` events and their allow-list keys (`mode`, `lap`, `targets`, `quota`, `u`, `v`, `target`, `centre`, `bins`,
-  `canFinish`, `filled`, `centreHeld`), and `stored_count` with rule R. `SWEEP_EVENTS` is now `ready, capturing, captured, capture_failed, dotting,
-  dot, dotted, saved, discarded, error`. `CODES` is twelve (was seventeen: `changed`, `too_few`, `lap_timeout`, `sweep_stalled`, `not_enough` went).
+  `canFinish`, `filled`, `centreHeld`), and `stored_count` with rule R. `SWEEP_EVENTS` is now the four events the typed allow-list lets through: `capture_failed, dotting, dot,
+  dotted`. (`ready`, `capturing`, `captured`, `saved`, `discarded` and `error` go through the parent's raw `emit`, not the allow-list, as they always did; the allow-list keys `best`, `threshold`
+  and `margin`, which nothing typed carried, were removed in the follow-up and `_in_range` with them.) `CODES` is twelve (was seventeen: `changed`, `too_few`, `lap_timeout`, `sweep_stalled`, `not_enough` went).
 - **The pure half.** `neutral_of`, `pose_uv`, `pose_decouple`, `is_steady`, `in_target`, the dwell functions, `current_target`, `can_finish`, `lap_ended`,
   `lap_result`, `lap2_want`, `lap2_word`, `scale_word`, `guard_ok`, `guard_distances`, `settle_verdict`, `changed_step`, `refine_for`, `track_bins`,
   `valid_sweep`, `gate_failures`, and the constants only they read (`SMOOTH_FRAMES`, `STEADY_*`, `COUPLING_C`, `SIMPLE_*`, `R_MIN`, `SCALE_MIN`, the dwell
@@ -803,7 +804,7 @@ from `validate_appearance` and 3.1.x's own `make_extra` conventions. The user's 
 
 ### 6. Tests
 e0 126 (was 255: the pose, noise, coupling, scale, support, plain-turn, lap and wedge tests went; `frame_word` seven-argument gates, the strobe rule, `guard_verdict`,
-`pick` on both record shapes, table V including the refused Advanced verbs, `test_dot` stay), e1 150 (was 248; 9m30s), e3 153 (was 222), lint, check-pins and
+`pick` on both record shapes, table V including the refused Advanced verbs, `test_dot` stay), e1 152 (was 248; about 10 min), e3 153 (was 222), e2 65, lint, check-pins and
 check-pins-test (7). e1 additions: the Advanced verbs refused one by one with no child started, a stored 27-template record regenerated / limited / removed / replaced,
 the legacy `capture` refused after a press. e3 additions: no choice of scan on the idle card, the card sends only `create`, `dot`, `capture` and `done`, a 3.2.x helper.
 Deleted dev tools (they drove removed code): `measure-guard.py`, `measure-scale.py`, `replay-recording.py`, `e1-late-grid.sh`, the `ir-held-head-stats.json` and
@@ -817,3 +818,11 @@ Openers that set the stack (`openAt`, `openWithBase`, `resumeAt`, the bar press)
 attention routes (a lock screen that stopped working: `settings`; Face's own failures: `setup`, as before). So on a set-up machine the bar press and an empty-route `open` land on the
 home, and People / Settings / Remove are one click below it. Nothing in `system/` reads it. e2 (xiv) pins the reopen (`setup stack 1`) and the shape of the `barTarget` block; a
 route that names a view (`open people`, a person, `resume`) is unaffected.
+
+### 8. Follow-ups after the reviewer's pass (root code: re-read these two hunks)
+- **A refused `sweep` / `trial` / `usual` line no longer restarts the idle clock.** `continue` after the `refuse(...)` in `enroll-session`, as the `dot` branch's refusals do (a
+  refusal is not activity, so a stream of them cannot hold a standing authorisation open). e1 pins it: with both bounds scaled to 4 s, a session that gets a refused sweep at 1.5 s
+  and a refused trial at 3 s expires as `idle`; the same session on a copy of the helper without the `continue` expires as `the session limit`, which is what the test tells apart.
+- **Removed allow-list keys `best`, `threshold`, `margin`, and `_in_range`.** Searched the helper, the plugin and the tests first: no typed event carries them (the legacy
+  capture's `captured` event, which has `certainty`, `threshold` and `weak`, leaves through the raw `emit`, and the card reads only `weak` and `appearance`), and nothing reads them.
+  The typed events are exactly `capture_failed`, `dotting`, `dot`, `dotted`.
