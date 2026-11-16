@@ -300,19 +300,22 @@ Item {
     }
   }
 
-  // The face glyph: what the circle holds when nothing is live and no demo plays (reduced motion).
-  Text {
+  // The face glyph (common/FaceGlyph.qml, the one the indicator and the Test card draw): what the circle
+  // holds when nothing is live and no demo plays (reduced motion)
+  FaceGlyph {
     id: glyph
     objectName: "glyph"
     parent: stage.circle
     anchors.centerIn: parent
     visible: !card.previewShown && !card.demoOn && !card.finished
-    textFormat: Text.PlainText
-    text: "\u{f0643}"
-    color: card.secondary
-    opacity: 0.3
-    font.family: card.fontFamily
-    font.pixelSize: 64
+    size: 64
+    look: "idle"
+    fg: card.fg
+    secondary: card.secondary
+    accent: card.accent
+    urgent: card.urgent
+    reduced: card.reduced
+    opacity: 0.55
   }
 
   // The idle demo plays in the stage's circle only while the card is idle, on screen, with motion

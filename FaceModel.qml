@@ -60,6 +60,9 @@ Item {
   readonly property color accent: inHost ? surfaceHost.accent : Commons.Color.accent
   readonly property color urgent: inHost ? surfaceHost.accent : Commons.Color.urgent
   readonly property color dim: inHost ? surfaceHost.secondary : Qt.darker(foreground, 1.55)
+  // Reduced motion, as the cards read it (RecordCard.qml): the face glyph in a view holds still
+  readonly property bool reducedMotion: Quickshell.env("OMARCHY_REDUCED_MOTION") === "1"
+                                        || Quickshell.env("NOTCH_REDUCED_MOTION") === "1"
   readonly property string fontFamily: inHost ? surfaceHost.fontFamily
                                      : (bar ? bar.fontFamily : Style.font.family)
 

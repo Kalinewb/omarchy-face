@@ -27,9 +27,3 @@ function subline(phase) {
   return phase === "done" ? "Nothing was unlocked — this was only a test."
                           : "Checking who is in front of the camera."
 }
-
-function glyph(phase, code) {
-  if (phase === "done" && code === 0) return "✓"
-  if (phase === "done" && code === 1) return "✕"
-  return "\u{f0643}"
-}

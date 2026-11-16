@@ -62,6 +62,13 @@ ln -s "$SHELL_PATH/shell/Commons" "$root/Commons"
 ln -s "$SHELL_PATH/shell/Ui" "$root/Ui"
 ln -s "$REPO" "$root/face"
 cp "$REPO/dev/qml-harness/indicator.qml" "$root/shell.qml"
+frames=$root/frames-shell
+mkdir -p "$frames" "$root/png"
+ln -s "$SHELL_PATH/shell/Commons" "$frames/Commons"
+ln -s "$SHELL_PATH/shell/Ui" "$frames/Ui"
+ln -s "$SHELL_PATH/shell/services" "$frames/services" 2>/dev/null
+ln -s "$REPO" "$frames/face"
+cp "$REPO/dev/qml-harness/indicator-frames.qml" "$frames/shell.qml"
 cp "$REPO/dev/fixtures/three-people/people.json" "$state/people.json"
 
 # One state document, in the shape omarchy-face-verify writes (plan-merged.md
@@ -160,11 +167,60 @@ check "a gate that skipped is not worth interrupting a recording for" "" \
 step "Profiles asking who you are (service identity)"
 write_state start identity "" '{}'
 out=$(run_case identity-start)
-check "the second line says who is asking" "Profiles is checking who you are" \
+check "the second line says who is asking" "Asked by Profiles" \
   "$(field detail "$out")"
 write_state matched identity anna '{}'
 out=$(run_case identity-matched)
 check "…and a match names them" "Recognised Anna" "$(field headline "$out")"
+
+step "identity checks the Test already shows are not drawn twice (the card over the panel's own)"
+write_state start identity "" '{}'
+out=$(run_case identity-start FACE_HARNESS_SUPPRESSED_IDENTITY=1)
+check "an identity check is not drawn while a Test (a card, or the panel's in place) is up" "false" "$(field showing "$out")"
+write_state start sudo "" '{"command":"pacman"}'
+out=$(run_case sudo-start FACE_HARNESS_SUPPRESSED_IDENTITY=1)
+check "…but a sudo still is (a Test must never hide a sudo)" "true" "$(field showing "$out")"
+check "the service hides identity cards for the panel's in-place Test, and for nothing else" "true" \
+  "$(grep -q 'suppressedIdentity: root.testCard !== null || root.inPlaceTest' "$REPO/Service.qml" && grep -q 'function testInPlace(state: string)' "$REPO/Service.qml" && echo true || echo false)"
+
+step "the card's look: the face glyph, white on true black, the kit's accent and urgent colours (3.3.1)"
+frame() { # frame <service> <state> [reduced] -> the harness lines; PNGs in $root/png
+  env -u WAYLAND_DISPLAY QT_QPA_PLATFORM=offscreen FACE_FRAMES_SERVICE="$1" FACE_FRAMES_STATE="$2" FACE_FRAMES_REDUCED="${3:-0}" \
+    FACE_FRAMES_OUT="$root/png" timeout 60 quickshell -p "$frames" -n 2>&1 | sed 's/\x1b\[[0-9;]*m//g' |
+    sed -n 's/^.*HARNESS \([a-zA-Z0-9]*\) \(.*\)$/\1=\2/p'
+}
+f=$(frame sudo start)
+check "waiting: the glyph is scanning, and its brackets breathe (they are not at full strength mid-pulse)" "scanning true" "$(field look "$f") $(field shown "$f")"
+check "…the breath stays between half and full opacity" "true" \
+  "$(awk -v b="$(field breath "$f")" 'BEGIN { print (b >= 0.5 && b <= 1) ? "true" : "false" }')"
+f=$(frame sudo matched)
+check "matched: the face has become a check (fully drawn)" "success done 1 shakeX 0 reduced false" "$(field look "$f") $(field end "$f")"
+f=$(frame sudo failed)
+check "failed: the glyph is the failure look and has finished its one shake" "failure" "$(field look "$f")"
+check "…resting at 0 once the shake is over" "done 0 shakeX 0 reduced false" "$(field end "$f")"
+for s in start matched failed; do
+  f=$(frame sudo "$s" 1)
+  check "reduced motion, $s: the still picture, nothing moving (breath full, no shake)" "1|0" \
+    "$(field breath "$f" | sed 's/^$/1/')|$(field end "$f" | sed 's/.*shakeX \([-0-9.]*\).*/\1/')"
+done
+f=$(frame sudo start 1)
+check "…and the settled state is the glyph's still look, reduced is on" "reduced true" "$(field end "$f" | sed 's/.*\(reduced true\).*/\1/')"
+frame identity start >/dev/null; frame identity matched >/dev/null; frame identity failed >/dev/null
+check "frames were drawn for every state (sudo and identity: scanning, matched, failed; reduced too)" "true" \
+  "$([[ $(ls "$root"/png/*.png 2>/dev/null | wc -l) -ge 18 ]] && echo true || echo false)"
+# the card is true black with white and kit colours only: no polkit accent (the old teal) and no font glyph
+check "the card paints no font glyph, no polkit colours and no hard-coded colour but black and white" "0 0 0" \
+  "$(sed -E 's#//.*$##' "$REPO/IndicatorCard.qml" | grep -c 'polkit') $(sed -E 's#//.*$##' "$REPO/IndicatorCard.qml" "$REPO/common/FaceGlyph.qml" | grep -E '#[0-9a-fA-F]{3,8}\b|"(teal|green|red|blue)"' | grep -vc '"#000000"') $(sed -E 's#//.*$##' "$REPO/IndicatorCard.qml" | grep -c 'f0643')"
+check "the Test card draws the same glyph and no polkit colour either" "1 0" \
+  "$(grep -c 'FaceGlyph {' "$REPO/TestCard.qml") $(sed -E 's#//.*$##' "$REPO/TestCard.qml" | grep -c 'polkit')"
+check "the dot scan's circle holds the same glyph at rest" "1" "$(grep -c 'FaceGlyph {' "$REPO/DotCard.qml")"
+png=$(ls "$root"/png/sudo-matched-1.png 2>/dev/null)
+if [[ -n $png ]] && command -v magick >/dev/null; then
+  mkdir -p "${G5_KEEP:-/dev/null}" 2>/dev/null
+  check "the matched frame has a check in the accent, not a teal face (some pixel is not grey or black, the card is black)" "true" \
+    "$(magick "$png" -format '%[fx:p{180,2}.r < 0.02 ? 1 : 0]' info: | sed 's/1/true/;s/0/false/')"
+fi
+[[ -n ${G5_KEEP:-} ]] && { mkdir -p "$G5_KEEP"; cp "$root"/png/*.png "$G5_KEEP"/; note "frames kept in $G5_KEEP"; }
 
 step "GATE: the safety timer (12 s), for a verifier that never answers"
 write_state start sudo "" '{"command":"pacman","from":"foot"}'

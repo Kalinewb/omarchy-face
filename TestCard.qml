@@ -4,6 +4,7 @@ import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
+import "common"
 import "common/spring.js" as Spring
 import "common/testverdict.js" as Verdict
 
@@ -63,6 +64,10 @@ PanelWindow {
   // The copy of plan-gui.md §5.2, verbatim, as a property so a test can ask for
   // it without a screen.
   readonly property string headline: Verdict.headline(card.phase, card.code, card.who)
+
+  // Reduced motion, as every card reads it
+  readonly property bool reduced: Quickshell.env("OMARCHY_REDUCED_MOTION") === "1"
+                                  || Quickshell.env("NOTCH_REDUCED_MOTION") === "1"
 
   readonly property bool good: card.phase === "done" && card.code === 0
   readonly property bool bad: card.phase === "done" && card.code === 1
@@ -156,22 +161,22 @@ PanelWindow {
       // this is the text, not the card.
       opacity: Math.max(0, Math.min(1, (Math.min(card.heightP, card.widthP) - 0.7) / 0.3))
 
-      Text {
-        textFormat: Text.PlainText
+      FaceGlyph {
+        objectName: "testGlyph"
         anchors.horizontalCenter: parent.horizontalCenter
-        text: Verdict.glyph(card.phase, card.code)
-        color: card.bad ? Commons.Color.polkit.textError : Commons.Color.polkit.accent
-        font.family: card.fontFamily
-        font.pixelSize: Style.font.display * 1.4
+        size: Style.space(56)
+        look: card.phase !== "done" ? "scanning" : card.good ? "success" : card.bad ? "failure" : "idle"
+        reduced: card.reduced
       }
 
       Text {
         textFormat: Text.PlainText
         width: parent.width
         text: card.headline
-        color: card.bad ? Commons.Color.polkit.textError : Commons.Color.polkit.text
+        color: card.bad ? Commons.Color.urgent : "white"
         font.family: card.fontFamily
         font.pixelSize: Style.font.body
+        font.weight: Font.DemiBold
         horizontalAlignment: Text.AlignHCenter
         wrapMode: Text.WordWrap
       }
@@ -182,7 +187,7 @@ PanelWindow {
         textFormat: Text.PlainText
         width: parent.width
         text: Verdict.subline(card.phase)
-        color: Commons.Color.muted
+        color: Qt.darker("white", 1.55)
         font.family: card.fontFamily
         font.pixelSize: Style.font.caption
         horizontalAlignment: Text.AlignHCenter
@@ -196,7 +201,7 @@ PanelWindow {
         Button {
           visible: card.phase !== "done"
           text: "Stop"
-          foreground: Commons.Color.polkit.text
+          foreground: "white"
           fontFamily: card.fontFamily
           onClicked: card.stopped()
         }
@@ -205,7 +210,7 @@ PanelWindow {
           visible: card.phase === "done"
           text: "Close"
           bordered: true
-          foreground: Commons.Color.polkit.text
+          foreground: "white"
           fontFamily: card.fontFamily
           onClicked: card.dismissed()
         }

@@ -285,6 +285,16 @@ A git checkout goes back to the commit it came from (`v2.2.0` when the system fi
 already 3.0.0). A copy installed with `./install.sh` has no commit to go back to: run
 `git checkout v2.2.0 && ./install.sh` in your checkout afterwards.
 
+### Updating from 3.3.0 (to 3.3.1, proposed)
+
+Plugin only (no system files, no password). **The card that says a face is being checked has a new look**, the same for `sudo`, for Profiles asking who you are, and for the Test
+card: four rounded corner brackets round a small drawn face, white on the card's black. While it looks, the brackets breathe and a thin line moves down the face; a match turns
+the face into a check in your accent colour; a refusal turns it red and shakes it once. One short line under it ("Look at the camera", "Approved · Anna", "Not recognised"), and a
+second, quieter one only when there is something to say (the command that asked for root, or "Asked by Profiles"). With reduced motion
+(`OMARCHY_REDUCED_MOTION=1`) the glyph holds still and the card does not grow. The dot scan's circle holds the same glyph at rest. **A bug fixed on the way:** running Test from the Face
+panel inside the notch drew the indicator's card over the panel's own, so two cards showed in one place, one cut off ("...cking who is in front of the camera"); the indicator now
+stays quiet for a Test that is running in place (only for identity checks; a `sudo` still draws).
+
 ### Updating from 3.2.x (to 3.3.0)
 
 Face ID 3.3.0 **removes the Advanced scan**. The idle card no longer asks "Simple or Advanced": the dot scan (look at

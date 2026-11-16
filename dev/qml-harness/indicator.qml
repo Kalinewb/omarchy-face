@@ -92,6 +92,7 @@ ShellRoot {
       sourceComponent: Component {
         Face.Indicator {
           suppressed: Quickshell.env("FACE_HARNESS_SUPPRESSED") === "1"
+          suppressedIdentity: Quickshell.env("FACE_HARNESS_SUPPRESSED_IDENTITY") === "1"
         }
       }
     }
