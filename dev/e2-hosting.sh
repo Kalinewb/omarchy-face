@@ -471,6 +471,31 @@ check "…and closing it goes back to the home" "setup stack 1 person ''" "$(fie
 check "a resume (the lock switch handing back) opens Settings with its word, and the close clears the word and the view" "ok|settings stack 2 person '' word 'lock-on'|setup stack 1 person '' word ''" \
   "$(field resume "$x1")|$(field resume-landed "$x1")|$(field resume-closed "$x1")"
 
+step "(xv) the notch's back strip steps back inside the panel first (SURFACE-HOSTING.md section 4: canGoBack, goBackInside)"
+# The strip at the top centre of a hosted panel closed the whole notch from People, Settings and a person, because the
+# notch could not see Face's own view stack. The panel now answers the host's first press with one step back; only the
+# home refuses it, and the press then closes as before. Esc is the model's back() and is not changed by any of this.
+back_run() {
+  env "${face_env[@]}" FACE_HARNESS_CASE=back FACE_HARNESS_ROUTE=people FACE_HARNESS_HOST=identity \
+    timeout 60 quickshell -p "$panel_root" -n 2>&1 | tee -a "$logs/render.log" \
+    | sed -n 's/^.*HARNESS \([a-zA-Z0-9-]*\) \(.*\)$/\1=\2/p'
+}
+b1=$(back_run)
+echo "${DIM}$(sed 's/^/  /' <<<"$b1")${RESET}"
+check "the panel declares both optional members (a function and a bool)" "function boolean" "$(field members "$b1")"
+check "opened at People over the home: two views, and there is a way back" "people stack 2 person '' closes 0 can true" "$(field opened "$b1")"
+check "…a person on top of it: three deep" "person stack 3 person 'anna' closes 0 can true" "$(field deep "$b1")"
+check "press 1: one step back, to People (and the person is forgotten), not closed" "inside -> people stack 2 person '' closes 0 can true" "$(field press-1 "$b1")"
+check "press 2: back to the home, not closed, and nothing further to go back to" "inside -> setup stack 1 person '' closes 0 can false" "$(field press-2 "$b1")"
+check "press 3, at the home: the panel declines it (the notch then closes, as before) and does not close itself" "not asked -> setup stack 1 person '' closes 0 can false" "$(field press-3 "$b1")"
+check "Esc at the home closes, once (unchanged)" "setup stack 1 person '' closes 1" "$(field esc-home "$b1")"
+check "Settings, over the home: one press goes back to the home" "inside -> setup stack 1 person '' closes 1" "$(field settings "$b1")"
+check "Test in place, three views up: one press leaves the test for the person, nothing else" "test stack 4 person 'anna' closes 1 | inside -> person stack 3 person 'anna' closes 1" "$(field test "$b1")"
+check "Esc at People is still one step back (not a close, not skipped)" "setup stack 1 person '' closes 1" "$(field esc-people "$b1")"
+check "the panel closing forgets the pages: the home, nothing to go back to" "setup stack 1 person '' closes 1 can false press not asked" "$(field closed "$b1")"
+check "the panel's Esc handler is still the model's back(), and the new members add no key handling" "1 0" \
+  "$(grep -c 'Keys.onEscapePressed: faceModel.back()' "$REPO/Surface.qml") $(sed -n '/function goBackInside/,/^      }/p' "$REPO/Surface.qml" | grep -c 'Keys\.\|closeRequested')"
+
 step "(vii) available is false until the status has answered and the engine row says installed"
 avail() { # avail <fixture> -> "<at creation> <after the read>"
   env "${face_env[@]}" OMARCHY_FACE_DEV_FIXTURE="$1" FACE_HARNESS_CASE=available \

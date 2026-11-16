@@ -307,6 +307,11 @@ which owns `RecordCard.qml`, a window of its own wrapping `EnrolView.qml`, and
 close the panel, so there is one surface. People, Person, Setup, Settings, Remove
 and Test stay hosted.
 
+The notch's back strip (the top centre) asks a hosted panel to go back before it closes
+anything: `Surface.qml`'s panel answers with `canGoBack` and `goBackInside()`
+(SURFACE-HOSTING.md section 4 in the notch's repository). `e2` case (xv) presses it the
+way the notch does, from a person, from Settings and from a Test in place, down to the home.
+
 `e2` runs **headless**: `QT_QPA_PLATFORM=offscreen`, no `WAYLAND_DISPLAY`, no
 window anywhere. That covers the route parser, the manifest, the same PNG from the
 popup's wiring and the hosted panel (i), the margins (xi), Test in place (xii), the

@@ -21,6 +21,8 @@ import "face" as Face
 //                       reset    the popup's model alone: closing it resets the view stack to the
 //                                home, an open route still lands where it asked (3.3.0; headless)
 //                       test     Test pressed in the hosted panel (see below)
+//                       back     the notch's back strip pressed on the hosted panel:
+//                                its goBackInside(), as the host calls it (see below)
 //                       record   Scan pressed in the hosted panel: it must ask
 //                                the Face service for its card and close the
 //                                panel, and show no recording of its own
@@ -142,6 +144,57 @@ ShellRoot {
         shellRoot.log("after-view", model.view + " person-view " + (shellRoot.personViewIn(panel) !== null) + " test-request " + (model.testRequest === null))
         shellRoot.grabTo(panel, "c", function () { Qt.exit(0) })
       }
+    }
+  }
+
+  // --- the notch's back strip, on the hosted panel -----------------------------------------
+  //
+  //   FACE_HARNESS_CASE=back  the REAL Surface.qml panel, opened at People over the home and
+  //                           taken to a person: the strip is pressed as the notch presses it
+  //                           (SURFACE-HOSTING.md section 4: ask canGoBack, call goBackInside(),
+  //                           only an answer of true took the press). Each press, the view it
+  //                           left and the close requests so far are logged; at the home the
+  //                           press is refused and Esc closes, once. Esc itself is the model's
+  //                           back(), which the panel's Keys.onEscapePressed calls.
+  Timer {
+    id: backTimer
+    interval: 1800
+    onTriggered: {
+      backTimer.stop()
+      var panel = shellRoot.testPanel
+      var m = shellRoot.surface.model
+      function state() { return m.view + " stack " + m.viewStack.length + " person '" + m.personName + "' closes " + shellRoot.closes }
+      // The host's side of the contract, as Bar.qml's goBack() reads it.
+      function press() {
+        if (typeof panel.goBackInside !== "function" || panel.canGoBack === false) return "not asked"
+        return panel.goBackInside() === true ? "inside" : "refused"
+      }
+      shellRoot.log("members", (typeof panel.goBackInside) + " " + (typeof panel.canGoBack))
+      shellRoot.log("opened", state() + " can " + panel.canGoBack)
+      m.openPerson("anna")
+      shellRoot.log("deep", state() + " can " + panel.canGoBack)
+      shellRoot.log("press-1", press() + " -> " + state() + " can " + panel.canGoBack)
+      shellRoot.log("press-2", press() + " -> " + state() + " can " + panel.canGoBack)
+      shellRoot.log("press-3", press() + " -> " + state() + " can " + panel.canGoBack)
+      m.back()
+      shellRoot.log("esc-home", state())
+      // Settings and a Test in place come back the same way.
+      m.openWithBase("settings")
+      shellRoot.log("settings", press() + " -> " + state())
+      m.openWithBase("people"); m.openPerson("anna"); m.showTest("anna", "Anna")
+      shellRoot.log("test", state() + " | " + press() + " -> " + state())
+      // Esc is untouched: one step back, not a close.
+      m.personName = ""
+      m.openWithBase("people")
+      m.back()
+      shellRoot.log("esc-people", state())
+      // The panel closing forgets where it was: nothing is left to go back to.
+      m.openWithBase("people"); m.openPerson("anna")
+      fakeHost.panelOpen = false
+      Qt.callLater(function () {
+        shellRoot.log("closed", state() + " can " + panel.canGoBack + " press " + press())
+        Qt.exit(0)
+      })
     }
   }
 
@@ -292,14 +345,14 @@ ShellRoot {
 
   Loader {
     id: surfaceLoader
-    active: shellRoot.caseName === "hosted" || shellRoot.caseName === "test" || shellRoot.caseName === "record"
+    active: shellRoot.caseName === "hosted" || shellRoot.caseName === "test" || shellRoot.caseName === "record" || shellRoot.caseName === "back"
     sourceComponent: Component { Face.Surface { surfaceHost: fakeHost } }
   }
   readonly property var surface: surfaceLoader.item
 
   Window {
     id: hostedWindow
-    visible: shellRoot.caseName === "hosted" || shellRoot.caseName === "test" || shellRoot.caseName === "record"
+    visible: shellRoot.caseName === "hosted" || shellRoot.caseName === "test" || shellRoot.caseName === "record" || shellRoot.caseName === "back"
     width: 340
     height: 900
     color: "black"
@@ -339,6 +392,7 @@ ShellRoot {
                             + " bottom " + Math.round(panel.implicitHeight - fv.y - fv.height)
                             + " implicit " + Math.round(panel.implicitWidth) + "x" + Math.round(panel.implicitHeight))
       if (shellRoot.caseName === "test") { shellRoot.testPanel = panel; testTimer.start(); return }
+      if (shellRoot.caseName === "back") { shellRoot.testPanel = panel; panel.closeRequested.connect(function () { shellRoot.closes += 1 }); backTimer.start(); return }
       if (shellRoot.caseName === "record") { shellRoot.testPanel = panel; panel.closeRequested.connect(function () { shellRoot.closes += 1 }); recordTimer.start(); return }
       settle.start()
     }

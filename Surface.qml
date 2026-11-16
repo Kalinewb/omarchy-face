@@ -75,6 +75,17 @@ Item {
         Qt.callLater(function () { views.focusItem.forceActiveFocus() })
       }
 
+      // The host's back strip (the top centre of the notch) asks before it closes
+      // anything: with pages open, a press goes back one of them, the way Esc
+      // does, and only from the home does it close the notch (SURFACE-HOSTING.md
+      // section 4). `true` means the press was taken.
+      readonly property bool canGoBack: faceModel.viewStack.length > 1
+      function goBackInside() {
+        if (!hosted.canGoBack) return false
+        faceModel.navBack()
+        return true
+      }
+
       // The host tells the panel it closed before it takes the surface back;
       // a check running in the Test view stops here.
       function close() { surface.panelClosed() }
