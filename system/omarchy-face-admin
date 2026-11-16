@@ -2451,8 +2451,9 @@ def cmd_enroll_session(name):
         elif command in ("sweep", "trial", "usual"):
             # The Advanced scan is gone (3.3.0). A 3.2.x card never sends these to this helper (`ready` no longer lists
             # `sweep`, so an Advanced card falls back to the single capture), and anything else that does is refused,
-            # nothing stored.
+            # nothing stored. `continue`: a refused line does not restart the idle clock (as the dot branch's refusals).
             refuse("%s is not in this release" % command)
+            continue
 
         elif command == "dot":
             target = person if person is not None else created

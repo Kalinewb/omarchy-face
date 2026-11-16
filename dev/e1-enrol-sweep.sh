@@ -845,6 +845,19 @@ out=$(OMARCHY_FACE_SESSION_SECONDS=4 session emil "await ready 30" "sleep 3" "se
 same "...also when the press is sent late (at 3 s): it buys no extra time (discarded)" '"discarded"' "$(q "$out" 'evs[-1]["event"]')"
 sleep 1
 check "...with the child gone" no_child
+# A refused line is not activity: it must not restart the idle clock (the dot branch's refusals do not either).
+# With both bounds at 4 s the session ends at 4 s whatever happens, so the reason is what tells the two apart:
+# "idle" when nothing but refusals came after the create, "the session limit" when a refusal had moved the idle clock.
+reset_store
+out=$(OMARCHY_FACE_SESSION_SECONDS=4 session emil "await ready 30" "send $CREATE" "sleep 1.5" 'send {"cmd":"sweep","appearance":"No glasses"}' "sleep 1.5" 'send {"cmd":"trial"}' "sleep 3" "eof")
+same "refused lines (a sweep, a trial) at 1.5 s and 3 s do not extend the idle clock: the session expires as idle at 4 s" '1' "$(grep -c 'the session expired (idle)' <<<"$out")"
+patch_admin "$LAB/admin-idle" 'refuse("%s is not in this release" % command)
+            continue' 'refuse("%s is not in this release" % command)'
+ADMIN=$LAB/admin-idle
+reset_store
+out=$(OMARCHY_FACE_SESSION_SECONDS=4 session emil "await ready 30" "send $CREATE" "sleep 1.5" 'send {"cmd":"sweep","appearance":"No glasses"}' "sleep 1.5" 'send {"cmd":"trial"}' "sleep 3" "eof")
+ADMIN=$REAL_ADMIN
+same "...and the same session on a copy without the continue is what the test would catch: it ends at the session limit, not as idle" '0' "$(grep -c 'the session expired (idle)' <<<"$out")"
 
 step "what the child says on stderr never reaches the client; the child holds the camera lock; a deep line is ignored"
 patch_admin "$LAB/admin-noisy" 'def say(obj):
