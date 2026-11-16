@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Commons
 import qs.Ui
+import "common"
 import "common/testverdict.js" as Verdict
 
 // "Does it recognise Anna now?" as a view of its own, in the notch's panel
@@ -49,16 +50,29 @@ Item {
                                       null, function (result) {
       view.proc = null
       safety.stop()
+      view.tellService("off")
       view.code = result && result.code !== undefined ? result.code : -1
       view.phase = "done"
     })
     if (!view.proc) { view.code = -1; view.phase = "done"; return }
     safety.restart()
+    view.tellService("on")
+  }
+
+  // The Face service hides the indicator's identity card while this check runs here (Service.qml, inPlaceTest):
+  // it would be a second card on top of this one. Best effort; the service's own timer lets go if "off" is lost.
+  property bool told: false
+  function tellService(word) {
+    if (!view.panel || !view.panel.ask || typeof view.panel.ask.cardArgv !== "function") return
+    if (word === "off" && !view.told) return
+    view.told = word === "on"
+    view.panel.ask.ask(view.panel.ask.cardArgv(["testInPlace", word]), "", function () {})
   }
 
   // Stop (or Close, or leaving): the check ends by a signal and the camera with it.
   function stop() {
     safety.stop()
+    view.tellService("off")
     var going = view.proc
     view.proc = null
     if (going) {
@@ -89,13 +103,16 @@ Item {
     width: parent.width
     spacing: Style.space(8)
 
-    Text {
-      textFormat: Text.PlainText
+    FaceGlyph {
+      objectName: "testGlyph"
       anchors.horizontalCenter: parent.horizontalCenter
-      text: Verdict.glyph(view.phase, view.code)
-      color: view.bad ? view.panel.urgent : view.panel.accent
-      font.family: view.panel.fontFamily
-      font.pixelSize: Style.font.display * 1.4
+      size: Style.space(56)
+      look: view.phase !== "done" ? "scanning" : view.good ? "success" : view.bad ? "failure" : "idle"
+      fg: view.panel.foreground
+      secondary: view.panel.dim
+      accent: view.panel.accent
+      urgent: view.panel.urgent
+      reduced: view.panel.reducedMotion === true
     }
 
     Text {
@@ -103,9 +120,10 @@ Item {
       textFormat: Text.PlainText
       width: parent.width
       text: view.headline
-      color: view.panel.foreground
+      color: view.bad ? view.panel.urgent : view.panel.foreground
       font.family: view.panel.fontFamily
       font.pixelSize: Style.font.body
+      font.weight: Font.DemiBold
       horizontalAlignment: Text.AlignHCenter
       wrapMode: Text.WordWrap
       Accessible.role: Accessible.StaticText

@@ -143,7 +143,9 @@ Item {
       return root.service === "identity"
         ? "Recognised " + (root.labelFor(root.person) || "you")
         : "Approved" + (root.person !== "" ? " · " + root.labelFor(root.person) : "")
-    if (root.authState === "failed") return "Not recognised — use your password"
+    if (root.authState === "failed")
+      // Profiles has no password prompt to fall back to; sudo does
+      return root.service === "identity" ? "Not recognised" : "Not recognised — use your password"
     return "Look at the camera"
   }
 
@@ -152,7 +154,7 @@ Item {
   // service -- which is still worth saying, because it is what distinguishes a
   // sudo prompt from Profiles asking who you are.
   readonly property string detail: {
-    if (root.service === "identity") return "Profiles is checking who you are"
+    if (root.service === "identity") return "Asked by Profiles"
     if (root.service !== "sudo") return ""
     var line = "sudo"
     if (root.requesterCommand !== "") line += " · " + root.requesterCommand
@@ -328,12 +330,18 @@ Item {
   readonly property real springOvershoot: Spring.overshoot(springDamping)
   readonly property var springCurve: Spring.curve(springDamping, springPeakAt, 8)
 
+  // Reduced motion (the cards' own rule: OMARCHY_REDUCED_MOTION or NOTCH_REDUCED_MOTION): the card is
+  // there at its settled size and gone again, with nothing growing, and the glyph does not move
+  readonly property bool reduced: Quickshell.env("OMARCHY_REDUCED_MOTION") === "1"
+                                  || Quickshell.env("NOTCH_REDUCED_MOTION") === "1"
+
   onVisibleNowChanged: {
     if (root.visibleNow) {
       exitAnim.stop()
       root.exiting = false
       root.windowUp = true
-      enterAnim.restart()
+      if (root.reduced) { enterAnim.stop(); root.heightP = 1; root.widthP = 1 }
+      else enterAnim.restart()
     } else {
       root.beginExit()
     }
@@ -341,6 +349,7 @@ Item {
 
   function beginExit() {
     if (!root.windowUp || root.exiting) return
+    if (root.reduced) { root.heightP = root.heightGone; root.widthP = root.widthGone; root.windowUp = false; return }
     root.exiting = true
     exitAnim.restart()
   }
@@ -404,125 +413,31 @@ Item {
       // Empty input region: clicks pass through to whatever is behind.
       mask: Region {}
 
-      Island {
+      IndicatorCard {
         id: card
         // Flush against the true physical top edge (post-ship revision,
         // found via live use -- a 44px gap from the true edge read as
         // floating below the bar rather than attached to the screen).
         // Horizontally centered under the lens, same as before: looking at
         // the card still points the face at the camera. Fixed anchor point,
-        // entirely unchanged by the animation below -- only the bar's own
-        // size and roundedness move, growing outward from the middle while
-        // staying attached to the top edge.
+        // entirely unchanged by the animation -- only the bar's own size and
+        // roundedness move, growing outward from the middle while staying
+        // attached to the top edge. The shape and what is in it are
+        // IndicatorCard.qml's.
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
         anchors.topMargin: 0
 
-        // The bar's size at rest -- what it grows toward and shrinks from.
-        // A little wider than tall (post-ship revision, by live use: 300
-        // wide read as a banner, a square read as cramped, and this is one
-        // step up from the square). The width comes from a token; the height
-        // from the content, but never less than the square's was, so
-        // widening the bar did not also shorten it. The content's width is
-        // derived from the width token and never from the height, because a
-        // wrapped Text's height depends on its width and the other way
-        // round would be a loop.
-        readonly property real contentWidth: Style.space(144)
-        readonly property real minContentHeight: Style.space(116)
-        readonly property real fullWidth: Math.min(parent.width - Style.space(40), contentWidth + Style.space(28))
-        readonly property real fullHeight: Math.max(content.implicitHeight, minContentHeight) + Style.space(28)
-        // Height and width each follow their own progress (root's heightP /
-        // widthP), from the seed fractions up. Neither is clamped at 1: the
-        // spring's overshoot past the settled size is meant to show. Clamped
-        // at zero size only, for the tail of the exit.
-        barWidth: Math.max(0, fullWidth * (root.seedWidthFraction
-                    + (1 - root.seedWidthFraction) * root.widthP))
-        barHeight: Math.max(0, fullHeight * (root.seedHeightFraction
-                    + (1 - root.seedHeightFraction) * root.heightP))
-
-        // The shape itself is Island.qml's: a plain rectangle, flush and
-        // square-cornered at the top, rounded on the bottom two corners
-        // only, with the two concave fillets that fuse it to the screen
-        // edge drawn beside it rather than cut from it. Both radii are
-        // proportions of the bar's CURRENT height, so the bar is the same
-        // shape at every frame -- the first frame's seed is a small rounded
-        // rectangle with small fillets, the settled bar a large one with
-        // 10 px fillets, and there is no frame where the corners have
-        // become a capsule or the fillets have gone missing. True black, no
-        // border: a visible outline reads as an ordinary dialog, not a
-        // black surface merging into the edge (post-ship revision, found
-        // via live use; reference: an iPhone's Dynamic Island where it
-        // meets the top bezel).
-        bottomRadius: root.bottomRadiusFraction * barHeight
-        filletRadius: root.filletFull * barHeight / fullHeight
-        color: "#000000"
-
-        // The content below lands inside the bar (Island's default property)
-        // and is clipped to it. It is sized for the bar's full, settled
-        // dimensions so its own text layout never reflows mid-animation,
-        // and only fades in once the bar is mostly grown.
-        Column {
-          id: content
-          anchors.centerIn: parent
-          // A fixed width, not the bar's currently-animated one -- so text
-          // wrapping never reflows mid-grow. Only visible (see opacity below)
-          // once the bar is most of the way there, and clipped by the bar
-          // itself before then regardless.
-          width: card.contentWidth
-          spacing: Style.space(8)
-
-          // Fades in only once the bar is mostly at full size in both
-          // dimensions, so text is never seen cramped or half-clipped inside
-          // a still-small bar -- same formula on the way out, so it is gone
-          // before the bar shrinks small enough for it to look wrong. This is
-          // the text inside the bar, not the bar: the bar itself is solid at
-          // every frame, and nothing about it fades or scales.
-          readonly property real settleP:
-            Math.max(0, Math.min(1, (Math.min(root.heightP, root.widthP) - 0.7) / 0.3))
-          opacity: settleP
-
-          // The face glyph while it is looking, then an answer. Two plain
-          // characters rather than two more Nerd Font codepoints: this card is
-          // read at a glance from arm's length, and ✓ / ✕ are in every font.
-          Text {
-            textFormat: Text.PlainText
-            anchors.horizontalCenter: parent.horizontalCenter
-            text: root.authState === "matched" ? "✓"
-                : root.authState === "failed" ? "✕"
-                : "\u{f0643}"
-            color: root.authState === "failed" ? Commons.Color.polkit.textError : Commons.Color.polkit.accent
-            font.family: Style.font.family
-            font.pixelSize: Style.font.display * 1.4
-          }
-
-          Text {
-            textFormat: Text.PlainText
-            width: parent.width
-            text: root.headline
-            color: root.authState === "failed" ? Commons.Color.polkit.textError : Commons.Color.polkit.text
-            font.family: Style.font.family
-            font.pixelSize: Style.font.body
-            horizontalAlignment: Text.AlignHCenter
-            wrapMode: Text.WordWrap
-          }
-
-          Text {
-            textFormat: Text.PlainText
-            width: parent.width
-            visible: root.detail !== ""
-            text: root.detail
-            color: Commons.Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            horizontalAlignment: Text.AlignHCenter
-            // Two lines before eliding: "sudo · pacman, from foot" does not
-            // fit one line of a square this size, and the program's name is
-            // the part worth keeping whole.
-            wrapMode: Text.WordWrap
-            maximumLineCount: 2
-            elide: Text.ElideRight
-          }
-        }
+        authState: root.authState
+        headline: root.headline
+        detail: root.detail
+        reduced: root.reduced
+        heightP: root.heightP
+        widthP: root.widthP
+        seedHeightFraction: root.seedHeightFraction
+        seedWidthFraction: root.seedWidthFraction
+        bottomRadiusFraction: root.bottomRadiusFraction
+        filletFull: root.filletFull
       }
     }
   }

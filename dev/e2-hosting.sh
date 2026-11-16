@@ -411,6 +411,10 @@ check "…and the person view is NOT drawn under it (nothing to overlap)" "false
 check "…it fits the panel: no taller than the person view was" "true" \
   "$(awk -v a="$(field size-a "$t0" | sed 's/.*x//')" -v b="$(field size-b "$t0" | sed 's/.*x//')" 'BEGIN { print (b > 0 && b <= a) ? "true" : "false" }')"
 check "…and it never asked the service for its card (no testMatch call, no window)" "0" "$(grep -c testMatch "$logs/omarchy-shell.log")"
+check "…but it tells the service the check is running here, once, and that it ended (so the indicator does not draw a second card over the panel's)" "kalinewb.face.card testInPlace on|kalinewb.face.card testInPlace off" \
+  "$(grep -m1 'testInPlace on' "$logs/omarchy-shell.log" | sed 's/ *$//')|$(grep -m1 'testInPlace off' "$logs/omarchy-shell.log" | sed 's/ *$//')"
+check "…the in-place view draws the face glyph, not a text mark" "1 0" \
+  "$(grep -c 'FaceGlyph {' "$REPO/TestResultView.qml") $(grep -c 'Verdict.glyph' "$REPO/TestResultView.qml")"
 check "Esc goes back to the person view, and the request is dropped" "person person-view true test-request true" "$(field after-view "$t0")"
 check "…the person view draws exactly as it did before (the PNG matches within the harness's noise)" "true" \
   "$(read -r _ n mx < <(pngdiff "$root/testv-0-a.png" "$root/testv-0-c.png"); within "$mx")"

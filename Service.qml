@@ -290,6 +290,15 @@ Item {
   property var testProcess: null
   property string testName: ""
 
+  // A Test shown IN PLACE, inside the notch's panel (TestResultView.qml), has no card of this service,
+  // but it is the same check on the same piece of screen: its `identity` state must not draw the
+  // indicator's card over it (that was a second card, "Profiles is checking who you are", on top of the
+  // panel's own "Look at the camera" and its subline). The panel says so over IPC (`testInPlace`). Only
+  // identity checks are hidden by it, as with the Test card, a `sudo` still draws, and the flag cannot
+  // stick: it lapses by itself a little after the longest check can run.
+  property bool inPlaceTest: false
+  Timer { id: inPlaceLapse; interval: root.testSafetyMs + 3000; onTriggered: root.inPlaceTest = false }
+
   // Longer than the helper's own receive timeout (20 s), because a safety net
   // that fires first is not a safety net -- it is a card that cancels checks
   // which were about to answer. This only ever runs when the helper itself did
@@ -412,6 +421,14 @@ Item {
       return root.startTest(who)
     }
 
+    // The panel's in-place Test is running ("on") or has ended ("off"); see inPlaceTest.
+    function testInPlace(state: string): string {
+      if (state !== "on" && state !== "off") return "testInPlace needs on or off"
+      root.inPlaceTest = state === "on"
+      if (state === "on") inPlaceLapse.restart(); else inPlaceLapse.stop()
+      return "ok"
+    }
+
     // The lock screen wrapper on or off, on the popup's behalf: the write that
     // a rebuilding bar would otherwise kill half way (switchLock, below).
     // `view` is where the popup reopens when it is done, and `then` is the word
@@ -505,7 +522,7 @@ Item {
   Indicator {
     id: indicator
     suppressed: root.card !== null
-    suppressedIdentity: root.testCard !== null
+    suppressedIdentity: root.testCard !== null || root.inPlaceTest
   }
 
   // Hyprland animates every layer-shell surface as it maps and unmaps -- on
