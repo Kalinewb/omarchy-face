@@ -826,3 +826,35 @@ route that names a view (`open people`, a person, `resume`) is unaffected.
 - **Removed allow-list keys `best`, `threshold`, `margin`, and `_in_range`.** Searched the helper, the plugin and the tests first: no typed event carries them (the legacy
   capture's `captured` event, which has `certainty`, `threshold` and `weak`, leaves through the raw `emit`, and the card reads only `weak` and `appearance`), and nothing reads them.
   The typed events are exactly `capture_failed`, `dotting`, `dot`, `dotted`.
+
+## Delta in 3.3.1 vs 3.3.0 (f4c93ac, tag v3.3.0): the verify card's look and one panel fix. **No `system/` code changed; there is nothing in root code to re-read**
+
+**What a security reader needs: nothing under `system/` or `bin/` changed except the version line.** The proof, from the release branch:
+
+```
+norm() { sed -E 's/omarchy-face-version: 3\.3\.[01]/omarchy-face-version: X/; s/^(  \[[a-z.-]+\])=[0-9a-f]{64}$/\1=PIN/'; }
+for f in $(git diff --name-only v3.3.0 -- system bin); do
+  [[ $f == system/install.sh.sha256 ]] && continue
+  diff <(git show v3.3.0:$f | norm) <(norm <$f) >/dev/null || echo "DIFFERS: $f"
+done
+```
+prints nothing: 17 files differ, 16 of them by their `# omarchy-face-version:` line alone (`system/install.sh` also by its ten pin lines, which `dev/update-pins.sh` rewrites from the new bytes),
+and the 17th is `system/install.sh.sha256` (the installer's own checksum). `git diff -U0 v3.3.0 -- system bin` is 27 added and 27 removed lines: 16 version lines, 10 pin lines, 1 checksum line;
+after dropping those, the diff is empty. `system/omarchy-face-admin` is therefore byte-identical to v3.3.0 apart from `# omarchy-face-version: 3.3.1` (its hash is in the pins only because the pinned bytes changed by that line).
+The version moved so that Setup offers nothing new to install (the system files are the same code) but the plugin and the system files carry one number.
+
+**What did change (QML and its tests; the plugin folder is not root-owned, and none of this runs as root):**
+- `common/FaceGlyph.qml` (new): the face glyph drawn from strokes (four rounded corner brackets, eyes, nose, mouth). Looking: breath and one thin sweep; success: a check in the accent; failure: urgent and one shake; reduced motion: still.
+- `IndicatorCard.qml` (new, split out of `Indicator.qml`): the verify card's shape and content. `Indicator.qml` keeps its window, state file reading, timers, staleness filter, spring and suppression rules; it now reads reduced motion
+  (no spring) and says "Asked by Profiles" for an identity check and "Not recognised" (without the password sentence) for a Profiles refusal.
+- `Service.qml`, `TestResultView.qml`: the **`testInPlace` IPC** (`omarchy-shell kalinewb.face.card testInPlace on|off`). The panel's in-place Test says it is running so the indicator does not draw an identity card over it (the double card).
+  Only identity cards are hidden by it, never a `sudo` card (the same rule as for the Test card, and the same reason: any process running as the account can call IPC, and a flag that hid `sudo` would be a way to run `sudo -n` with nothing on screen).
+  The flag lapses by itself 28 s after it is set, so a lost "off" cannot keep identity cards hidden. Reviewer: this IPC is callable by any process of the account; its only effect is to hide identity (Profiles) check cards for up to 28 s.
+- `TestCard.qml`, `TestResultView.qml`, `DotCard.qml`: the same glyph and the dot scan's palette and type (no polkit tokens, no font character); `common/testverdict.js` loses its unused `glyph()`; `FaceModel.qml` gains a `reducedMotion` property.
+- `Surface.qml`: `canGoBack` and `goBackInside()` on the hosted panel, the optional members the notch asks before its top-centre back strip closes the panel: with pages open the strip goes back one page (as Esc does), and only from the home does it close.
+  Esc and the stack's reset on close are unchanged.
+- Tests: `g5-indicator-offscreen.sh` (identity hidden while a Test is up and `sudo` not; the glyph's states, bounds and reduced motion; no polkit colour or font glyph), `e2-hosting.sh` (the in-place Test says on and off; the back strip), new harnesses
+  `dev/qml-harness/indicator-frames.qml` (draws the card offscreen) and edits to `hosting-panel.qml` and `indicator.qml`.
+
+**Honest limits.** The double-card bug was inferred from the code and the geometry of the user's screenshot, not reproduced end to end; the fix is pinned by wiring and by the IPC calls the in-place Test makes (e2), not by two real cards on a real screen.
+`dev/g5b-test-card-offscreen.sh` needs a compositor and was not run. None of the new visuals has been seen on a real screen.
