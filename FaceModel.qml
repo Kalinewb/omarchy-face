@@ -188,12 +188,12 @@ Item {
     return sudoFaces > 0 ? "on" : "off"
   }
 
-  // Where a click goes. Face's own failures open Setup; a lock screen that
-  // stopped working opens Settings, which is where its switch and its reason
-  // both live (plan-gui.md §3, §6.1).
+  // Where a click goes. The home (Setup) by default, since 3.3.0 on a healthy machine too (it was People
+  // there): the home says in a line that Face is set up and where a face is accepted, and People, Settings
+  // and Remove are one click below it. Face's own failures open Setup; a lock screen that stopped working
+  // opens Settings, which is where its switch and its reason both live (plan-gui.md §3, §6.1).
   readonly property string barTarget: {
     if (barState === "attention") return brokenRow === null && lockAttention ? "settings" : "setup"
-    if (barState === "off" || barState === "on") return "people"
     return "setup"
   }
 

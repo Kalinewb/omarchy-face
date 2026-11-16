@@ -813,3 +813,7 @@ Deleted dev tools (they drove removed code): `measure-guard.py`, `measure-scale.
 `FaceModel.onOpenedChanged` resets the view stack to `["setup"]` and clears the remembered person when the popup closes (nothing in `system/`; no re-pin).
 Openers that set the stack (`openAt`, `openWithBase`, `resumeAt`, the bar press) all run after a close, never before, so they are unaffected. e2 (xiv) pins it
 (deep view then close, bar reopen, Esc twice, a route after a close, a resume with its word); with the reset line removed six of its checks fail.
+**The bar button opens the home too (follow-up before release).** `FaceModel.barTarget` was `people` for a healthy machine (`on` / `off`); it is `setup` now for everything but the
+attention routes (a lock screen that stopped working: `settings`; Face's own failures: `setup`, as before). So on a set-up machine the bar press and an empty-route `open` land on the
+home, and People / Settings / Remove are one click below it. Nothing in `system/` reads it. e2 (xiv) pins the reopen (`setup stack 1`) and the shape of the `barTarget` block; a
+route that names a view (`open people`, a person, `resume`) is unaffected.

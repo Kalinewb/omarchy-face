@@ -460,7 +460,9 @@ reset_run() {
 x1=$(reset_run)
 check "People over the home, then a person: three steps deep" "person stack 3 person 'anna'" "$(field deep "$x1")"
 check "a person two steps in, then close: the stack is the home alone and no person is remembered" "setup stack 1 person ''" "$(field closed-deep "$x1")"
-check "the bar button then opens at its own target on top of the home (people, with Back to the home), as before" "people stack 2 person '' barTarget people" "$(field bar-reopen "$x1")"
+check "the bar button then opens the home itself on a set-up machine (3.3.0; People was its target before): the stack stays the home alone" "setup stack 1 person '' barTarget setup" "$(field bar-reopen "$x1")"
+check "barTarget (3.3.0): the home for every state, except the attention routes (a lock screen that stopped working opens Settings; Face's own failures open Setup), and People is nobody's default" "1 1 0" \
+  "$(sed -n '/readonly property string barTarget/,/^  }/p' "$REPO/FaceModel.qml" | sed -E 's#//.*$##' | grep -c 'barState === "attention") return brokenRow === null && lockAttention ? "settings" : "setup"') $(sed -n '/readonly property string barTarget/,/^  }/p' "$REPO/FaceModel.qml" | sed -E 's#//.*$##' | grep -c 'return "setup"') $(sed -n '/readonly property string barTarget/,/^  }/p' "$REPO/FaceModel.qml" | sed -E 's#//.*$##' | grep -c 'people')"
 check "Settings, then close: the home alone" "setup stack 1 person ''" "$(field closed-settings "$x1")"
 check "Esc pops one step and does not close; Esc on the home closes (once)" "setup stack 1 person '' closes 0|setup stack 1 person '' closes 1" "$(field esc-1 "$x1")|$(field esc-2 "$x1")"
 check "a route opened straight after a close from Settings lands on its view (the person, over the home) and is kept while open" "setup stack 1 person ''|ok|person stack 2 person 'anna'|person stack 2 person 'anna'" \

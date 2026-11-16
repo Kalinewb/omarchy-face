@@ -6,8 +6,8 @@
 # It used to photograph Setup. Since the post-ship revision (plan-gui.md §4a)
 # Setup on a healthy machine is one line saying so -- which is the point, and
 # which makes it the wrong view to show somebody deciding whether they want this
-# plugin. People is what the bar button opens on a working machine (`barTarget`,
-# §3), and it is where the plugin has something to show: who is recorded, what
+# plugin. People is what the bar button opened on a working machine (`barTarget`,
+# §3, until 3.3.0 made it the home; the script opens People by name), and it is where the plugin has something to show: who is recorded, what
 # each of them may do, and the count sudo matches against.
 #
 #   ./dev/g7-preview.sh            writes preview.png at the plugin root

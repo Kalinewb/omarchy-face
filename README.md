@@ -317,8 +317,9 @@ now replaces it, after the same password, and only when you save (Esc or Cancel 
   Update the plugin to get the dot scan back.
 
 **The popup opens on the home.** Closing the Face popup now forgets where you were: it used to reopen on the last view
-(Settings, a person), and now every open starts from the home (*Face ID is set up*) or from where the bar button points
-(People, over the home, on a machine that is set up). Esc still goes back one step before it closes. Plugin only, no password.
+(Settings, a person), and now every open starts from the home (*Face ID is set up*). The bar button opens the home too: on a set-up
+machine it used to open People, and now People, Settings and Remove are one click below the home (a lock screen that stopped working
+still opens Settings, and Face's own failures still open Setup). Esc still goes back one step before it closes. Plugin only, no password.
 
 **What did not change.** The identity rule (0.40 and 0.55, 0.56 and 0.60 for the top picture), the runs of three and
 five frames, the cap of five "That did not look like you" presses, the floor (the first picture, left and right), `sudo`
