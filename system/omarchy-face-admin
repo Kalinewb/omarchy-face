@@ -2108,17 +2108,12 @@ class line_reader(object):
 SWEEP_EVENTS = ("capture_failed", "dotting", "dot", "dotted")
 
 
-def _in_range(low, high):
-    return lambda v: finite_number(v) and low <= v <= high
-
-
 def _allowed():
     sw = pure()
     return {
         "event": lambda v: isinstance(v, str) and v in SWEEP_EVENTS,
         "kept": lambda v: type(v) is int and 0 <= v <= 99,
         "code": lambda v: isinstance(v, str) and v in sw["CODES"],
-        "best": _in_range(0, 4), "threshold": _in_range(0, 1), "margin": _in_range(-4, 1),
         "pose": lambda v: isinstance(v, str) and v in sw["DOT_POSES"],
         "poses": lambda v: (isinstance(v, list) and len(v) <= len(sw["DOT_POSES"])
                             and all(isinstance(x, str) and x in sw["DOT_POSES"] for x in v) and len(set(v)) == len(v)),
