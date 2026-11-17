@@ -12,6 +12,10 @@ import "common/testverdict.js" as Verdict
 // (common/testverdict.js), replaces the content in place: the person view is
 // not drawn while this is up, Close or Esc goes back to it.
 //
+// This view is the notch's own panel, so it does not ask the notch to stand down
+// the way the Test card and the scan island do (common/NotchQuiet.qml): hiding the
+// notch would hide this. Nothing is drawn over the notch here.
+//
 // It runs `omarchy-face-identity verify <name>` as the user, so the only cancel
 // is a signal, which is also what frees the camera (Ask.cancel). Leaving the
 // view, by any route, stops the check.

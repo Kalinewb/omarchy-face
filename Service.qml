@@ -102,6 +102,27 @@ Item {
   function holdToasts() { root.toasts("hold") }
   function releaseToasts() { root.toasts("release") }
 
+  // --- the notch, out of the way while a card is up ------------------------------------
+  //
+  // The scan island and the Test card are drawn on the Overlay layer over the top centre of
+  // the screen, which is where the notch is: an open notch, or a notification on it, sat
+  // behind them. While either is up the notch is asked to hide and to come back as it was
+  // (common/NotchQuiet.qml, the notch's `quiet` verb). Asked for when the card is made and
+  // let go of when it goes -- finished, failed, timed out or dismissed -- from the one place
+  // each card is torn down. A notch that has no such verb, or no notch at all, changes
+  // nothing here, and the indicator's cards for a `sudo` or the lock screen never ask.
+  // Not in development, where a harness would otherwise hide the notch of the live shell;
+  // a test names a stand-in with OMARCHY_FACE_DEV_QUIET_CMD.
+  readonly property string quietCommand: Quickshell.env("OMARCHY_FACE_DEV_QUIET_CMD") || ""
+  NotchQuiet {
+    id: notchQuiet
+    plugin: root.manifest && root.manifest.id ? String(root.manifest.id) : "kalinewb.face"
+    enabled: !engine.dev || root.quietCommand !== ""
+    renewMs: engine.dev && Number(Quickshell.env("OMARCHY_FACE_DEV_QUIET_RENEW_MS")) > 0
+             ? Number(Quickshell.env("OMARCHY_FACE_DEV_QUIET_RENEW_MS")) : 15000
+    verb: root.quietCommand !== "" ? root.quietCommand.split(" ") : ["omarchy-shell", "notch", "quiet"]
+  }
+
   // The dimming behind the island: one ScanScrim per screen, made BEFORE the card so it is stacked
   // under it, and gone when the card is.
   property bool scrimOn: false
@@ -157,6 +178,7 @@ Item {
     root.cardScreen = null
     root.scrimOn = false
     scrimWatchdog.stop()
+    notchQuiet.off("record")
     if (goingCard) root.releaseToasts()
     var goingSession = root.session
     root.card = null
@@ -271,6 +293,7 @@ Item {
       return "the card could not be created"
     }
     root.holdToasts()
+    notchQuiet.on("record")
     root.card.dismissed.connect(function () { root.closeCard() })
     return "ok"
   }
@@ -322,6 +345,7 @@ Item {
       })
     })
     if (!root.testCard) { root.testName = ""; return "the card could not be created" }
+    notchQuiet.on("test")
     root.testCard.stopped.connect(function () { root.closeTest() })
     root.testCard.dismissed.connect(function () { root.closeTest() })
 
@@ -354,6 +378,7 @@ Item {
     root.testCard = null
     root.testProcess = null
     root.testName = ""
+    notchQuiet.off("test")
     if (goingProcess) engine.cancel(goingProcess)
     if (goingCard) goingCard.destroy()
     root.closingTest = false
@@ -895,5 +920,8 @@ Item {
     root.finishRename()
   }
 
-  Component.onDestruction: root.releaseToasts()
+  Component.onDestruction: {
+    root.releaseToasts()
+    notchQuiet.releaseAll()
+  }
 }

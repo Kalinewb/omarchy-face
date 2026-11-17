@@ -1167,3 +1167,29 @@ To widen it:
    `dev/f4-sudo-pam.sh`, `dev/f5-daemon.sh`, then a real sudo with a head turned.
 
 Going back is the same one line.
+
+## H2 — the notch steps aside for a card
+
+```sh
+./dev/h2-notch-quiet.sh
+```
+
+While the scan card or the Test card is up, the Face service asks the notch to hide, and lets go when the
+card is torn down (`Service.qml`, through `common/NotchQuiet.qml`: `omarchy-shell notch quiet on|off
+kalinewb.face:record|test`, the notch's SURFACE-HOSTING.md section 14). This runs the real `Service.qml` in the
+offscreen runtime (`dev/qml-harness/quiet.qml`) and checks what the notch would have been told, from a stand-in
+for the verb that writes its arguments down.
+
+**In development the service never reaches a real notch.** With `OMARCHY_FACE_DEV_BIN` set it asks nobody unless
+`OMARCHY_FACE_DEV_QUIET_CMD` names a command (split on spaces; the suite points it at its stand-in), and
+`OMARCHY_FACE_DEV_QUIET_RENEW_MS` shortens the 15 s renewal so a suite can watch it. Without those a harness
+run could not hide the notch of the live shell, which is what the guard is for.
+
+What it proves: one `on` and one `off` per card, in order, and the off only after the card had its time on
+screen; the lease renewed while a long card lives; the service being destroyed with a card up lets go at once;
+a `sudo` card (the indicator) asks for nothing; a missing command, a notch that answers "Target not found" and
+a verb that never answers each leave the card exactly as it was. What it cannot: that the notch really hides
+and comes back as it was. That is the notch's `dev/quiet.sh`, and the two meet at the words of the verb.
+
+The Test that runs **in place**, inside the notch's own Face panel (`TestResultView.qml`), does not ask: hiding the
+notch would hide the panel it is drawn in.

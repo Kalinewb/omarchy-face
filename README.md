@@ -285,6 +285,16 @@ A git checkout goes back to the commit it came from (`v2.2.0` when the system fi
 already 3.0.0). A copy installed with `./install.sh` has no commit to go back to: run
 `git checkout v2.2.0 && ./install.sh` in your checkout afterwards.
 
+### Updating from 3.3.1 (to 3.3.2, candidate)
+
+Plugin only (no system files, no password). **The notch gets out of the way while Face's cards are up.** The scan card and the Test card are drawn over the top centre of the screen,
+where the notch is, so an open notch (or a notification on it) used to sit behind them. Now, while the scan card or the Test card is on screen, Face asks the notch to hide, and when
+the card goes (saved, failed, timed out, cancelled or closed) the notch comes back to exactly what it was showing: the same page, with the same way back. This needs a notch that has the
+`quiet` verb (`kalinewb.notch` with `quiet` in its surface features); with an older notch, another bar or no notch at all nothing happens and nothing is reported. Face only ever asks
+the notch to hide itself: the card for `sudo`, Profiles and the lock screen is never touched by it and does not wait for the answer. The hold is a lease that the notch ends by itself
+after 35 s without a renewal, so a card that dies cannot leave the notch hidden. The Test that runs in place, inside the notch's own Face panel, is not covered (hiding the notch would
+hide it).
+
 ### Updating from 3.3.0 (to 3.3.1)
 
 Plugin only (no system files, no password). **The card that says a face is being checked has a new look**, the same for `sudo`, for Profiles asking who you are, and for the Test
