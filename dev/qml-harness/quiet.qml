@@ -19,6 +19,8 @@ import "face" as Face
 //   renew      a long Test (3 s) with the lease renewed every 1 s
 //   idle       nothing asked for; only a `sudo` in flight, which the indicator draws
 //   teardown   a Test, then the service is destroyed with the card still up
+//   inplace    the in-place Test's `testInPlace on|off` with the daemon's `matched` written in between
+//              (by the suite): what the indicator would draw over the notch's panel, and when
 ShellRoot {
   id: rootObj
 
@@ -28,6 +30,8 @@ ShellRoot {
   function log(key, value) { console.log("HARNESS " + key, value) }
 
   property var handler: null
+
+  function showing() { return JSON.parse(rootObj.findHandler().state()).indicator.showing }
 
   function findHandler() {
     if (rootObj.handler) return rootObj.handler
@@ -54,6 +58,11 @@ ShellRoot {
       onTriggered: {
         var c = rootObj.caseName
         if (c === "idle") { idleEnd.start(); return }
+        if (c === "inplace") {
+          rootObj.log("on", rootObj.findHandler().testInPlace("on"))
+          inpWhileOn.start()
+          return
+        }
         if (c === "record") {
           rootObj.log("call", rootObj.findHandler().record(rootObj.person, "No glasses", "Anna", ""))
           recordCancel.start()
@@ -66,6 +75,18 @@ ShellRoot {
       }
     }
 
+    // 0.7 s in: `on`. The suite writes `matched` at 1.4 s. Here 1.8 s: still on, the card must be away.
+    Timer { id: inpWhileOn; interval: 1100
+      onTriggered: { rootObj.log("whileOn", rootObj.showing()); rootObj.log("off", rootObj.findHandler().testInPlace("off")); inpJustOff.start() } }
+    // 0.15 s after `off`: the indicator has `matched` to draw for 1.6 s, and must not yet.
+    Timer { id: inpJustOff; interval: 150
+      onTriggered: { rootObj.log("justOff", rootObj.showing()); inpHeld.start() } }
+    // 1.5 s after `off`, still inside the hold.
+    Timer { id: inpHeld; interval: 1350
+      onTriggered: { rootObj.log("held", rootObj.showing()); inpAfter.start() } }
+    // 3.2 s after `off`: the hold is over (2.5 s) and `matched` was dismissed long ago.
+    Timer { id: inpAfter; interval: 1700
+      onTriggered: { rootObj.log("after", rootObj.showing()); rootObj.log("ended", Date.now()); Qt.exit(0) } }
     Timer { id: stopIt; interval: 800; onTriggered: { rootObj.findHandler().cancel(); end.interval = 600; end.start() } }
     Timer { id: recordCancel; interval: 1200
       onTriggered: { rootObj.log("state", rootObj.findHandler().state()); rootObj.findHandler().cancel(); end.interval = 2500; end.start() } }

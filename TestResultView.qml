@@ -54,7 +54,10 @@ Item {
                                       null, function (result) {
       view.proc = null
       safety.stop()
-      view.tellService("off")
+      // Not `off` here: the daemon has already written the identity state, and the indicator
+      // draws its own "Recognised ..." card for 1.6 s after it. Letting go now put that card on
+      // the Overlay layer over this panel, a second verdict on top of this one. The service
+      // keeps the indicator's identity card away until this view stops (stop() below).
       view.code = result && result.code !== undefined ? result.code : -1
       view.phase = "done"
     })
@@ -63,8 +66,10 @@ Item {
     view.tellService("on")
   }
 
-  // The Face service hides the indicator's identity card while this check runs here (Service.qml, inPlaceTest):
-  // it would be a second card on top of this one. Best effort; the service's own timer lets go if "off" is lost.
+  // The Face service hides the indicator's identity card while this view is up (Service.qml, inPlaceTest):
+  // it would be a second card on top of this one. "on" when the check starts, "off" when the view stops, not
+  // when the check answers: the verdict stays on screen until Close. Best effort; the service lets go by itself
+  // if "off" is lost.
   property bool told: false
   function tellService(word) {
     if (!view.panel || !view.panel.ask || typeof view.panel.ask.cardArgv !== "function") return

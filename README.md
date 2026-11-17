@@ -295,6 +295,8 @@ the notch to hide itself: the card for `sudo`, Profiles and the lock screen is n
 after 35 s without a renewal, so a card that dies cannot leave the notch hidden. The Test that runs in place, inside the notch's own Face panel, is not covered (hiding the notch would
 hide it).
 
+**A bug fixed on the way:** the Test that runs in place in the notch's panel could be followed, the moment it answered, by the indicator's own card ("Recognised Emil / Asked by Profiles") drawn over the panel, a second verdict on top of the first. The panel now keeps the indicator's identity card away until its view is closed (and 2.5 s after, for the card the daemon's last state would still draw). A `sudo` still draws.
+
 ### Updating from 3.3.0 (to 3.3.1)
 
 Plugin only (no system files, no password). **The card that says a face is being checked has a new look**, the same for `sudo`, for Profiles asking who you are, and for the Test

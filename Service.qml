@@ -321,6 +321,10 @@ Item {
   // stick: it lapses by itself a little after the longest check can run.
   property bool inPlaceTest: false
   Timer { id: inPlaceLapse; interval: root.testSafetyMs + 3000; onTriggered: root.inPlaceTest = false }
+  // The view going away is not the end of the daemon's last state: it wrote `matched` or `failed` when the
+  // check answered and the indicator draws it for up to 1.8 s (Indicator.qml). So `off` lets go a moment later,
+  // or that card would appear over the notch's panel as the person pressed Close.
+  Timer { id: inPlaceHold; interval: 2500; onTriggered: root.inPlaceTest = false }
 
   // Longer than the helper's own receive timeout (20 s), because a safety net
   // that fires first is not a safety net -- it is a card that cancels checks
@@ -449,8 +453,14 @@ Item {
     // The panel's in-place Test is running ("on") or has ended ("off"); see inPlaceTest.
     function testInPlace(state: string): string {
       if (state !== "on" && state !== "off") return "testInPlace needs on or off"
-      root.inPlaceTest = state === "on"
-      if (state === "on") inPlaceLapse.restart(); else inPlaceLapse.stop()
+      if (state === "on") {
+        inPlaceHold.stop()
+        root.inPlaceTest = true
+        inPlaceLapse.restart()
+      } else {
+        inPlaceLapse.stop()
+        inPlaceHold.restart()
+      }
       return "ok"
     }
 

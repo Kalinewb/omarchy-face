@@ -79,6 +79,9 @@ run_case() { # run_case <case> [env…]
 # When the harness stopped, so that an `off` can be shown to have come BEFORE the service was destroyed
 # (destroying it lets go too, and would otherwise hide a card that forgot to).
 ended() { awk -F'\t' '$1=="ended"{print $2}' <<<"$1"; }
+field() { awk -v key="$1" -F'\t' '$1 == key {print $2}' <<<"$2" | head -1; }
+# Comments blanked: a comment that says why a call is not made is not the call.
+code() { sed -E 's#//.*$##' "$@"; }
 calls() { sed 's/^[0-9]* //' "$log" 2>/dev/null | tr '\n' ';'; }
 count() { grep -c "$1" "$log" 2>/dev/null; }
 stamp() { sed -n "s/^\([0-9]*\) $1\$/\1/p" "$log" | head -1; }
@@ -133,6 +136,25 @@ step "the service going away with a card up lets go too"
 out=$(run_case teardown OMARCHY_FACE_DEV_QUIET_CMD="$root/quiet-stub" OMARCHY_FACE_DEV_VERIFY=0 OMARCHY_FACE_DEV_VERIFY_SECONDS=8)
 check "off is sent when the service is destroyed, not left to the lease" "on kalinewb.face:test;off kalinewb.face:test;" "$(calls)"
 
+step "the in-place Test: the indicator's own verdict card must not land on the notch's panel"
+# The daemon writes `matched` the moment the check answers, and the indicator draws "Recognised ..." /
+# "Asked by Profiles" for 1.6 s after it. The panel says `off` when its view stops; letting go any earlier
+# (at the answer, as 3.3.1 did) drew that card over the panel, a second verdict on top of the first.
+rm -f "$state/state.json"
+( sleep 1.4; printf '{"state":"matched","service":"identity","requester":{},"person":"anna","detail":"","at":%s}\n' \
+    "$(date +%s%3N)" >"$state/state.json" ) &
+writer=$!
+out=$(run_case inplace OMARCHY_FACE_DEV_QUIET_CMD="$root/quiet-stub")
+wait "$writer" 2>/dev/null
+echo "${DIM}$(sed 's/^/  /' <<<"$out" | grep -E 'whileOn|justOff|held|after')${RESET}"
+check "while the view is up the indicator's identity card is away, though the daemon wrote matched" "false" "$(field whileOn "$out")"
+check "GATE: the moment after the view stops it is still away (the matched card has 1.6 s to run)" "false" "$(field justOff "$out")"
+check "…and 1.5 s after, still inside the hold" "false" "$(field held "$out")"
+check "…and once the hold is over there is no card left to show" "false" "$(field after "$out")"
+check "the view does not let go when the check answers: no tellService(off) between the stream and stop()" "0" \
+  "$(code "$REPO/TestResultView.qml" | sed -n '/ask.stream(/,/safety.restart()/p' | grep -c 'tellService("off")')"
+rm -f "$state/state.json"
+
 step "a sudo card is never a reason to hide the notch"
 printf '{"state":"start","service":"sudo","requester":{"command":"pacman","from":"foot"},"person":"","detail":"looking","at":%s}\n' \
   "$(date +%s%3N)" >"$state/state.json"
@@ -167,8 +189,6 @@ out=$(run_case test OMARCHY_FACE_DEV_QUIET_CMD="$root/hanging" OMARCHY_FACE_DEV_
 check "a verb that never answers does not hold the card up either" "ok" "$(awk -F'\t' '$1=="call"{print $2}' <<<"$out")"
 
 step "asserted as text (the card's windows cannot be asked what they said)"
-# Comments blanked: TestResultView says in words why it does not ask, and that is not a call.
-code() { sed -E 's#//.*$##' "$@"; }
 check "the in-place Test, inside the notch's own panel, does not ask the notch to hide" "0" \
   "$(code "$REPO/TestResultView.qml" | grep -cE 'NotchQuiet|notchQuiet|notch quiet')"
 check "Face's panel (Surface.qml) and views never call it either: only the service's two cards do" "0" \
