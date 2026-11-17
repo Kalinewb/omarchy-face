@@ -195,7 +195,7 @@ sudo /usr/bin/bash -c 'PATH=/usr/bin; set -o pipefail; t=$(mktemp -d) || exit 1
     bash "$t/install.sh" "$1" "$2"
   }
   run "$@"; s=$?; rm -rf -- "$t"; exit $s' \
-  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.3.1
+  _ "$HOME/.config/omarchy/plugins/kalinewb.face" "$USER" 3.3.2
 ```
 
 What it does, from the button or from a terminal: root copies the installer out of the
@@ -285,7 +285,7 @@ A git checkout goes back to the commit it came from (`v2.2.0` when the system fi
 already 3.0.0). A copy installed with `./install.sh` has no commit to go back to: run
 `git checkout v2.2.0 && ./install.sh` in your checkout afterwards.
 
-### Updating from 3.3.1 (to 3.3.2, candidate)
+### Updating from 3.3.1 (to 3.3.2)
 
 Plugin only (no system files, no password). **The notch gets out of the way while Face's cards are up.** The scan card and the Test card are drawn over the top centre of the screen,
 where the notch is, so an open notch (or a notification on it) used to sit behind them. Now, while the scan card or the Test card is on screen, Face asks the notch to hide, and when
