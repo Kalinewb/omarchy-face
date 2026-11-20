@@ -101,15 +101,13 @@ Item {
       // corner are what it looks like without. The content is Style.space(320)
       // wide, as before.
       readonly property real inset: Style.space(14)
-      // The notch's back strip is at the top centre of the panel, as tall as the resting notch
-      // (`backZoneHeight`, SURFACE-HOSTING.md section 15), and a press in it always goes back: nothing of
-      // this panel that takes a press may sit there, so the content starts below it. A host that says
-      // nothing about a zone but has a strip (`panelBack`) is given its resting height; one with neither
-      // keeps the plain inset.
-      readonly property real zoneHeight: !hosted.surfaceHost ? 0
-        : hosted.surfaceHost.backZoneHeight > 0 ? hosted.surfaceHost.backZoneHeight
-        : (faceModel.hostHasBack && hosted.surfaceHost.restHeight > 0) ? hosted.surfaceHost.restHeight : 0
-      readonly property real topInset: Math.max(hosted.inset, hosted.zoneHeight)
+      // The notch's back strip is a zone at the top CENTRE of the panel (`backZoneWidth` by
+      // `backZoneHeight`, SURFACE-HOSTING.md section 15): a press in it always goes back, and nothing of
+      // this panel, control or text, may sit there. The panel is not pushed down for it (the user:
+      // "everything UI has been pushed down; I want them like normal"); the header keeps the centre
+      // clear by its own layout instead (FaceViews.qml: title at the left, no icon, ending before the
+      // zone). The top inset is the plain one.
+      readonly property real topInset: hosted.inset
       implicitWidth: Math.min(hosted.maxWidth, Style.space(320) + 2 * hosted.inset)
       implicitHeight: Math.min(hosted.maxHeight, views.contentHeight + hosted.topInset + hosted.inset)
 

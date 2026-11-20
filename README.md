@@ -287,7 +287,7 @@ already 3.0.0). A copy installed with `./install.sh` has no commit to go back to
 
 ### Updating from 3.3.2 (to 3.3.3, candidate)
 
-Plugin only (no system files, no password). **One way back in the notch.** The panel inside the notch showed three: the notch's strip at the top centre, a "←" at the right of its header, and a footer hint "esc goes back". Now the strip is the only visible one, Esc keeps working without a hint (the Test view keeps "esc stops the check", the one thing Esc does that is not obvious), and the content starts below the strip so nothing of Face is under it. This needs a notch that has the strip's `panelBack` feature (and `backZone` for its size); without one (the stock popup, another bar, an older notch) the panel keeps its "←" and its hints as before.
+Plugin only (no system files, no password). **One way back in the notch.** The panel inside the notch showed three: the notch's strip at the top centre, a "←" at the right of its header, and a footer hint "esc goes back". Now the strip is the only visible one, Esc keeps working without a hint (the Test view keeps "esc stops the check", the one thing Esc does that is not obvious), and the top of the panel keeps the strip's centre clear by layout: the title is at the left and short of the zone, and nothing is pushed down for it. This needs a notch that has the strip's `panelBack` feature (and `backZone` for its size); without one (the stock popup, another bar, an older notch) the panel keeps its "←" and its hints as before.
 
 ### Updating from 3.3.1 (to 3.3.2)
 

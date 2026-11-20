@@ -67,32 +67,63 @@ Item {
         width: flick.width - Style.space(10)
         spacing: Style.space(12)
 
-        PanelHero {
+        // Under a host with a back strip the top row keeps the centre clear, by layout and not by moving
+        // anything down (SURFACE-HOSTING.md section 15): the title sits at the left, short enough to end
+        // before the zone, and the icon is left out to give it the room. The line under it (the meta)
+        // is below the zone's height and keeps its full width. Anywhere else the hero is what it was.
+        Column {
+          id: heroBlock
           width: parent.width
-          title: root.model ? root.model.viewTitle() : ""
-          meta: root.model ? root.model.chrome().meta : ""
-          foreground: root.model ? root.model.foreground : Commons.Color.foreground
-          fontFamily: root.model ? root.model.fontFamily : Style.font.family
+          spacing: Style.space(2)
 
-          iconComponent: Component {
+          readonly property bool strip: !!root.model && root.model.hostHasBack
+          readonly property real zoneWidth: strip && root.model.surfaceHost && root.model.surfaceHost.backZoneWidth > 0
+            ? root.model.surfaceHost.backZoneWidth : 0
+          // The title may reach the zone's left edge (measured from the middle of the view) less a gap.
+          readonly property real titleRoom: Math.max(Style.space(40), (root.width - zoneWidth) / 2 - Style.space(6))
+
+          Text {
+            textFormat: Text.PlainText
+            visible: heroBlock.strip
+            width: heroBlock.titleRoom
+            text: root.model ? root.model.viewTitle() : ""
+            color: root.model ? root.model.foreground : Commons.Color.foreground
+            font.family: root.model ? root.model.fontFamily : Style.font.family
+            font.pixelSize: Style.font.title
+            font.bold: true
+            elide: Text.ElideRight
+          }
+
+          PanelHero {
+            width: parent.width
+            title: heroBlock.strip ? "" : (root.model ? root.model.viewTitle() : "")
+            meta: root.model ? root.model.chrome().meta : ""
+            foreground: root.model ? root.model.foreground : Commons.Color.foreground
+            fontFamily: root.model ? root.model.fontFamily : Style.font.family
+
+            iconComponent: heroBlock.strip ? null : iconPart
+
+            trailingControl: Component {
+              PanelActionButton {
+                // Not under a host that has its own back strip (FaceModel.hostHasBack): one back control.
+                visible: root.model.viewStack.length > 1 && !root.model.hostHasBack
+                iconText: "\u{f004d}"
+                tooltipText: "Back"
+                foreground: root.model.foreground
+                fontFamily: root.model.fontFamily
+                onClicked: root.model.back()
+              }
+            }
+          }
+
+          Component {
+            id: iconPart
             Text {
               textFormat: Text.PlainText
               text: "\u{f0643}"
               color: root.model.foreground
               font.family: root.model.fontFamily
               font.pixelSize: Style.font.display
-            }
-          }
-
-          trailingControl: Component {
-            PanelActionButton {
-              // Not under a host that has its own back strip (FaceModel.hostHasBack): one back control.
-              visible: root.model.viewStack.length > 1 && !root.model.hostHasBack
-              iconText: "\u{f004d}"
-              tooltipText: "Back"
-              foreground: root.model.foreground
-              fontFamily: root.model.fontFamily
-              onClicked: root.model.back()
             }
           }
         }

@@ -60,6 +60,8 @@ ShellRoot {
   // The same reading of "takes a press" as Bar.qml's backZoneReport.
   function typeOf(item) { return String(item).replace(/[_(].*$/, "") }
   function presses(item) {
+    // A scrolling container takes a drag, not a press: what it holds is judged on its own.
+    if (item.flickableDirection !== undefined) return false
     if (item.acceptedButtons !== undefined && item.acceptedButtons !== 0 && item.enabled) return true
     if (item.cursorPosition !== undefined && item.enabled) return true
     if (item.activeFocusOnTab === true && item.enabled) return true
@@ -78,6 +80,25 @@ ShellRoot {
         && at.y < zone.y + zone.height && at.y + item.height > zone.y
       var backdrop = item.width >= page.width * 0.9 && item.height >= page.height * 0.9
       if (overlaps && !backdrop && presses(item)) found.push(typeOf(item).replace("QQuick", "") + "@" + Math.round(at.x) + "," + Math.round(at.y))
+      var kids = item.children || []
+      for (var k = 0; k < kids.length; k++) walk(kids[k], depth + 1)
+    }
+    walk(page, 0)
+    return found
+  }
+  // Text whose painted glyphs (by alignment) fall in the zone: the contract is no control AND no text there.
+  function textsIn(page, zone) {
+    var found = []
+    function walk(item, depth) {
+      if (!item || depth > 40 || !item.visible || item.opacity === 0) return
+      if (typeof item.text === "string" && item.text.length > 0 && item.contentWidth !== undefined && item.width > 0) {
+        var at = item.mapToItem(page, 0, 0)
+        var cw = Math.min(Number(item.contentWidth), item.width)
+        var align = item.effectiveHorizontalAlignment
+        var off = align === Qt.AlignRight ? item.width - cw : align === Qt.AlignHCenter ? (item.width - cw) / 2 : 0
+        if (at.x + off < zone.x + zone.width && at.x + off + cw > zone.x && at.y < zone.y + zone.height && at.y + item.height > zone.y)
+          found.push(item.text.slice(0, 16) + "@" + Math.round(at.x + off) + "," + Math.round(at.y))
+      }
       var kids = item.children || []
       for (var k = 0; k < kids.length; k++) walk(kids[k], depth + 1)
     }
@@ -105,8 +126,9 @@ ShellRoot {
     var zh = fakeHost.backZoneHeight > 0 ? fakeHost.backZoneHeight : 32
     var zone = { x: (page.width - zw) / 2, y: 0, width: zw, height: zh }
     var hits = shellRoot.hitsIn(page, zone)
+    var texts = shellRoot.textsIn(page, zone)
     // Where the first thing below the strip starts, for the reader.
-    shellRoot.log(tag, "back=" + back.length + " hint='" + hints.map(function (h) { return h.text }).join("|") + "' hits=[" + hits.join(" ") + "]"
+    shellRoot.log(tag, "back=" + back.length + " hint='" + hints.map(function (h) { return h.text }).join("|") + "' hits=[" + hits.join(" ") + "] texts=[" + texts.join(" ") + "]"
                   + " view=" + shellRoot.surface.model.view)
   }
 

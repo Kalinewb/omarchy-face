@@ -11,11 +11,12 @@
 #
 #   * with a host that has the strip (features panelBack and backZone): no "Back" button of the panel's own
 #     in any view, no hint but "esc stops the check" (the one thing Esc does that is not obvious), and no
-#     control that takes a press inside the strip's zone (180 x 32 at the top centre);
+#     control and no text inside the strip's zone (180 x 32 at the top centre) -- by the header's layout,
+#     with nothing pushed down;
 #   * with a host that says neither (an older notch, another host): the views keep their "<-" and their
 #     hints, as the stock popup does, so nothing runs without a way back;
-#   * the detector can fail: on that second host the content is not inset below a zone, and it finds the
-#     scroll area in it.
+#   * the detector can fail: on that second host the header is the popup's own (icon and a long title), and
+#     it finds the title in the zone.
 #
 # What it cannot: that the notch's strip really takes the press. That is the notch's dev/backone.sh and
 # dev/back.sh, and the two meet at `panelBack`, `backZoneHeight` and `goBackInside()`.
@@ -62,11 +63,11 @@ out=$(run strip)
 echo "${DIM}$(sed 's/^/  /' <<<"$out")${RESET}"
 check "the host's zone is read as said" "180x32 features=panel,panelBack,backZone" "$(field zone "$out")"
 for v in setup people person:anna settings remove; do
-  check "$v: no Back button of its own, no hint, nothing in the zone" "back=0 hint='' hits=[]" \
+  check "$v: no Back button of its own, no hint, no control and no text in the zone" "back=0 hint='' hits=[] texts=[]" \
     "$(field "$v" "$out" | sed -E 's/ view=.*//')"
 done
-check "test: no Back button, one hint for what Esc does that is not obvious, nothing in the zone" \
-  "back=0 hint='esc stops the check' hits=[]" "$(field test "$out" | sed -E 's/ view=.*//')"
+check "test: no Back button, one hint for what Esc does that is not obvious, no control and no text in the zone" \
+  "back=0 hint='esc stops the check' hits=[] texts=[]" "$(field test "$out" | sed -E 's/ view=.*//')"
 check "…and the test view really was up when that was read" "view=test" "$(field test "$out" | sed -E 's/.* (view=)/\1/')"
 
 step "a host with no strip of its own to offer (no panelBack): the views keep their way back"
@@ -76,11 +77,11 @@ check "the home has nothing to go back to: no button, its hint says it closes" "
   "$(field setup "$out" | sed -E 's/ hits=.*//')"
 for v in people person:anna settings remove; do
   check "$v: the popup's own Back button and its hint" "back=1 hint='esc goes back' hits=[]" \
-    "$(field "$v" "$out" | sed -E 's/ view=.*//')"
+    "$(field "$v" "$out" | sed -E 's/ texts=.*//')"
 done
 check "test: the same, with the check's own sentence" "back=1" "$(field test "$out" | sed -E 's/ hint=.*//')"
-check "the detector can fail: with no zone to inset below, the scroll area at the top is found in it" "true" \
-  "$(field setup "$out" | grep -q 'hits=\[Flickable@' && echo true || echo false)"
+check "the detector can fail: without the strip's layout the popup's own title is found in the zone" "true" \
+  "$(field setup "$out" | grep -q 'texts=\[Face ID@' && echo true || echo false)"
 
 step "asserted as text"
 code() { sed -E 's#//.*$##' "$@"; }
@@ -88,8 +89,10 @@ check "the panel's own Back button is drawn only without a host strip" "1" \
   "$(code "$REPO/FaceViews.qml" | grep -c 'viewStack.length > 1 && !root.model.hostHasBack')"
 check "the host's strip is detected by the panelBack feature word, and by nothing else" "1" \
   "$(code "$REPO/FaceModel.qml" | grep -c 'features.indexOf("panelBack") !== -1')"
-check "the panel starts its content below the host's zone (backZoneHeight)" "1" \
-  "$(code "$REPO/Surface.qml" | grep -c 'surfaceHost.backZoneHeight > 0')"
+check "the panel is not pushed down for the zone: its top inset is the plain one" "1 0" \
+  "$(code "$REPO/Surface.qml" | grep -c 'topInset: hosted.inset') $(code "$REPO/Surface.qml" | grep -c 'surfaceHost.backZoneHeight')"
+check "…the header keeps the centre clear by layout: under a strip its title is short of the zone and has no icon" "1 1" \
+  "$(code "$REPO/FaceViews.qml" | grep -c 'titleRoom: Math.max') $(code "$REPO/FaceViews.qml" | grep -c 'iconComponent: heroBlock.strip ? null')"
 
 echo
 if ((failures)); then echo "${RED}$failures of $checks checks failed.${RESET}"; exit 1; fi
