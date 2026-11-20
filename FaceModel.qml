@@ -55,6 +55,13 @@ Item {
   // hue alone.
 
   readonly property bool inHost: hosted && surfaceHost !== null
+
+  // The host has its own way back: the notch's strip at the top centre of every panel, which asks this
+  // panel to go back inside itself first (`panelBack`, SURFACE-HOSTING.md sections 4 and 15). That strip is
+  // then the one back control, and Esc its invisible alias: the panel draws no "←" of its own and no hint
+  // about going back. Without one (the stock popup, another host, an older notch) the views keep both.
+  readonly property bool hostHasBack: inHost && surfaceHost.features !== undefined && surfaceHost.features !== null
+                                      && surfaceHost.features.indexOf("panelBack") !== -1
   readonly property color foreground: inHost ? surfaceHost.foreground
                                     : (bar ? bar.foreground : Commons.Color.foreground)
   readonly property color accent: inHost ? surfaceHost.accent : Commons.Color.accent
@@ -354,8 +361,16 @@ Item {
     // Pushed in place by showTest(), hosted only: the stock popup has the
     // service's card for it.
     "test":     { title: "",             meta: "Does it recognise them now?",
-                  hint: "esc stops the check and goes back" }
+                  hint: "esc stops the check and goes back",
+                  // Under a host with a back strip a hint is only for what Esc does that is not obvious.
+                  hostHint: "esc stops the check" }
   })
+
+  // The hints, said again for a home that has its own back control: a hint that is only "esc goes back" or
+  // "esc closes" is the invisible alias made visible, so it is not drawn.
+  function hostedHint(c) {
+    return { title: c.title, meta: c.meta, hint: c.hostHint !== undefined ? c.hostHint : "" }
+  }
 
   function chrome() {
     var c = root.viewChrome[root.view]
@@ -364,8 +379,8 @@ Item {
     // Setup is the view the popup opens on for the rest of its life. The rows
     // are still there to read; only the line above them changes.
     if (root.view === "setup" && root.status !== null && !root.setupNeeded && !root.attention)
-      return { title: c.title, meta: "Everything Face needs is in place", hint: c.hint }
-    return c
+      c = { title: c.title, meta: "Everything Face needs is in place", hint: c.hint }
+    return root.hostHasBack ? root.hostedHint(c) : c
   }
 
   function viewTitle() {

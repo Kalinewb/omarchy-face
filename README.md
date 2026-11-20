@@ -285,6 +285,10 @@ A git checkout goes back to the commit it came from (`v2.2.0` when the system fi
 already 3.0.0). A copy installed with `./install.sh` has no commit to go back to: run
 `git checkout v2.2.0 && ./install.sh` in your checkout afterwards.
 
+### Updating from 3.3.2 (to 3.3.3, candidate)
+
+Plugin only (no system files, no password). **One way back in the notch.** The panel inside the notch showed three: the notch's strip at the top centre, a "←" at the right of its header, and a footer hint "esc goes back". Now the strip is the only visible one, Esc keeps working without a hint (the Test view keeps "esc stops the check", the one thing Esc does that is not obvious), and the content starts below the strip so nothing of Face is under it. This needs a notch that has the strip's `panelBack` feature (and `backZone` for its size); without one (the stock popup, another bar, an older notch) the panel keeps its "←" and its hints as before.
+
 ### Updating from 3.3.1 (to 3.3.2)
 
 Plugin only (no system files, no password). **The notch gets out of the way while Face's cards are up.** The scan card and the Test card are drawn over the top centre of the screen,

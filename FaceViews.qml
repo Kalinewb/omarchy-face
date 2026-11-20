@@ -86,7 +86,8 @@ Item {
 
           trailingControl: Component {
             PanelActionButton {
-              visible: root.model.viewStack.length > 1
+              // Not under a host that has its own back strip (FaceModel.hostHasBack): one back control.
+              visible: root.model.viewStack.length > 1 && !root.model.hostHasBack
               iconText: "\u{f004d}"
               tooltipText: "Back"
               foreground: root.model.foreground
@@ -115,6 +116,7 @@ Item {
           textFormat: Text.PlainText
           width: parent.width
           topPadding: Style.space(2)
+          visible: text !== ""
           text: root.model ? root.model.chrome().hint : ""
           color: root.model ? root.model.dim : Commons.Color.muted
           font.family: root.model ? root.model.fontFamily : Style.font.family
